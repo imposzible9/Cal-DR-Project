@@ -541,6 +541,23 @@ import swipeImg from "../assets/swipe.png";
       // ใช้การ sort สำหรับทุกแท็บ (รวม popular และ sensitivity)
       if (sortConfig.key) {
         arr.sort((a, b) => {
+          // Special handling for conversionRatio (format: "1,600:1")
+          if (sortConfig.key === "conversionRatio") {
+            const parseRatio = (ratioStr) => {
+              if (!ratioStr || ratioStr === "-") return 0;
+              const str = String(ratioStr);
+              const parts = str.split(":");
+              if (parts.length === 0) return 0;
+              // Extract number before ":" and remove commas
+              const numStr = parts[0].replace(/[^\d.-]/g, "");
+              return Number(numStr) || 0;
+            };
+            
+            const A = parseRatio(a[sortConfig.key]);
+            const B = parseRatio(b[sortConfig.key]);
+            return sortConfig.direction === "asc" ? A - B : B - A;
+          }
+          
           const A = Number(a[sortConfig.key]);
           const B = Number(b[sortConfig.key]);
 
@@ -620,12 +637,12 @@ import swipeImg from "../assets/swipe.png";
               </div>
             </td>
           )}
-          {visibleColumns.open && <td className="py-4 px-4 text-right text-gray-600 text-[14.4px] font-medium">{formatNum(row.open)}</td>}
-          {visibleColumns.high && <td className="py-4 px-4 text-right text-gray-600 text-[14.4px] font-medium">{formatNum(row.high)}</td>}
-          {visibleColumns.low && <td className="py-4 px-4 text-right text-gray-600 text-[14.4px] font-medium">{formatNum(row.low)}</td>}
-          {visibleColumns.last && <td className="py-4 px-4 text-right text-gray-600 text-[14.4px] font-medium">{formatNum(row.last)}</td>}
+          {visibleColumns.open && <td className="py-4 px-4 text-right text-gray-600 text-[14.4px] font-medium font-mono">{formatNum(row.open)}</td>}
+          {visibleColumns.high && <td className="py-4 px-4 text-right text-gray-600 text-[14.4px] font-medium font-mono">{formatNum(row.high)}</td>}
+          {visibleColumns.low && <td className="py-4 px-4 text-right text-gray-600 text-[14.4px] font-medium font-mono">{formatNum(row.low)}</td>}
+          {visibleColumns.last && <td className="py-4 px-4 text-right text-gray-600 text-[14.4px] font-medium font-mono">{formatNum(row.last)}</td>}
           {visibleColumns.change && (
-            <td className="py-4 px-4 text-right text-[14.4px] font-medium" style={{ color: row.change > 0 ? "#27AE60" : row.change < 0 ? "#EB5757" : "#4B5563" }}>
+            <td className="py-4 px-4 text-right text-[14.4px] font-medium font-mono" style={{ color: row.change > 0 ? "#27AE60" : row.change < 0 ? "#EB5757" : "#4B5563" }}>
               {(() => {
                 // Check if trading data exists (if any of these are missing/0, show "-")
                 const hasData = row.open && row.high && row.low && row.last && 
@@ -640,7 +657,7 @@ import swipeImg from "../assets/swipe.png";
             </td>
           )}
           {visibleColumns.pct && (
-            <td className="py-4 px-4 text-right text-[14.4px] font-medium" style={{ color: row.pct > 0 ? "#27AE60" : row.pct < 0 ? "#EB5757" : "#4B5563" }}>
+            <td className="py-4 px-4 text-right text-[14.4px] font-medium font-mono" style={{ color: row.pct > 0 ? "#27AE60" : row.pct < 0 ? "#EB5757" : "#4B5563" }}>
               {(() => {
                 // Check if trading data exists (if any of these are missing/0, show "-")
                 const hasData = row.open && row.high && row.low && row.last && 
@@ -654,18 +671,18 @@ import swipeImg from "../assets/swipe.png";
               })()}
             </td>
           )}
-          {visibleColumns.bid && <td className="py-4 px-4 text-right text-gray-600 text-[14.4px] font-medium">{formatNum(row.bid)}</td>}
-          {visibleColumns.offer && <td className="py-4 px-4 text-right text-gray-600 text-[14.4px] font-medium">{formatNum(row.offer)}</td>}
-          {visibleColumns.vol && <td className="py-4 px-4 text-right text-gray-600 text-[14.4px] font-medium">{formatNum(row.vol)}</td>}
-          {visibleColumns.value && <td className="py-4 px-4 text-right text-gray-600 text-[14.4px] font-medium">{formatNum(row.value)}</td>}
+          {visibleColumns.bid && <td className="py-4 px-4 text-right text-gray-600 text-[14.4px] font-medium font-mono">{formatNum(row.bid)}</td>}
+          {visibleColumns.offer && <td className="py-4 px-4 text-right text-gray-600 text-[14.4px] font-medium font-mono">{formatNum(row.offer)}</td>}
+          {visibleColumns.vol && <td className="py-4 px-4 text-right text-gray-600 text-[14.4px] font-medium font-mono">{formatNum(row.vol)}</td>}
+          {visibleColumns.value && <td className="py-4 px-4 text-right text-gray-600 text-[14.4px] font-medium font-mono">{formatNum(row.value)}</td>}
           {visibleColumns.tradingSession && <td className="py-4 px-4 text-left text-gray-600 text-[14.4px] font-medium whitespace-nowrap">{row.tradingSession || "-"}</td>}
           {visibleColumns.issuerName && <td className={`py-4 px-4 text-left text-gray-600 text-[14.4px] font-medium ${firstVisibleFundamentalKey === 'issuerName' ? 'border-l border-gray-200' : ''}`} style={{ whiteSpace: "normal", wordBreak: "keep-all", overflowWrap: "anywhere", minWidth: 100 }}>{row.issuer || "-"}</td>}
-          {visibleColumns.marketCap && <td className={`py-4 px-4 text-right text-gray-600 text-[14.4px] font-medium ${firstVisibleFundamentalKey === 'marketCap' ? 'border-l-2 border-gray-200' : ''}`}>{row.marketCap ? formatNum(row.marketCap / 1000000) : "-"}</td>}
+          {visibleColumns.marketCap && <td className={`py-4 px-4 text-right text-gray-600 text-[14.4px] font-medium font-mono ${firstVisibleFundamentalKey === 'marketCap' ? 'border-l-2 border-gray-200' : ''}`}>{row.marketCap ? formatNum(row.marketCap / 1000000) : "-"}</td>}
           {visibleColumns.underlyingName && <td className={`py-4 px-4 text-left font-bold text-[#2F80ED] text-[14.4px] ${firstVisibleFundamentalKey === 'underlyingName' ? 'border-l-2 border-gray-200' : ''}`} style={{ whiteSpace: "nowrap", minWidth: 180 }}>{row.underlying || "-"}</td>}
           {visibleColumns.ytdChange && <td className={`py-4 px-3 text-right ${firstVisibleFundamentalKey === 'ytdChange' ? 'border-l-2 border-gray-200' : ''}`} style={{ color: row.ytdChange > 0 ? "#27AE60" : row.ytdChange < 0 ? "#EB5757" : "#6B7280", fontWeight: 500 }}>{row.ytdChange !== null ? `${row.ytdChange > 0 ? '+' : ''}${formatNum(row.ytdChange)}` : "-"}</td>}
           {visibleColumns.ytdPercentChange && <td className={`py-4 px-3 text-right ${firstVisibleFundamentalKey === 'ytdPercentChange' ? 'border-l-2 border-gray-200' : ''}`} style={{ color: row.ytdPercentChange > 0 ? "#27AE60" : row.ytdPercentChange < 0 ? "#EB5757" : "#6B7280", fontWeight: 500 }}>{row.ytdPercentChange !== null ? `${row.ytdPercentChange > 0 ? '+' : ''}${formatNum(row.ytdPercentChange)}%` : "-"}</td>}
           {visibleColumns.conversionRatio && <td className={`py-4 px-4 text-right text-gray-600 text-[14.4px] font-medium ${firstVisibleFundamentalKey === 'conversionRatio' ? 'border-l border-gray-200' : ''}`} style={{ minWidth: 100 }}>{row.ratio}</td>}
-          {visibleColumns.divYield && <td className={`py-4 px-4 text-right text-gray-600 text-[14.4px] font-medium ${firstVisibleFundamentalKey === 'divYield' ? 'border-l border-gray-200' : ''}`}>{row.divYield ? formatNum(row.divYield) : "-"}</td>}
+          {visibleColumns.divYield && <td className={`py-4 px-4 text-right text-gray-600 text-[14.4px] font-medium font-mono ${firstVisibleFundamentalKey === 'divYield' ? 'border-l border-gray-200' : ''}`}>{row.divYield ? formatNum(row.divYield) : "-"}</td>}
           {visibleColumns.exchange && <td className={`py-4 px-4 text-left text-gray-600 text-[14.4px] font-medium ${firstVisibleFundamentalKey === 'exchange' ? 'border-l border-gray-200' : ''}`} style={{ whiteSpace: "nowrap", minWidth: 180 }}>{row.exchange || "-"}</td>}
           {visibleColumns.securityTypeName && (
             <td
@@ -677,7 +694,7 @@ import swipeImg from "../assets/swipe.png";
               {row.securityTypeName || "-"}
             </td>
           )}
-          {visibleColumns.outstandingShare && <td className={`py-4 px-4 text-right text-gray-600 text-[14.4px] font-medium ${firstVisibleFundamentalKey === 'outstandingShare' ? 'border-l border-gray-200' : ''}`} style={{ minWidth: 120 }}>{row.outstandingShare ? formatInt(row.outstandingShare) : "-"}</td>}
+          {visibleColumns.outstandingShare && <td className={`py-4 px-4 text-right text-gray-600 text-[14.4px] font-medium font-mono ${firstVisibleFundamentalKey === 'outstandingShare' ? 'border-l border-gray-200' : ''}`} style={{ minWidth: 120 }}>{row.outstandingShare ? formatInt(row.outstandingShare) : "-"}</td>}
         </tr>
       );
     };
@@ -749,7 +766,7 @@ import swipeImg from "../assets/swipe.png";
                     <th key={key} className={`py-3 px-4 ${textCols.includes(key) ? "text-left" : "text-right"} bg-[#1C1D39] border-b border-gray-200 whitespace-nowrap cursor-pointer relative ${fundamentalKeys.includes(key) && key === firstVisibleFundamentalKey ? 'border-l border-gray-200' : ''}`} onClick={() => handleSort(key)}>
                       <div className={`flex items-center ${textCols.includes(key) ? "justify-start" : "justify-end"} gap-0.5`}>
                         {key === "open" && "Open"}{key === "high" && "High"}{key === "low" && "Low"}{key === "last" && "Last"}{key === "change" && "Change"}{key === "pct" && "%Change"}{key === "bid" && "Bid"}{key === "offer" && "Offer"}{key === "vol" && "Volume"}{key === "value" && "Value('000)"}{key === "tradingSession" && "Trading Session"}
-                        {key === "issuerName" && "Issuer"}{key === "marketCap" && "Market Cap (M)"}{key === "ytdChange" && "Change (YTD)"}{key === "ytdPercentChange" && "%Change (YTD)"}{key === "underlyingName" && "Underlying"}{key === "conversionRatio" && "Conversion Ratio"}{key === "divYield" && "Div. Yield"}{key === "exchange" && "Underlying Exchange"}{key === "securityTypeName" && "Foreign Security Type"}{key === "outstandingShare" && "Outstanding Share"}
+                        {key === "issuerName" && "Issuer"}{key === "marketCap" && "Market Cap (M)"}{key === "ytdChange" && "Change (YTD)"}{key === "ytdPercentChange" && "%Change (YTD)"}{key === "underlyingName" && "Underlying"}{key === "conversionRatio" && "Ratio"}{key === "divYield" && "Div. Yield"}{key === "exchange" && "Underlying Exchange"}{key === "securityTypeName" && "Foreign Security Type"}{key === "outstandingShare" && "Outstanding Share"}
                         <SortIndicator colKey={key} />
                       </div>
                       {sortConfig.key === key && (
@@ -795,7 +812,7 @@ import swipeImg from "../assets/swipe.png";
       if (!showSettings) return null;
       const tradingKeys = ["dr", "open", "high", "low", "last", "change", "pct", "bid", "offer", "vol", "value", "tradingSession"];
       const basicDrKeys = ["issuerName", "marketCap", "underlyingName", "ytdChange", "ytdPercentChange", "conversionRatio", "divYield", "exchange", "securityTypeName", "outstandingShare"];
-      const renderColumnLabel = (key) => ({ star: "Star", dr: "DR", open: "Open", high: "High", low: "Low", last: "Last", change: "Change", pct: "%Change", bid: "Bid", offer: "Offer", vol: "Volume", value: "Value('000)", tradingSession: "Trading Session", issuerName: "Issuer", marketCap: "Market Cap (M)", underlyingName: "Underlying", ytdChange: "Change (YTD)", ytdPercentChange: "%Change (YTD)", conversionRatio: "Conversion Ratio", divYield: "Div. Yield", exchange: "Underlying Exchange", securityTypeName: "Foreign Security Type", outstandingShare: "Outstanding Share" }[key] || key);
+      const renderColumnLabel = (key) => ({ star: "Star", dr: "DR", open: "Open", high: "High", low: "Low", last: "Last", change: "Change", pct: "%Change", bid: "Bid", offer: "Offer", vol: "Volume", value: "Value('000)", tradingSession: "Trading Session", issuerName: "Issuer", marketCap: "Market Cap (M)", underlyingName: "Underlying", ytdChange: "Change (YTD)", ytdPercentChange: "%Change (YTD)", conversionRatio: "Ratio", divYield: "Div. Yield", exchange: "Underlying Exchange", securityTypeName: "Foreign Security Type", outstandingShare: "Outstanding Share" }[key] || key);
 
       return (
         /* ✅ แก้ไข: ปรับ z-[2000] เพื่อให้ Modal อยู่เหนือเมนู Dropdown ทั้งหมด */
@@ -895,7 +912,7 @@ import swipeImg from "../assets/swipe.png";
                 </div>
               </div>
               <div className="mt-1 flex justify-end">
-                <button className="rounded-md bg-[#E5E7EB] px-6 py-1.5 text-[12px] font-medium text-gray-800 transition-colors hover:bg-[#D1D5DB]" onClick={() => setDetailRow(null)}>ปิด</button>
+                <button className="rounded-md bg-[#E5E7EB] px-6 py-1.5 text-[12px] font-medium text-gray-800 transition-colors hover:bg-[#D1D5DB]" onClick={() => setDetailRow(null)}>close</button>
               </div>
             </div>
           </div>

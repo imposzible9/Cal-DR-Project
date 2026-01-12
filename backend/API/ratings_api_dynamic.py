@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import httpx
@@ -12,6 +12,26 @@ import sqlite3
 from datetime import datetime, timedelta, time
 from zoneinfo import ZoneInfo
 
+# Debug logging setup
+DEBUG_LOG_PATH = r"c:\Users\Thoz\Desktop\New-Cal-DR-Project-main\.cursor\debug.log"
+
+def debug_log(session_id, run_id, hypothesis_id, location, message, data):
+    """Write debug log to NDJSON file"""
+    try:
+        log_entry = {
+            "sessionId": session_id,
+            "runId": run_id,
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": int(datetime.now().timestamp() * 1000)
+        }
+        with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+    except Exception:
+        pass  # Silently fail if log write fails
+
 # ---------- CONFIG ----------
 DR_LIST_URL = "http://172.17.1.85:8333/dr"
 TRADINGVIEW_BASE = "https://scanner.tradingview.com/symbol"
@@ -20,7 +40,7 @@ TV_FIELDS = "Recommend.All,Recommend.All|1W,close,change,change_abs,high,low,vol
 MAX_CONCURRENCY = 4       
 REQUEST_TIMEOUT = 15      
 UPDATE_INTERVAL_SECONDS = 180 
-BATCH_SLEEP_SECONDS = 1.0     
+BATCH_SLEEP_SECONDS = 1.0
 
 # --- History-specific Config ---
 # ไม่ใช้ interval แล้ว แต่ใช้ scheduled time แบบฟิกตามเวลาปิดตลาดของแต่ละ market
@@ -90,6 +110,10 @@ def init_database():
         con = sqlite3.connect(DB_FILE)
         cur = con.cursor()
         
+        # Enable WAL mode for better concurrency (ตั้งค่าก่อนสร้าง tables)
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA busy_timeout=30000")
+        
         # Check if tables exist with old schema
         needs_recreate = False
         if os.path.exists(DB_FILE):
@@ -145,6 +169,12 @@ def init_database():
                 PRIMARY KEY (ticker, timestamp)
             )
         """)
+        
+        # Create index on rating_main for faster queries (WHERE ticker=? ORDER BY timestamp DESC)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_rating_main_ticker_timestamp 
+            ON rating_main(ticker, timestamp DESC)
+        """)
 
         # Table for the filtered, "noise-free" history (uses TradingView / rating_main as source)
         # NOTE: rating_history now also stores market data snapshot at end of day + market info
@@ -192,6 +222,60 @@ def init_database():
         except Exception as e:
             print(f"⚠️ Failed to ensure rating_history market-data columns: {e}")
 
+        # Table for calculated accuracy metrics (ใหม่)
+        # เก็บ accuracy สำหรับแต่ละ timestamp (วัน) ของแต่ละ ticker
+        # ตรวจสอบว่าตาราง rating_accuracy มีโครงสร้างเก่าหรือไม่ (มี timeframe column หรือไม่มี currency/high/low = เก่า)
+        try:
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", ("rating_accuracy",))
+            if cur.fetchone():
+                cur.execute("PRAGMA table_info(rating_accuracy)")
+                columns = [row[1] for row in cur.fetchall()]
+                # ถ้ามี timeframe column หรือไม่มี currency/high/low แสดงว่าเป็นโครงสร้างเก่า ต้อง drop และสร้างใหม่
+                if "timeframe" in columns or "currency" not in columns or "high" not in columns or "low" not in columns:
+                    print("⚠️ Old rating_accuracy schema detected. Dropping and recreating table...")
+                    cur.execute("DROP TABLE IF EXISTS rating_accuracy")
+                    print("   -> Dropped old rating_accuracy table")
+        except Exception as e:
+            print(f"⚠️ Error checking rating_accuracy schema: {e}")
+        
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS rating_accuracy (
+                ticker TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                price REAL,
+                change_pct REAL,
+                currency TEXT,
+                high REAL,
+                low REAL,
+                window_day INTEGER NOT NULL,
+                daily_rating TEXT,
+                daily_prev TEXT,
+                samplesize_daily INTEGER NOT NULL,
+                correct_daily INTEGER NOT NULL,
+                incorrect_daily INTEGER NOT NULL,
+                accuracy_daily REAL NOT NULL,
+                weekly_rating TEXT,
+                weekly_prev TEXT,
+                samplesize_weekly INTEGER NOT NULL,
+                correct_weekly INTEGER NOT NULL,
+                incorrect_weekly INTEGER NOT NULL,
+                accuracy_weekly REAL NOT NULL,
+                PRIMARY KEY (ticker, timestamp)
+            )
+        """)
+
+        # Create indexes for faster queries
+        # Index on ticker for WHERE clause
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_rating_accuracy_ticker 
+            ON rating_accuracy(ticker)
+        """)
+        # Composite index on (ticker, timestamp DESC) for WHERE + ORDER BY queries (สำคัญมากสำหรับ performance)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_rating_accuracy_ticker_timestamp 
+            ON rating_accuracy(ticker, timestamp DESC)
+        """)
+
         con.commit()
         con.close()
         if needs_recreate:
@@ -212,6 +296,10 @@ def migrate_from_json_if_needed():
     try:
         con = sqlite3.connect(DB_FILE)
         cur = con.cursor()
+        
+        # Enable WAL mode for better concurrency
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA busy_timeout=30000")
 
         # Check if rating_stats table has data
         cur.execute("SELECT COUNT(*) FROM rating_stats")
@@ -450,7 +538,8 @@ def market_code_from_exchange(exchange: str) -> str:
         return "DK"
     
     # Vietnam - ตรวจสอบแบบเต็มตาม frontend
-    if "hochiminh" in ex_lower or "hanoi" in ex_lower or "hnx" in ex_lower:
+    if ("ho chi minh" in ex_lower or "hochiminh" in ex_lower or 
+        "hanoi" in ex_lower or "hnx" in ex_lower):
         return "VN"
     
     # China - ตรวจสอบแบบเต็มตาม frontend
@@ -474,8 +563,14 @@ def market_code_from_exchange(exchange: str) -> str:
         return "JP"
     
     # US - ตรวจสอบแบบเต็มตาม frontend (ต้องตรวจสอบก่อน fallback)
+    # รองรับ 4 exchange หลัก:
+    # 1. The Nasdaq Global Select Market
+    # 2. The Nasdaq Stock Market
+    # 3. The New York Stock Exchange
+    # 4. The New York Stock Exchange Archipelago
     if ("nasdaq global select market" in ex_lower or 
         "nasdaq stock market" in ex_lower or 
+        "new york stock exchange archipelago" in ex_lower or  # ตรวจสอบ Archipelago ก่อน (เพราะมี "new york stock exchange" อยู่ด้วย)
         "new york stock exchange" in ex_lower or 
         "nyse" in ex_lower or 
         "nasdaq" in ex_lower):
@@ -583,7 +678,6 @@ async def fetch_single_ticker(client: httpx.AsyncClient, item_data):
     dr_symbol = item_data.get("dr_sym")
 
     tv_symbol = construct_tv_symbol(ticker, name, exchange, dr_symbol)
-    print(f"      - Constructed TradingView symbol for {ticker}: {tv_symbol} (exchange: {exchange})")
     
     params = {
         "symbol": tv_symbol, 
@@ -1084,7 +1178,6 @@ async def background_updater():
                 for i in range(0, len(tasks_data), MAX_CONCURRENCY):
                     batch_num = i // MAX_CONCURRENCY + 1
                     batch_data = tasks_data[i:i+MAX_CONCURRENCY]
-                    print(f"    Starting batch {batch_num}/{total_batches} with {len(batch_data)} items...")
                     
                     results = await asyncio.gather(*[fetch_single_ticker(client, item) for item in batch_data])
                     
@@ -1094,6 +1187,11 @@ async def background_updater():
                         con = sqlite3.connect(DB_FILE, timeout=10)
                         con.row_factory = sqlite3.Row
                         cur = con.cursor()
+                        
+                        # Enable WAL mode for better concurrency
+                        cur.execute("PRAGMA journal_mode=WAL")
+                        cur.execute("PRAGMA busy_timeout=30000")
+                        
                         # ใช้เวลาไทยเท่านั้น
                         now_thai = datetime.now(bkk_tz)
                         current_timestamp_str = now_thai.replace(tzinfo=None).isoformat()
@@ -1142,7 +1240,9 @@ async def background_updater():
                             update_rating_history(cur, ticker)
                         
                         con.commit()
-                        print(f"    ✅ Batch {batch_num}/{total_batches} processed. Committed {successful_updates_in_batch} updates to the database.")
+                        # แสดง log เฉพาะทุก 10 batches หรือ batch สุดท้าย
+                        if batch_num % 10 == 0 or batch_num == total_batches:
+                            print(f"    Batch {batch_num}/{total_batches}: {successful_updates_in_batch} updates committed")
 
                     except Exception as batch_e:
                         print(f"    ❌ Error during DB operation for batch {batch_num}: {batch_e}")
@@ -1157,6 +1257,11 @@ async def background_updater():
                 print("🧹 Cleaning up old records by date...")
                 con = sqlite3.connect(DB_FILE, timeout=10)
                 cur = con.cursor()
+                
+                # Enable WAL mode for better concurrency
+                cur.execute("PRAGMA journal_mode=WAL")
+                cur.execute("PRAGMA busy_timeout=30000")
+                
                 cleanup_old_records_by_date(cur)
                 con.commit()
                 con.close()
@@ -1206,9 +1311,6 @@ def upsert_history_snapshot(
     ts_str = snapshot_ts_thai.replace(tzinfo=None).isoformat()
     date_str = snapshot_ts_thai.date().isoformat()
     
-    # Debug: แสดงเวลาที่เก็บ
-    print(f"  [History Snapshot] {ticker}: Thai={ts_str}")
-
     # Check if we already have a record for this ticker and date
     cur.execute(
         """
@@ -1273,6 +1375,106 @@ def upsert_history_snapshot(
     )
 
 
+async def analyze_all_tickers():
+    """
+    วิเคราะห์ tickers ทั้งหมดจาก DR API และแสดงสรุปการ mapping
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            r_dr = await client.get(DR_LIST_URL, timeout=20)
+            r_dr.raise_for_status()
+            rows = r_dr.json().get("rows", [])
+            
+            print("\n" + "=" * 80)
+            print("[MAPPING ANALYSIS] วิเคราะห์การ Mapping Tickers ทั้งหมด")
+            print("=" * 80)
+            
+            total_tickers = 0
+            market_counts = {}
+            exchange_counts = {}
+            unmapped_tickers = []
+            
+            for item in rows:
+                u_code = item.get("underlying") or (item.get("symbol") or "").replace("80", "").replace("19", "")
+                if u_code:
+                    u_code = u_code.strip().upper()
+                    exchange = item.get("underlyingExchange", "")
+                    market = market_code_from_exchange(exchange)
+                    
+                    total_tickers += 1
+                    
+                    # นับตาม market
+                    if market not in market_counts:
+                        market_counts[market] = 0
+                    market_counts[market] += 1
+                    
+                    # นับตาม exchange
+                    if exchange:
+                        if exchange not in exchange_counts:
+                            exchange_counts[exchange] = {"count": 0, "market": market}
+                        exchange_counts[exchange]["count"] += 1
+                    else:
+                        unmapped_tickers.append(u_code)
+            
+            print(f"\n[SUMMARY] สรุปการ Mapping:")
+            print(f"  จำนวน Tickers ทั้งหมดจาก DR API: {total_tickers}")
+            print(f"  จำนวน Markets ที่พบ: {len(market_counts)}")
+            print(f"  จำนวน Exchanges ที่พบ: {len(exchange_counts)}")
+            if unmapped_tickers:
+                print(f"  Tickers ที่ไม่มี Exchange: {len(unmapped_tickers)}")
+            
+            print(f"\n[MARKET DISTRIBUTION] แยกตาม Market:")
+            for market in sorted(market_counts.keys()):
+                count = market_counts[market]
+                pct = (count / total_tickers * 100) if total_tickers > 0 else 0
+                print(f"  {market:3s}: {count:4d} tickers ({pct:5.1f}%)")
+            
+            print(f"\n[EXCHANGE DISTRIBUTION] แยกตาม Exchange (Top 20):")
+            sorted_exchanges = sorted(exchange_counts.items(), key=lambda x: x[1]["count"], reverse=True)
+            for exchange, info in sorted_exchanges[:20]:
+                count = info["count"]
+                market = info["market"]
+                print(f"  {exchange:60s} -> {market:3s} ({count:3d} tickers)")
+            
+            if len(sorted_exchanges) > 20:
+                print(f"  ... และอีก {len(sorted_exchanges) - 20} exchanges")
+            
+            # ตรวจสอบ US exchanges
+            print(f"\n[US EXCHANGES] Exchange ที่ Map เป็น US:")
+            us_exchanges = {ex: info for ex, info in exchange_counts.items() if info["market"] == "US"}
+            if us_exchanges:
+                total_us = sum(info["count"] for info in us_exchanges.values())
+                print(f"  พบ {len(us_exchanges)} unique exchanges, รวม {total_us} tickers")
+                for exchange, info in sorted(us_exchanges.items(), key=lambda x: x[1]["count"], reverse=True):
+                    print(f"    {exchange:60s}: {info['count']:3d} tickers")
+            else:
+                print("  ไม่พบ exchange ที่ map เป็น US")
+            
+            # ตรวจสอบ HK exchanges
+            print(f"\n[HK EXCHANGES] Exchange ที่ Map เป็น HK:")
+            hk_exchanges = {ex: info for ex, info in exchange_counts.items() if info["market"] == "HK"}
+            if hk_exchanges:
+                total_hk = sum(info["count"] for info in hk_exchanges.values())
+                print(f"  พบ {len(hk_exchanges)} unique exchanges, รวม {total_hk} tickers")
+                for exchange, info in sorted(hk_exchanges.items(), key=lambda x: x[1]["count"], reverse=True):
+                    print(f"    {exchange:60s}: {info['count']:3d} tickers")
+            else:
+                print("  ไม่พบ exchange ที่ map เป็น HK")
+            
+            print("=" * 80 + "\n")
+            
+            return {
+                "total_tickers": total_tickers,
+                "market_counts": market_counts,
+                "exchange_counts": exchange_counts,
+            }
+    except Exception as e:
+        print(f"[MAPPING ANALYSIS] Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
 async def fetch_market_history(market_code: str):
     """
     ดึงข้อมูล history สำหรับ market ที่ระบุ
@@ -1293,14 +1495,21 @@ async def fetch_market_history(market_code: str):
             print(f"[History] [{market_code}] Could not fetch DR list: {dr_e}")
             return
         
+        # วิเคราะห์ข้อมูลทั้งหมดก่อน (แสดงครั้งแรกเท่านั้น)
+        if not hasattr(fetch_market_history, "_analysis_done"):
+            await analyze_all_tickers()
+            fetch_market_history._analysis_done = True
+        
         # Filter tickers for this market
         market_tickers = []
         all_exchanges = set()  # Debug: เก็บ exchange names ทั้งหมด
+        total_from_dr = 0
         
         for item in rows:
             u_code = item.get("underlying") or (item.get("symbol") or "").replace("80", "").replace("19", "")
             if u_code:
                 u_code = u_code.strip().upper()
+                total_from_dr += 1
                 exchange = item.get("underlyingExchange", "")
                 if exchange:
                     all_exchanges.add(exchange)  # Debug: เก็บ exchange name
@@ -1313,33 +1522,157 @@ async def fetch_market_history(market_code: str):
                         "dr_sym": item.get("symbol", ""),
                     })
         
+        print(f"[History] [{market_code}] Total tickers from DR API: {total_from_dr}")
+        print(f"[History] [{market_code}] Tickers mapped to {market_code}: {len(market_tickers)}")
+        
         if not market_tickers:
             print(f"[History] [{market_code}] No tickers found for this market")
             # Debug: แสดง exchange names ที่มี (เฉพาะที่อาจเกี่ยวข้อง)
+            upper_exchanges = [ex.upper() for ex in all_exchanges]
             if market_code in ["NL", "IT"]:
-                relevant_exchanges = [ex for ex in all_exchanges if any(k in ex.upper() for k in ("AMSTERDAM", "NETHERLANDS", "MILAN", "ITALY", "EURONEXT"))]
+                relevant_exchanges = [ex for ex in upper_exchanges if any(k in ex for k in ("AMSTERDAM", "NETHERLANDS", "MILAN", "ITALY", "EURONEXT"))]
                 if relevant_exchanges:
-                    print(f"[History] [{market_code}] Debug: Found related exchanges: {', '.join(sorted(relevant_exchanges))}")
+                    print(f"[History] [{market_code}] Debug (EU): {', '.join(sorted(relevant_exchanges))}")
+            elif market_code == "HK":
+                # Debug: แสดง exchange ทั้งหมดที่ map เป็น HK
+                hk_exchanges_found = []
+                for ex in all_exchanges:
+                    mapped = market_code_from_exchange(ex)
+                    if mapped == "HK":
+                        hk_exchanges_found.append(ex)
+                if hk_exchanges_found:
+                    print(f"[History] [HK] Debug: Found {len(hk_exchanges_found)} exchanges that map to HK:")
+                    for ex in sorted(set(hk_exchanges_found))[:10]:
+                        print(f"[History] [HK]   - {ex}")
+                # Debug: แสดง exchange ที่มีคำว่า HONG, HK, HKEX แต่ไม่ map เป็น HK
+                relevant_exchanges = [ex for ex in upper_exchanges if any(k in ex for k in ("HONG", "HK", "HKEX", "SEHK"))]
+                if relevant_exchanges:
+                    print(f"[History] [HK] Debug: Exchanges containing HONG/HK/HKEX keywords: {len(relevant_exchanges)}")
+                    non_hk_exchanges = []
+                    for ex in relevant_exchanges:
+                        mapped = market_code_from_exchange(ex)
+                        if mapped != "HK":
+                            non_hk_exchanges.append(f"{ex} -> {mapped}")
+                    if non_hk_exchanges:
+                        print(f"[History] [HK] Warning: {len(non_hk_exchanges)} exchanges with HK keywords but mapped to other market:")
+                        for ex_map in non_hk_exchanges[:5]:
+                            print(f"[History] [HK]   - {ex_map}")
+                else:
+                    print(f"[History] [HK] Debug: No exchanges found with HONG/HK/HKEX keywords")
+            elif market_code == "VN":
+                relevant_exchanges = [ex for ex in upper_exchanges if any(k in ex for k in ("VIET", "HOCHIMINH", "HOSE", "HNX"))]
+                if relevant_exchanges:
+                    print(f"[History] [VN] Debug exchanges: {', '.join(sorted(relevant_exchanges))}")
+            elif market_code == "US":
+                # Debug สำหรับ US: แสดง exchange ทั้งหมดที่ map เป็น US
+                us_exchanges_found = []
+                for ex in all_exchanges:
+                    mapped = market_code_from_exchange(ex)
+                    if mapped == "US":
+                        us_exchanges_found.append(ex)
+                if us_exchanges_found:
+                    print(f"[History] [US] Debug: Found {len(us_exchanges_found)} exchanges that map to US:")
+                    for ex in sorted(set(us_exchanges_found))[:10]:
+                        print(f"[History] [US]   - {ex}")
+                # แสดง exchange ที่ไม่ map เป็น US (เพื่อ debug)
+                non_us_exchanges = [ex for ex in all_exchanges if market_code_from_exchange(ex) != "US"]
+                if non_us_exchanges:
+                    print(f"[History] [US] Debug: {len(non_us_exchanges)} exchanges that DON'T map to US (sample):")
+                    for ex in sorted(set(non_us_exchanges))[:5]:
+                        mapped = market_code_from_exchange(ex)
+                        print(f"[History] [US]   - {ex} -> {mapped}")
+            else:
+                if upper_exchanges:
+                    print(f"[History] [{market_code}] Debug exchanges sample: {', '.join(sorted(upper_exchanges)[:10])}")
             return
         
         print(f"[History] [{market_code}] Found {len(market_tickers)} tickers")
         
+        # Debug: แสดง exchange distribution สำหรับ US
+        if market_code == "US":
+            exchange_dist = {}
+            for item in market_tickers:
+                ex = item.get("u_exch", "") or "NULL"
+                if ex not in exchange_dist:
+                    exchange_dist[ex] = 0
+                exchange_dist[ex] += 1
+            print(f"[History] [US] Exchange distribution:")
+            for ex, count in sorted(exchange_dist.items(), key=lambda x: x[1], reverse=True):
+                print(f"[History] [US]   {ex:60s}: {count:3d} tickers")
+        
         con = None
+        max_retries = 5
+        retry_delay = 0.5  # seconds
+        session_id = "concurrent-db-check"
+        run_id = "run1"
+        
+        # #region agent log
+        debug_log(session_id, run_id, "A", f"fetch_market_history:{market_code}:connection_start", 
+                  f"Starting connection for {market_code}", {"market_code": market_code, "timestamp": now_thai.isoformat()})
+        # #endregion
+        
+        for retry in range(max_retries):
+            try:
+                # ใช้ connection แยกสำหรับแต่ละ market เพื่อรองรับ concurrent access
+                # Markets ที่มีเวลาเดียวกัน (เช่น VN+HK ที่ 15:00, IT+FR+NL ที่ 23:30) 
+                # สามารถดึงพร้อมกันได้โดยไม่มีปัญหา database lock
+                # #region agent log
+                debug_log(session_id, run_id, "B", f"fetch_market_history:{market_code}:before_connect",
+                          f"Before connecting to DB for {market_code}", {"market_code": market_code, "retry": retry})
+                # #endregion
+                
+                con = sqlite3.connect(DB_FILE, timeout=3)  # ลด timeout เป็น 5 วินาที (ลด lock time)
+                con.row_factory = sqlite3.Row
+                cur = con.cursor()
+                
+                # Enable WAL mode for better concurrency (รองรับ concurrent reads/writes)
+                # WAL mode ทำให้สามารถมี multiple readers และ 1 writer พร้อมกันได้
+                cur.execute("PRAGMA journal_mode=WAL")
+                wal_result = cur.fetchone()
+                
+                # #region agent log
+                debug_log(session_id, run_id, "B", f"fetch_market_history:{market_code}:after_wal",
+                          f"WAL mode set for {market_code}", {"market_code": market_code, "wal_mode": wal_result[0] if wal_result else "unknown"})
+                # #endregion
+                
+                # ตั้ง timeout สำหรับ database lock (ลดลงเพื่อลด lock time)
+                cur.execute("PRAGMA busy_timeout=2000")  # 2 seconds timeout (ลดจาก 30 วินาที)
+                # ปรับเพิ่ม cache size เพื่อ performance
+                cur.execute("PRAGMA cache_size=-64000")  # 64MB cache
+                
+                # #region agent log
+                debug_log(session_id, run_id, "C", f"fetch_market_history:{market_code}:connection_success",
+                          f"Connection established for {market_code}", {"market_code": market_code, "retry": retry})
+                # #endregion
+                
+                break  # Connection successful, exit retry loop
+            except sqlite3.OperationalError as e:
+                # #region agent log
+                debug_log(session_id, run_id, "D", f"fetch_market_history:{market_code}:connection_error",
+                          f"Database connection error for {market_code}", {"market_code": market_code, "error": str(e), "retry": retry, "is_locked": "locked" in str(e).lower()})
+                # #endregion
+                
+                if "locked" in str(e).lower() and retry < max_retries - 1:
+                    print(f"[History] [{market_code}] Database locked, retrying in {retry_delay}s (attempt {retry + 1}/{max_retries})...")
+                    await asyncio.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                    if con:
+                        con.close()
+                else:
+                    raise
+        
         try:
-            con = sqlite3.connect(DB_FILE, timeout=10)
-            con.row_factory = sqlite3.Row
-            cur = con.cursor()
-            
             fetched_count = 0
             skipped_count = 0
+            fetched_tickers = []  # เก็บ list ของ tickers ที่เพิ่ง upsert สำเร็จ (สำหรับคำนวณ accuracy)
             
             for item in market_tickers:
                 ticker = item.get("u_code")
                 exchange = item.get("u_exch") or ""
-                close_thai = get_market_close_thai(market_code, now_thai)
                 
-                # ตรวจสอบว่ายังไม่มี snapshot สำหรับวันนี้
-                date_str = close_thai.date().isoformat()
+                # ใช้วันที่ของ now_thai โดยตรง (ไม่ใช้ get_market_close_thai เพราะอาจคำนวณผิด)
+                date_str = now_thai.date().isoformat()
+                ts_str = now_thai.replace(tzinfo=None).isoformat()
                 cur.execute(
                     """
                     SELECT 1 FROM rating_history
@@ -1355,6 +1688,7 @@ async def fetch_market_history(market_code: str):
                 # Fetch data from TradingView
                 res = await fetch_single_ticker_for_history(client, item)
                 if not res.get("success"):
+                    print(f"[History] [{market_code}] Failed to fetch {ticker}: {res.get('error', 'Unknown error')}")
                     continue
                 
                 data = res["data"]
@@ -1363,11 +1697,13 @@ async def fetch_market_history(market_code: str):
                 daily_rating = data.get("daily_rating")
                 weekly_rating = data.get("weekly_rating")
                 
-                # Skip if both daily and weekly are Unknown
+                # เก็บข้อมูลแม้ว่า rating จะเป็น Unknown ก็ตาม
+                # เพื่อให้มีข้อมูลครบทุก ticker (แต่จะ log ไว้เพื่อ debug)
                 if (not daily_rating or daily_rating == "Unknown") and (
                     not weekly_rating or weekly_rating == "Unknown"
                 ):
-                    continue
+                    print(f"[History] [{market_code}] Warning: {ticker} has both daily and weekly as Unknown, but will still be saved")
+                    # ไม่ skip - เก็บข้อมูลไว้เพื่อให้มีครบทุก ticker
                 
                 market_data = {
                     "currency": data.get("currency", ""),
@@ -1378,25 +1714,223 @@ async def fetch_market_history(market_code: str):
                     "low": data.get("market_data", {}).get("low"),
                 }
                 
-                upsert_history_snapshot(
-                    cur,
-                    ticker=ticker,
-                    market_code=market_code,
-                    snapshot_ts_thai=now_thai,
-                    daily_val=daily_val,
-                    daily_rating=daily_rating,
-                    weekly_val=weekly_val,
-                    weekly_rating=weekly_rating,
-                    exchange=exchange,
-                    market_data=market_data,
-                )
-                fetched_count += 1
+                # Retry upsert with exponential backoff if database is locked
+                upsert_success = False
+                # #region agent log
+                debug_log(session_id, run_id, "E", f"fetch_market_history:{market_code}:before_upsert",
+                          f"Before upsert for {ticker}", {"market_code": market_code, "ticker": ticker})
+                # #endregion
+                
+                for upsert_retry in range(3):
+                    try:
+                        upsert_history_snapshot(
+                            cur,
+                            ticker=ticker,
+                            market_code=market_code,
+                            snapshot_ts_thai=now_thai,
+                            daily_val=daily_val,
+                            daily_rating=daily_rating,
+                            weekly_val=weekly_val,
+                            weekly_rating=weekly_rating,
+                            exchange=exchange,
+                            market_data=market_data,
+                        )
+                        upsert_success = True
+                        # #region agent log
+                        debug_log(session_id, run_id, "E", f"fetch_market_history:{market_code}:upsert_success",
+                                  f"Upsert successful for {ticker}", {"market_code": market_code, "ticker": ticker, "retry": upsert_retry})
+                        # #endregion
+                        break
+                    except sqlite3.OperationalError as e:
+                        # #region agent log
+                        debug_log(session_id, run_id, "E", f"fetch_market_history:{market_code}:upsert_error",
+                                  f"Upsert error for {ticker}", {"market_code": market_code, "ticker": ticker, "error": str(e), "retry": upsert_retry, "is_locked": "locked" in str(e).lower()})
+                        # #endregion
+                        
+                        if "locked" in str(e).lower() and upsert_retry < 2:
+                            await asyncio.sleep(0.2 * (upsert_retry + 1))  # 0.2s, 0.4s, 0.6s
+                            continue
+                        else:
+                            raise
+                
+                if upsert_success:
+                    fetched_count += 1
+                    # เก็บ ticker, timestamp, price, change_pct สำหรับคำนวณ accuracy ภายหลัง
+                    ts_str = now_thai.replace(tzinfo=None).isoformat()
+                    fetched_tickers.append({
+                        "ticker": ticker,
+                        "timestamp": ts_str,
+                        "price": market_data.get("price"),
+                        "change_pct": market_data.get("change_pct"),
+                        "currency": market_data.get("currency"),
+                        "high": market_data.get("high"),
+                        "low": market_data.get("low")
+                    })
+                else:
+                    print(f"[History] [{market_code}] Failed to upsert {ticker} after retries")
                 
                 # Small delay between requests
                 await asyncio.sleep(0.1)
             
-            con.commit()
-            print(f"[History] [{market_code}] Completed: {fetched_count} fetched, {skipped_count} skipped (already exist)")
+            # Commit with retry
+            commit_success = False
+            # #region agent log
+            debug_log(session_id, run_id, "F", f"fetch_market_history:{market_code}:before_commit",
+                      f"Before commit for {market_code}", {"market_code": market_code, "fetched_count": fetched_count})
+            # #endregion
+            
+            for commit_retry in range(3):
+                try:
+                    con.commit()
+                    commit_success = True
+                    # #region agent log
+                    debug_log(session_id, run_id, "F", f"fetch_market_history:{market_code}:commit_success",
+                              f"Commit successful for {market_code}", {"market_code": market_code, "retry": commit_retry})
+                    # #endregion
+                    break
+                except sqlite3.OperationalError as e:
+                    # #region agent log
+                    debug_log(session_id, run_id, "F", f"fetch_market_history:{market_code}:commit_error",
+                              f"Commit error for {market_code}", {"market_code": market_code, "error": str(e), "retry": commit_retry, "is_locked": "locked" in str(e).lower()})
+                    # #endregion
+                    
+                    if "locked" in str(e).lower() and commit_retry < 2:
+                        await asyncio.sleep(0.5 * (commit_retry + 1))
+                        continue
+                    else:
+                        raise
+            
+            if commit_success:
+                print(f"[History] [{market_code}] Completed: {fetched_count} fetched, {skipped_count} skipped (already exist)")
+                # #region agent log
+                debug_log(session_id, run_id, "G", f"fetch_market_history:{market_code}:completed",
+                          f"Fetch completed for {market_code}", {"market_code": market_code, "fetched_count": fetched_count, "skipped_count": skipped_count})
+                # #endregion
+                
+                # คำนวณและบันทึก accuracy สำหรับทุก ticker ที่เพิ่งดึงข้อมูลมา
+                # ใช้ Batch Commit เพื่อลด lock time และยังคงมี atomicity ในระดับ batch
+                if fetched_tickers:
+                    print(f"[Accuracy] [{market_code}] Calculating accuracy for {len(fetched_tickers)} tickers...")
+                    accuracy_calculated = 0
+                    accuracy_errors = 0
+                    # ปิด connection เดิมก่อน (เพื่อไม่ให้ block)
+                    con.close()
+                    con = None
+                    
+                    # Batch size: commit ทุก 10 tickers (ลด lock time แต่ยังคงมี atomicity ในระดับ batch)
+                    BATCH_SIZE = 10
+                    failed_tickers = []  # เก็บ tickers ที่ error สำหรับ retry
+                    
+                    for batch_start in range(0, len(fetched_tickers), BATCH_SIZE):
+                        batch_end = min(batch_start + BATCH_SIZE, len(fetched_tickers))
+                        batch_tickers = fetched_tickers[batch_start:batch_end]
+                        
+                        # สร้าง connection ใหม่สำหรับแต่ละ batch
+                        batch_con = None
+                        try:
+                            batch_con = sqlite3.connect(DB_FILE, timeout=3)  # ลด timeout เป็น 3 วินาที
+                            batch_cur = batch_con.cursor()
+                            batch_cur.execute("PRAGMA journal_mode=WAL")
+                            batch_cur.execute("PRAGMA busy_timeout=1000")  # ลดเป็น 1 วินาที
+                            
+                            batch_success = True
+                            for ticker_info in batch_tickers:
+                                try:
+                                    calculate_and_save_accuracy_for_ticker(
+                                        batch_cur, 
+                                        ticker_info["ticker"], 
+                                        ticker_info["timestamp"],
+                                        ticker_info["price"],
+                                        ticker_info["change_pct"],
+                                        ticker_info.get("currency"),
+                                        ticker_info.get("high"),
+                                        ticker_info.get("low"),
+                                        window_days=90
+                                    )
+                                except Exception as ticker_e:
+                                    print(f"[Accuracy] [{market_code}] Error calculating accuracy for {ticker_info['ticker']}: {ticker_e}")
+                                    failed_tickers.append(ticker_info)
+                                    batch_success = False
+                                    # Rollback transaction สำหรับ batch นี้
+                                    batch_con.rollback()
+                                    break
+                            
+                            # Commit batch ถ้าทุก ticker สำเร็จ
+                            if batch_success:
+                                batch_con.commit()
+                                accuracy_calculated += len(batch_tickers)
+                            else:
+                                # Batch failed - tickers ใน batch นี้จะถูกเก็บไว้สำหรับ retry
+                                accuracy_errors += len(batch_tickers)
+                                
+                        except Exception as batch_e:
+                            print(f"[Accuracy] [{market_code}] Error in batch ({batch_start}-{batch_end}): {batch_e}")
+                            failed_tickers.extend(batch_tickers)
+                            accuracy_errors += len(batch_tickers)
+                        finally:
+                            if batch_con:
+                                batch_con.close()
+                    
+                    # Retry failed tickers ทีละตัว (connection แยก) เพื่อให้มีข้อมูลครบถ้วน
+                    if failed_tickers:
+                        print(f"[Accuracy] [{market_code}] Retrying {len(failed_tickers)} failed tickers individually...")
+                        for ticker_info in failed_tickers:
+                            retry_con = None
+                            try:
+                                retry_con = sqlite3.connect(DB_FILE, timeout=3)  # ลด timeout เป็น 3 วินาที
+                                retry_cur = retry_con.cursor()
+                                retry_cur.execute("PRAGMA journal_mode=WAL")
+                                retry_cur.execute("PRAGMA busy_timeout=1000")  # ลดเป็น 1 วินาที
+                                
+                                calculate_and_save_accuracy_for_ticker(
+                                    retry_cur, 
+                                    ticker_info["ticker"], 
+                                    ticker_info["timestamp"],
+                                    ticker_info["price"],
+                                    ticker_info["change_pct"],
+                                    ticker_info.get("currency"),
+                                    ticker_info.get("high"),
+                                    ticker_info.get("low"),
+                                    window_days=90
+                                )
+                                retry_con.commit()
+                                accuracy_calculated += 1
+                                accuracy_errors -= 1
+                                print(f"[Accuracy] [{market_code}] ✅ Retry successful for {ticker_info['ticker']}")
+                            except Exception as retry_e:
+                                print(f"[Accuracy] [{market_code}] ❌ Retry failed for {ticker_info['ticker']}: {retry_e}")
+                            finally:
+                                if retry_con:
+                                    retry_con.close()
+                    
+                    print(f"[Accuracy] [{market_code}] Completed: {accuracy_calculated}/{len(fetched_tickers)} tickers saved, {accuracy_errors} errors")
+            else:
+                print(f"[History] [{market_code}] Warning: Failed to commit after retries")
+            
+            # Debug: ตรวจสอบว่ามี ticker ไหนที่ยังไม่มีใน rating_history (เฉพาะ US)
+            # ใช้ connection ใหม่สำหรับ debug query เพื่อไม่ให้ block
+            if market_code == "US" and fetched_count + skipped_count < len(market_tickers):
+                debug_con = None
+                try:
+                    debug_con = sqlite3.connect(DB_FILE, timeout=5.0)
+                    debug_cur = debug_con.cursor()
+                    debug_cur.execute("PRAGMA journal_mode=WAL")
+                    date_str = now_thai.date().isoformat()
+                    debug_cur.execute("""
+                        SELECT DISTINCT ticker FROM rating_history
+                        WHERE market = 'US' AND strftime('%Y-%m-%d', timestamp) = ?
+                    """, (date_str,))
+                    existing_tickers = {row[0] for row in debug_cur.fetchall()}
+                    missing_tickers = [item["u_code"] for item in market_tickers if item["u_code"] not in existing_tickers]
+                    if missing_tickers:
+                        print(f"[History] [US] Warning: {len(missing_tickers)} tickers not inserted into rating_history:")
+                        for ticker in missing_tickers[:10]:
+                            print(f"[History] [US]   - {ticker}")
+                        if len(missing_tickers) > 10:
+                            print(f"[History] [US]   ... and {len(missing_tickers) - 10} more")
+                finally:
+                    if debug_con:
+                        debug_con.close()
             
         except Exception as e:
             print(f"[History] [{market_code}] Error: {e}")
@@ -1411,6 +1945,12 @@ async def market_scheduler(market_code: str):
     """
     Scheduler สำหรับแต่ละ market
     จะ sleep จนถึงเวลาปิดตลาดของ market นั้น แล้วดึงข้อมูลทันที
+    
+    Markets ที่มีเวลาเดียวกันสามารถดึงพร้อมกันได้โดยไม่มีปัญหา database lock:
+    - VN และ HK (15:00)
+    - IT, FR, และ NL (23:30 หน้าหนาว / 22:30 หน้าร้อน)
+    
+    ใช้ WAL mode + connection แยก + retry logic เพื่อรองรับ concurrent access
     """
     bkk_tz = ZoneInfo("Asia/Bangkok")
     
@@ -1442,7 +1982,8 @@ async def market_scheduler(market_code: str):
             # Sleep จนถึงเวลาปิดตลาด
             await asyncio.sleep(wait_seconds)
             
-            # เมื่อถึงเวลา → ดึงข้อมูลทันที
+            # เมื่อถึงเวลา → ดึงข้อมูลทันที (สามารถดึงพร้อมกับ market อื่นได้)
+            # ใช้ WAL mode + connection แยก + retry logic เพื่อรองรับ concurrent access
             await fetch_market_history(market_code)
             
         except Exception as e:
@@ -1453,11 +1994,83 @@ async def market_scheduler(market_code: str):
             await asyncio.sleep(60)
 
 
+async def accuracy_updater():
+    """
+    Background task to recalculate accuracy for all tickers periodically.
+    Runs daily after market close to update accuracy metrics.
+    """
+    bkk_tz = ZoneInfo("Asia/Bangkok")
+    
+    while True:
+        try:
+            # Wait until next day at 05:00 Thai time (after all markets close)
+            now_thai = datetime.now(bkk_tz)
+            today = now_thai.date()
+            
+            # Target time: 05:00 next day (after all markets close)
+            next_run = datetime.combine(today, time(5, 0), tzinfo=bkk_tz)
+            if next_run <= now_thai:
+                next_run = next_run + timedelta(days=1)
+            
+            wait_seconds = (next_run - now_thai).total_seconds()
+            print(f"[Accuracy Updater] Next run at {next_run.strftime('%Y-%m-%d %H:%M:%S')} ไทย (in {wait_seconds/3600:.1f} hours)")
+            
+            await asyncio.sleep(wait_seconds)
+            
+            # Calculate accuracy for all tickers
+            print("[Accuracy Updater] Starting accuracy recalculation...")
+            
+            try:
+                con = sqlite3.connect(DB_FILE)
+                cur = con.cursor()
+                
+                # Enable WAL mode for better concurrency
+                cur.execute("PRAGMA journal_mode=WAL")
+                cur.execute("PRAGMA busy_timeout=30000")
+                
+                # Get all unique tickers
+                cur.execute("SELECT DISTINCT ticker FROM rating_main")
+                tickers = [row[0] for row in cur.fetchall()]
+                
+                con.close()
+                
+                print(f"[Accuracy Updater] Found {len(tickers)} tickers to process")
+                
+                # Recalculate for each ticker
+                for ticker in tickers:
+                    try:
+                        # Recalculate for both timeframes
+                        recalc_and_save_accuracy_for_ticker(ticker, "1D", 90)
+                        recalc_and_save_accuracy_for_ticker(ticker, "1W", 90)
+                    except Exception as e:
+                        print(f"[Accuracy Updater] Error processing {ticker}: {e}")
+                    
+                    # Small delay between tickers
+                    await asyncio.sleep(0.5)
+                
+                print(f"[Accuracy Updater] Completed recalculation for {len(tickers)} tickers")
+                
+            except Exception as e:
+                print(f"[Accuracy Updater] Error during recalculation: {e}")
+                import traceback
+                traceback.print_exc()
+                
+        except Exception as e:
+            print(f"[Accuracy Updater] Fatal error: {e}")
+            import traceback
+            traceback.print_exc()
+            # If error, wait 1 hour before retry
+            await asyncio.sleep(3600)
+
 async def history_updater():
     """
     เริ่ม scheduler สำหรับทุก market
     แต่ละ market จะมี scheduler ของตัวเองที่รันแยกกัน
     """
+    # วิเคราะห์ข้อมูลทั้งหมดเมื่อเริ่มต้นระบบ
+    print("\n[History] Initializing history updater...")
+    await analyze_all_tickers()
+    
     # เริ่ม scheduler สำหรับทุก market
     markets = list(MARKET_CLOSE_CONFIG.keys())
     print(f"[History] Starting schedulers for {len(markets)} markets: {', '.join(markets)}")
@@ -1475,12 +2088,756 @@ async def lifespan(app: FastAPI):
     """On startup, initialize DB, migrate data, and start background task."""
     init_database()
     migrate_from_json_if_needed()
+    
+    # Populate accuracy data สำหรับข้อมูลที่มีใน rating_history แล้ว
+    print("\n[Startup] Populating accuracy data from existing rating_history...")
+    populate_accuracy_on_startup()
+    
     asyncio.create_task(background_updater())
     asyncio.create_task(history_updater())
+    # accuracy_updater removed - accuracy is now calculated immediately when rating_history is updated
     yield
 
 app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+# Simple health check endpoint
+@app.get("/")
+def root():
+    return {"status": "ok", "message": "Ratings API is running"}
+
+def calculate_accuracy_from_rating_change(history_rows, window_days=90):
+    """
+    คำนวณ accuracy จาก rating_history โดยดูการเปลี่ยนแปลง rating (เช่น sell -> buy) และตรวจสอบ change_pct
+    
+    Logic:
+    - ดูการเปลี่ยนแปลง rating จาก prev_rating -> rating
+    - ถ้าเปลี่ยนจาก sell/strong sell -> buy/strong buy และ change_pct > 0 = correct
+    - ถ้าเปลี่ยนจาก buy/strong buy -> sell/strong sell และ change_pct < 0 = correct
+    - กรณีอื่นๆ = incorrect
+    
+    Args:
+        history_rows: List of history rows from rating_history table
+        window_days: Number of days to look back
+    
+    Returns:
+        dict with daily and weekly accuracy metrics:
+        {
+            "daily": {"rating": str, "prev": str, "sample_size": int, "correct": int, "incorrect": int, "accuracy": float},
+            "weekly": {"rating": str, "prev": str, "sample_size": int, "correct": int, "incorrect": int, "accuracy": float}
+        }
+    """
+    if not history_rows:
+        return {
+            "daily": {"rating": None, "prev": None, "sample_size": 0, "correct": 0, "incorrect": 0, "accuracy": 0.0},
+            "weekly": {"rating": None, "prev": None, "sample_size": 0, "correct": 0, "incorrect": 0, "accuracy": 0.0}
+        }
+    
+    # คำนวณ daily accuracy
+    daily_correct = 0
+    daily_incorrect = 0
+    daily_rating = None
+    daily_prev = None
+    
+    for row in history_rows:
+        if "daily_rating" not in row.keys() or "daily_prev" not in row.keys() or "change_pct" not in row.keys():
+            continue
+            
+        rating = row["daily_rating"]
+        prev_rating = row["daily_prev"]
+        change_pct = row["change_pct"] if row["change_pct"] is not None else None
+        
+        # Skip if missing data
+        if not rating or not prev_rating or change_pct is None:
+            continue
+        
+        rating_lower = rating.lower()
+        prev_rating_lower = prev_rating.lower()
+        
+        # Skip Neutral and Unknown
+        if rating_lower in ["neutral", "unknown", ""] or prev_rating_lower in ["neutral", "unknown", ""]:
+            continue
+        
+        # เก็บ rating และ prev_rating ล่าสุด (สำหรับแสดงผล)
+        if daily_rating is None:
+            daily_rating = rating
+            daily_prev = prev_rating
+        
+        # ตรวจสอบการเปลี่ยนแปลง rating และ change_pct
+        is_correct = False
+        
+        # ถ้าเปลี่ยนจาก sell/strong sell -> buy/strong buy และ change_pct > 0 = correct
+        if prev_rating_lower in ["sell", "strong sell"] and rating_lower in ["buy", "strong buy"]:
+            is_correct = change_pct > 0
+        # ถ้าเปลี่ยนจาก buy/strong buy -> sell/strong sell และ change_pct < 0 = correct
+        elif prev_rating_lower in ["buy", "strong buy"] and rating_lower in ["sell", "strong sell"]:
+            is_correct = change_pct < 0
+        # ถ้า rating ไม่เปลี่ยน (เช่น buy -> buy หรือ sell -> sell) ไม่นับ
+        elif rating_lower == prev_rating_lower:
+            continue
+        
+        if is_correct:
+            daily_correct += 1
+        else:
+            daily_incorrect += 1
+    
+    daily_total = daily_correct + daily_incorrect
+    daily_accuracy = (daily_correct / daily_total * 100) if daily_total > 0 else 0.0
+    
+    # คำนวณ weekly accuracy (logic เดียวกัน)
+    weekly_correct = 0
+    weekly_incorrect = 0
+    weekly_rating = None
+    weekly_prev = None
+    
+    for row in history_rows:
+        if "weekly_rating" not in row.keys() or "weekly_prev" not in row.keys() or "change_pct" not in row.keys():
+            continue
+            
+        rating = row["weekly_rating"]
+        prev_rating = row["weekly_prev"]
+        change_pct = row["change_pct"] if row["change_pct"] is not None else None
+        
+        # Skip if missing data
+        if not rating or not prev_rating or change_pct is None:
+            continue
+        
+        rating_lower = rating.lower()
+        prev_rating_lower = prev_rating.lower()
+        
+        # Skip Neutral and Unknown
+        if rating_lower in ["neutral", "unknown", ""] or prev_rating_lower in ["neutral", "unknown", ""]:
+            continue
+        
+        # เก็บ rating และ prev_rating ล่าสุด (สำหรับแสดงผล)
+        if weekly_rating is None:
+            weekly_rating = rating
+            weekly_prev = prev_rating
+        
+        # ตรวจสอบการเปลี่ยนแปลง rating และ change_pct
+        is_correct = False
+        
+        # ถ้าเปลี่ยนจาก sell/strong sell -> buy/strong buy และ change_pct > 0 = correct
+        if prev_rating_lower in ["sell", "strong sell"] and rating_lower in ["buy", "strong buy"]:
+            is_correct = change_pct > 0
+        # ถ้าเปลี่ยนจาก buy/strong buy -> sell/strong sell และ change_pct < 0 = correct
+        elif prev_rating_lower in ["buy", "strong buy"] and rating_lower in ["sell", "strong sell"]:
+            is_correct = change_pct < 0
+        # ถ้า rating ไม่เปลี่ยน (เช่น buy -> buy หรือ sell -> sell) ไม่นับ
+        elif rating_lower == prev_rating_lower:
+            continue
+        
+        if is_correct:
+            weekly_correct += 1
+        else:
+            weekly_incorrect += 1
+    
+    weekly_total = weekly_correct + weekly_incorrect
+    weekly_accuracy = (weekly_correct / weekly_total * 100) if weekly_total > 0 else 0.0
+    
+    return {
+        "daily": {
+            "rating": daily_rating,
+            "prev": daily_prev,
+            "sample_size": daily_total,
+            "correct": daily_correct,
+            "incorrect": daily_incorrect,
+            "accuracy": round(daily_accuracy, 2)
+        },
+        "weekly": {
+            "rating": weekly_rating,
+            "prev": weekly_prev,
+            "sample_size": weekly_total,
+            "correct": weekly_correct,
+            "incorrect": weekly_incorrect,
+            "accuracy": round(weekly_accuracy, 2)
+        }
+    }
+
+def save_accuracy_to_db_new(cur, ticker, timestamp, price, change_pct, currency, high, low, window_days, accuracy_result):
+    """
+    บันทึก accuracy ลงในตาราง rating_accuracy (โครงสร้างใหม่)
+    
+    Args:
+        cur: Database cursor
+        ticker: Stock ticker
+        timestamp: Timestamp (ISO format string)
+        price: Current price
+        change_pct: Price change percentage
+        currency: Currency code
+        high: High price
+        low: Low price
+        window_days: Number of days for the window
+        accuracy_result: dict from calculate_accuracy_from_rating_change
+    """
+    cur.execute("""
+        INSERT OR REPLACE INTO rating_accuracy 
+        (ticker, timestamp, price, change_pct, currency, high, low, window_day,
+         daily_rating, daily_prev, samplesize_daily, correct_daily, incorrect_daily, accuracy_daily,
+         weekly_rating, weekly_prev, samplesize_weekly, correct_weekly, incorrect_weekly, accuracy_weekly)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        ticker.upper(),
+        timestamp,
+        price,
+        change_pct,
+        currency or "",
+        high,
+        low,
+        window_days,
+        accuracy_result["daily"]["rating"],
+        accuracy_result["daily"]["prev"],
+        accuracy_result["daily"]["sample_size"],
+        accuracy_result["daily"]["correct"],
+        accuracy_result["daily"]["incorrect"],
+        accuracy_result["daily"]["accuracy"],
+        accuracy_result["weekly"]["rating"],
+        accuracy_result["weekly"]["prev"],
+        accuracy_result["weekly"]["sample_size"],
+        accuracy_result["weekly"]["correct"],
+        accuracy_result["weekly"]["incorrect"],
+        accuracy_result["weekly"]["accuracy"]
+    ))
+
+def calculate_and_save_accuracy_for_ticker(cur, ticker, timestamp_str, price, change_pct, currency=None, high=None, low=None, window_days=90):
+    """
+    คำนวณและบันทึก accuracy สำหรับ ticker ที่ระบุ
+    เรียกใช้หลังจากดึงข้อมูลจาก rating_history เสร็จ
+    
+    Args:
+        cur: Database cursor
+        ticker: Stock ticker
+        timestamp_str: Timestamp string (ISO format)
+        price: Current price
+        change_pct: Price change percentage
+        currency: Currency code (optional)
+        high: High price (optional)
+        low: Low price (optional)
+        window_days: Number of days to look back (default 90)
+    """
+    try:
+        # ดึงข้อมูล history จาก rating_history (ย้อนหลัง window_days วัน)
+        # ใช้ datetime() function ใน SQLite กับ parameter
+        cur.execute("""
+            SELECT 
+                daily_rating, daily_prev, daily_changed_at, change_pct,
+                weekly_rating, weekly_prev, weekly_changed_at
+            FROM rating_history
+            WHERE ticker=? AND timestamp >= datetime(?, '-{} days')
+            ORDER BY timestamp DESC
+        """.format(window_days), (ticker.upper(), timestamp_str))
+        
+        history_rows = cur.fetchall()
+        
+        if not history_rows:
+            return
+        
+        # คำนวณ accuracy
+        accuracy_result = calculate_accuracy_from_rating_change(history_rows, window_days)
+        
+        # บันทึกลงใน rating_accuracy
+        save_accuracy_to_db_new(cur, ticker, timestamp_str, price, change_pct, currency, high, low, window_days, accuracy_result)
+        
+    except Exception as e:
+        print(f"⚠️ [Accuracy] Error calculating accuracy for {ticker}: {e}")
+        import traceback
+        traceback.print_exc()
+
+def populate_accuracy_on_startup():
+    """
+    Populate accuracy data สำหรับทุก ticker ที่มีข้อมูลใน rating_history
+    เรียกใช้ตอน startup เพื่อคำนวณ accuracy สำหรับข้อมูลที่มีอยู่แล้ว
+    """
+    try:
+        con = sqlite3.connect(DB_FILE)
+        con.row_factory = sqlite3.Row
+        cur = con.cursor()
+        
+        # Enable WAL mode for better concurrency
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA busy_timeout=30000")
+        
+        # ดึง tickers ทั้งหมดที่มีข้อมูลใน rating_history
+        cur.execute("""
+            SELECT DISTINCT ticker 
+            FROM rating_history
+            ORDER BY ticker
+        """)
+        tickers = [row[0] for row in cur.fetchall()]
+        
+        if not tickers:
+            print("[Accuracy Startup] No tickers found in rating_history")
+            con.close()
+            return
+        
+        print(f"[Accuracy Startup] Found {len(tickers)} tickers in rating_history, calculating accuracy...")
+        
+        populated_count = 0
+        error_count = 0
+        window_days = 90
+        
+        for ticker in tickers:
+            try:
+                # ดึงข้อมูลล่าสุดของ ticker นี้จาก rating_history (สำหรับ timestamp, price, change_pct, currency, high, low)
+                cur.execute("""
+                    SELECT timestamp, price, change_pct, currency, high, low
+                    FROM rating_history
+                    WHERE ticker=?
+                    ORDER BY timestamp DESC
+                    LIMIT 1
+                """, (ticker,))
+                
+                latest_row = cur.fetchone()
+                if not latest_row:
+                    continue
+                
+                timestamp_str = latest_row["timestamp"] if "timestamp" in latest_row.keys() else None
+                price = latest_row["price"] if "price" in latest_row.keys() else None
+                change_pct = latest_row["change_pct"] if "change_pct" in latest_row.keys() else None
+                currency = latest_row["currency"] if "currency" in latest_row.keys() else None
+                high = latest_row["high"] if "high" in latest_row.keys() else None
+                low = latest_row["low"] if "low" in latest_row.keys() else None
+                
+                if not timestamp_str:
+                    continue
+                
+                # คำนวณและบันทึก accuracy
+                calculate_and_save_accuracy_for_ticker(
+                    cur, 
+                    ticker, 
+                    timestamp_str, 
+                    price, 
+                    change_pct,
+                    currency,
+                    high,
+                    low,
+                    window_days
+                )
+                
+                populated_count += 1
+                
+                # Commit ทุก 100 tickers เพื่อไม่ให้ transaction ใหญ่เกินไป
+                if populated_count % 100 == 0:
+                    con.commit()
+                    print(f"[Accuracy Startup] Progress: {populated_count}/{len(tickers)} tickers processed...")
+                    
+            except Exception as e:
+                error_count += 1
+                print(f"[Accuracy Startup] Error processing {ticker}: {e}")
+                continue
+        
+        # Commit สุดท้าย
+        con.commit()
+        con.close()
+        
+        print(f"[Accuracy Startup] ✅ Completed: {populated_count} tickers populated, {error_count} errors")
+        
+    except Exception as e:
+        print(f"[Accuracy Startup] ❌ Fatal error: {e}")
+        import traceback
+        traceback.print_exc()
+        if 'con' in locals() and con:
+            con.close()
+
+def recalc_and_save_accuracy_for_ticker(ticker, timeframe="1D", window_days=90):
+    """
+    Recalculate and save accuracy for a specific ticker.
+    This function can be called periodically to update accuracy metrics.
+    
+    Args:
+        ticker: Stock ticker
+        timeframe: "1D" or "1W"
+        window_days: Number of days to look back (default 90)
+    """
+    try:
+        con = sqlite3.connect(DB_FILE)
+        con.row_factory = sqlite3.Row
+        cur = con.cursor()
+        
+        # Enable WAL mode for better concurrency
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA busy_timeout=30000")
+        
+        rating_key = "daily_rating" if timeframe == "1D" else "weekly_rating"
+        prev_key = "daily_prev" if timeframe == "1D" else "weekly_prev"
+        changed_at_key = "daily_changed_at" if timeframe == "1D" else "weekly_changed_at"
+        
+        # Get history for the specified window
+        cur.execute(f"""
+            SELECT 
+                daily_rating, daily_prev, daily_changed_at, change_pct,
+                weekly_rating, weekly_prev, weekly_changed_at
+            FROM rating_history
+            WHERE ticker=? AND timestamp >= datetime('now', '-{window_days} days')
+            ORDER BY timestamp DESC
+        """, (ticker.upper(),))
+        
+        history_rows = cur.fetchall()
+        
+        if not history_rows:
+            con.close()
+            return
+        
+        # Build history items (same logic as in endpoint)
+        history_items = []
+        for h in history_rows:
+            if rating_key not in h.keys() or changed_at_key not in h.keys() or "change_pct" not in h.keys():
+                continue
+                
+            rating = h[rating_key]
+            prev_rating = h[prev_key] if prev_key in h.keys() else None
+            changed_at = h[changed_at_key]
+            change_pct = h["change_pct"]
+            
+            if not rating or not changed_at or change_pct is None:
+                continue
+            
+            rating_lower = rating.lower()
+            if rating_lower == "neutral" or rating_lower == "unknown":
+                continue
+            
+            if prev_rating and prev_rating.lower() == "unknown":
+                continue
+            
+            history_items.append({
+                "rating": rating,
+                "prev": prev_rating or "Unknown",
+                "change_pct": change_pct
+            })
+        
+        # Calculate accuracy for all ratings and each filter
+        rating_filters = [None, "Strong Buy", "Buy", "Sell", "Strong Sell"]
+        
+        for rf in rating_filters:
+            accuracy_result = calculate_accuracy(history_items, rf)
+            if accuracy_result["total"] > 0:  # Only save if we have data
+                save_accuracy_to_db(cur, ticker, timeframe, rf, window_days, accuracy_result)
+        
+        con.commit()
+        con.close()
+        
+        print(f"✅ [Accuracy] Recalculated and saved accuracy for {ticker} ({timeframe}, {window_days}d)")
+        
+    except Exception as e:
+        print(f"❌ [Accuracy] Error recalculating accuracy for {ticker}: {e}")
+        import traceback
+        traceback.print_exc()
+        if 'con' in locals() and con:
+            con.close()
+
+@app.get("/ratings/history-with-accuracy/{ticker}")
+def get_history_with_accuracy(
+    ticker: str, 
+    timeframe: str = Query("1D", description="Timeframe: 1D or 1W"), 
+    filter_rating: str = Query(None, description="Filter by rating: Strong Buy, Buy, Sell, Strong Sell")
+):
+    """
+    Get rating history with accuracy calculation.
+    
+    Args:
+        ticker: Stock ticker symbol
+        timeframe: "1D" or "1W"
+        filter_rating: Optional rating filter ("Strong Buy", "Buy", "Sell", "Strong Sell")
+    
+    Returns:
+        dict with history items (including price data) and accuracy metrics
+    """
+    # Use database for all tickers (mock data disabled)
+    import time
+    start_time = time.time()
+    try:
+        connect_start = time.time()
+        con = sqlite3.connect(DB_FILE, timeout=0.1)  # ลด timeout เป็น 0.1 วินาที (fail very fast)
+        connect_time = time.time() - connect_start
+        
+        con.row_factory = sqlite3.Row
+        cur = con.cursor()
+        
+        # Set PRAGMA statements (ไม่ต้อง set journal_mode=WAL ถ้า database ใช้ WAL แล้ว)
+        pragma_start = time.time()
+        cur.execute("PRAGMA busy_timeout=100")  # ลดเหลือ 100ms (fail very fast)
+        # ไม่ต้อง set cache_size เพราะตั้งค่าไว้แล้วที่ init_database() และไม่จำเป็นสำหรับ read-only queries
+        pragma_time = time.time() - pragma_start
+        
+        # ดึงข้อมูลทั้งหมดจาก rating_accuracy table สำหรับ ticker นี้ (รวม currency, high, low)
+        # ใช้ index (ticker, timestamp DESC) เพื่อความเร็ว
+        query2_start = time.time()
+        cur.execute("""
+            SELECT 
+                timestamp, price, change_pct, currency, high, low, window_day,
+                daily_rating, daily_prev, samplesize_daily, correct_daily, incorrect_daily, accuracy_daily,
+                weekly_rating, weekly_prev, samplesize_weekly, correct_weekly, incorrect_weekly, accuracy_weekly
+            FROM rating_accuracy
+            WHERE ticker=?
+            ORDER BY timestamp DESC
+        """, (ticker.upper(),))
+        
+        acc_rows = cur.fetchall()
+        query2_time = time.time() - query2_start
+        
+        # Close connection immediately after fetchall() to reduce lock time
+        # Data is already in memory, no need to keep connection open
+        con.close()
+        
+        if not acc_rows:
+            return {
+                "ticker": ticker.upper(),
+                "currency": "",
+                "price": 0,
+                "changePercent": 0,
+                "change": 0,
+                "high": 0,
+                "low": 0,
+                "current_rating": "Unknown",
+                "prev_rating": "Unknown",
+                "history": [],
+                "accuracy": {"accuracy": 0.0, "correct": 0, "incorrect": 0, "total": 0}
+            }
+        
+        # ดึงข้อมูลล่าสุดสำหรับ accuracy metrics
+        acc_row_latest = acc_rows[0]
+        
+        # ใช้ข้อมูลจาก rating_accuracy ตาม timeframe (direct access - faster)
+        if timeframe == "1D":
+            accuracy_result = {
+                "accuracy": acc_row_latest["accuracy_daily"] or 0.0,
+                "correct": acc_row_latest["correct_daily"] or 0,
+                "incorrect": acc_row_latest["incorrect_daily"] or 0,
+                "total": acc_row_latest["samplesize_daily"] or 0
+            }
+            rating_key = "daily_rating"
+            prev_key = "daily_prev"
+        else:  # timeframe == "1W"
+            accuracy_result = {
+                "accuracy": acc_row_latest["accuracy_weekly"] or 0.0,
+                "correct": acc_row_latest["correct_weekly"] or 0,
+                "incorrect": acc_row_latest["incorrect_weekly"] or 0,
+                "total": acc_row_latest["samplesize_weekly"] or 0
+            }
+            rating_key = "weekly_rating"
+            prev_key = "weekly_prev"
+        
+        # Build history items from rating_accuracy table (optimized - single pass)
+        history_items = []
+        rows_len = len(acc_rows)  # Cache length to avoid repeated calls
+        
+        # Process rows in one pass (optimized)
+        for idx, acc_row in enumerate(acc_rows):
+            # Direct access (faster than .keys() check every time)
+            timestamp = acc_row["timestamp"]
+            rating = acc_row[rating_key]
+            prev_rating = acc_row[prev_key]
+            price = acc_row["price"] or 0
+            change_pct = acc_row["change_pct"] or 0
+            
+            # Skip if missing essential data
+            if not timestamp or not rating:
+                continue
+            
+            # Skip Neutral and Unknown ratings (case-insensitive check)
+            rating_lower = rating.lower() if rating else ""
+            if rating_lower in ("neutral", "unknown", ""):
+                continue
+            
+            # Skip if prev_rating is Unknown
+            if prev_rating:
+                prev_rating_lower = prev_rating.lower()
+                if prev_rating_lower in ("unknown", ""):
+                    continue
+            
+            # Calculate prev_close from next row (simpler - no separate map)
+            prev_close = price
+            if idx < rows_len - 1:
+                next_price = acc_rows[idx + 1]["price"]
+                if next_price is not None:
+                    prev_close = next_price
+            
+            change_abs = price - prev_close if price and prev_close else 0
+            
+            # Format date (simplified - let frontend handle if needed, or format minimal)
+            # Just use timestamp as-is, frontend can format it
+            history_items.append({
+                "rating": rating,
+                "prev": prev_rating or "Unknown",
+                "timestamp": timestamp,
+                "date": timestamp,  # Frontend will format
+                "prev_close": prev_close,
+                "result_price": price,
+                "change_pct": change_pct,
+                "change_abs": change_abs
+            })
+        
+        # Get current rating from latest accuracy record (direct access - faster)
+        current_rating = acc_row_latest[rating_key] or "Unknown"
+        prev_rating = acc_row_latest[prev_key] or "Unknown"
+        
+        # Get data from latest accuracy record
+        latest_price = acc_row_latest["price"] or 0
+        latest_change_pct = acc_row_latest["change_pct"] or 0
+        latest_currency = acc_row_latest["currency"] or ""
+        latest_high = acc_row_latest["high"] or 0
+        latest_low = acc_row_latest["low"] or 0
+        
+        # Calculate change_abs from price and change_pct
+        latest_change_abs = 0
+        if latest_price and latest_change_pct:
+            # Estimate change_abs from change_pct
+            prev_price_est = latest_price / (1 + latest_change_pct / 100) if latest_change_pct != 0 else latest_price
+            latest_change_abs = latest_price - prev_price_est
+        
+        # Print timing logs
+        total_time = time.time() - start_time
+        print(f"⏱️ [History Accuracy] {ticker.upper()}: connect={connect_time:.3f}s, pragma={pragma_time:.3f}s, query2={query2_time:.3f}s, total={total_time:.3f}s")
+        
+        return {
+            "ticker": ticker.upper(),
+            "currency": latest_currency,
+            "price": latest_price,
+            "changePercent": latest_change_pct,
+            "change": latest_change_abs,
+            "high": latest_high,
+            "low": latest_low,
+            "current_rating": current_rating,
+            "prev_rating": prev_rating,
+            "history": history_items,
+            "accuracy": accuracy_result
+        }
+        
+    except sqlite3.OperationalError as e:
+        error_msg = str(e)
+        if "locked" in error_msg.lower():
+            print(f"⚠️ [History Accuracy] Database locked for {ticker.upper()}: {e}")
+            if 'con' in locals() and con:
+                con.close()
+            return {
+                "ticker": ticker.upper(),
+                "error": "Database is temporarily locked. Please try again in a moment.",
+                "history": [],
+                "accuracy": {"accuracy": 0.0, "correct": 0, "incorrect": 0, "total": 0}
+            }
+        else:
+            print(f"❌ History with Accuracy API Error (OperationalError): {e}")
+            import traceback
+            traceback.print_exc()
+            if 'con' in locals() and con:
+                con.close()
+            return {
+                "ticker": ticker.upper(),
+                "error": str(e),
+                "history": [],
+                "accuracy": {"accuracy": 0.0, "correct": 0, "incorrect": 0, "total": 0}
+            }
+    except Exception as e:
+        print(f"❌ History with Accuracy API Error: {e}")
+        import traceback
+        traceback.print_exc()
+        if 'con' in locals() and con:
+            con.close()
+        return {
+            "ticker": ticker.upper(),
+            "error": str(e),
+            "history": [],
+            "accuracy": {"accuracy": 0.0, "correct": 0, "incorrect": 0, "total": 0}
+        }
+
+@app.get("/api/mock-rating-history/aapl")
+def get_mock_aapl_history():
+    """
+    Mock API endpoint สำหรับทดสอบ winrate feature
+    Return ข้อมูล rating history ของ AAPL จาก mock JSON file
+    Format ตรงกับ /ratings/from-dr-api เพื่อให้ frontend ใช้ได้ทันที
+    """
+    try:
+        mock_file = os.path.join(os.path.dirname(__file__), "mock_rating_history_aapl.json")
+        if not os.path.exists(mock_file):
+            return {"error": "Mock file not found", "path": mock_file}, 404
+        
+        with open(mock_file, "r", encoding="utf-8") as f:
+            mock_data = json.load(f)
+        
+        # Convert mock data to API format
+        history = mock_data.get("history", [])
+        
+        # Get latest record (first one in history array - most recent)
+        latest = history[0] if history else {}
+        
+        # Build daily history (เรียงจากใหม่ไปเก่า - descending)
+        daily_history = []
+        for h in reversed(history):  # Reverse เพื่อให้ใหม่สุดอยู่ก่อน
+            if h.get("daily_rating") and h.get("daily_changed_at"):
+                daily_history.append({
+                    "rating": h["daily_rating"],
+                    "timestamp": h["daily_changed_at"]
+                })
+        
+        # Build weekly history (เรียงจากใหม่ไปเก่า - descending)
+        weekly_history = []
+        for h in reversed(history):  # Reverse เพื่อให้ใหม่สุดอยู่ก่อน
+            if h.get("weekly_rating") and h.get("weekly_changed_at"):
+                weekly_history.append({
+                    "rating": h["weekly_rating"],
+                    "timestamp": h["weekly_changed_at"]
+                })
+        
+        # Return in same format as /ratings/from-dr-api
+        return {
+            "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "count": 1,
+            "rows": [{
+                "ticker": mock_data.get("ticker", "AAPL"),
+                "currency": mock_data.get("currency", "USD"),
+                "price": latest.get("price"),
+                "changePercent": latest.get("change_pct"),
+                "change": latest.get("change_abs"),
+                "high": latest.get("high"),
+                "low": latest.get("low"),
+                "daily": {
+                    "recommend_all": latest.get("daily_val"),
+                    "rating": latest.get("daily_rating", "Unknown"),
+                    "prev": latest.get("daily_prev", "Unknown"),
+                    "changed_at": latest.get("daily_changed_at"),
+                    "history": daily_history
+                },
+                "weekly": {
+                    "recommend_all": latest.get("weekly_val"),
+                    "rating": latest.get("weekly_rating", "Unknown"),
+                    "prev": latest.get("weekly_prev", "Unknown"),
+                    "changed_at": latest.get("weekly_changed_at"),
+                    "history": weekly_history
+                }
+            }]
+        }
+    except Exception as e:
+        print(f"❌ Mock API Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"error": str(e)}, 500
+
+@app.post("/ratings/recalculate-accuracy/{ticker}")
+def recalculate_accuracy_endpoint(
+    ticker: str,
+    timeframe: str = Query("1D", description="Timeframe: 1D or 1W"),
+    window_days: int = Query(90, description="Number of days to look back")
+):
+    """
+    Recalculate and save accuracy for a specific ticker.
+    This endpoint can be called to update accuracy metrics manually.
+    """
+    try:
+        recalc_and_save_accuracy_for_ticker(ticker.upper(), timeframe, window_days)
+        return {
+            "status": "success",
+            "message": f"Accuracy recalculated for {ticker.upper()}",
+            "ticker": ticker.upper(),
+            "timeframe": timeframe,
+            "window_days": window_days
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e),
+            "ticker": ticker.upper()
+        }, 500
 
 @app.get("/ratings/from-dr-api")
 def ratings_from_dr_api():
@@ -1495,6 +2852,10 @@ def ratings_from_dr_api():
         con = sqlite3.connect(DB_FILE)
         con.row_factory = sqlite3.Row
         cur = con.cursor()
+        
+        # Enable WAL mode for better concurrency
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA busy_timeout=30000")
 
         if os.path.exists(DB_FILE):
             mtime = os.path.getmtime(DB_FILE)

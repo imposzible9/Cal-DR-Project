@@ -16,7 +16,7 @@ TRADINGVIEW_SCAN_URL = "https://scanner.tradingview.com/{market}/scan?label-prod
 # ✅ เพิ่ม DR_LIST_URL เพื่อใช้ดึงรายชื่อหุ้นที่มี DR
 DR_LIST_URL = "http://172.17.1.85:8333/dr"
 # ✅ เพิ่มการตั้งค่าเปิด-ปิดฟิลเตอร์ DR (True = กรองเฉพาะหุ้นที่มี DR, False = เอาหุ้นทั้งหมด)
-ENABLE_DR_FILTER = True
+ENABLE_DR_FILTER = False
 CACHE_FILE = "earnings_cache.json"
 UPDATE_INTERVAL_SECONDS = 3600  # อัปเดตทุก 1 ชั่วโมง
 
@@ -68,12 +68,15 @@ def get_market_code(country_code: str):
 def get_tradingview_range(country: str = "US"):
     now_utc = datetime.now(timezone.utc)
     today_date = now_utc.date()
-    days_until_monday = 7 - today_date.weekday()
-    if days_until_monday == 0: days_until_monday = 7
-    next_monday = today_date + timedelta(days=days_until_monday)
-    next_monday_dt = datetime.combine(next_monday, time.min).replace(tzinfo=timezone.utc)
+    # ✅ แก้ไข: หาวันจันทร์ของสัปดาห์นี้ (this Monday) แทน next Monday
+    # weekday() คืนค่า 0=Monday, 1=Tuesday, ..., 6=Sunday
+    # ถ้าวันนี้เป็นวันจันทร์ (weekday=0) จะได้ this_monday = today_date
+    # ถ้าวันนี้เป็นวันอังคาร (weekday=1) จะได้ this_monday = today_date - 1 day
+    # ถ้าวันนี้เป็นวันอาทิตย์ (weekday=6) จะได้ this_monday = today_date - 6 days
+    this_monday = today_date - timedelta(days=today_date.weekday())
+    this_monday_dt = datetime.combine(this_monday, time.min).replace(tzinfo=timezone.utc)
     offset_hours = 15 if country.upper() == "JP" else 0
-    start_dt = next_monday_dt + timedelta(hours=offset_hours)
+    start_dt = this_monday_dt + timedelta(hours=offset_hours)
     end_dt = start_dt + timedelta(days=7)
     return int(start_dt.timestamp()), int(end_dt.timestamp())
 
@@ -655,6 +658,211 @@ async def earnings_stream():
             "X-Accel-Buffering": "no"
         }
     )
+
+@app.post("/api/earnings/refresh")
+async def force_refresh_earnings():
+    """Force refresh earnings data immediately (bypass cache interval)"""
+    global _earnings_db, _last_update_str, _previous_earnings_db
+    try:
+        print(f"🔄 [Manual Refresh] Forcing earnings update at {datetime.now()}")
+        
+        # ✅ ปรับปรุง Logic การดึงรายชื่อหุ้นที่มี DR ตามค่า ENABLE_DR_FILTER
+        valid_dr_tickers = None
+        ticker_mapping = {}  # Mapping table: {ticker_from_tv: underlying_code}
+        if ENABLE_DR_FILTER:
+            valid_dr_tickers = set()
+            skipped_count = 0
+            skipped_reasons = {}
+            skipped_items = []
+            try:
+                async with httpx.AsyncClient() as client:
+                    r_dr = await client.get(DR_LIST_URL, timeout=10)
+                    dr_rows = r_dr.json().get("rows", [])
+                    print(f"  📊 [Manual Refresh] Total DR rows from API: {len(dr_rows)}")
+                    for item in dr_rows:
+                        u_code = None
+                        source = None
+                        
+                        underlying_name = item.get("underlyingName") or ""
+                        match = re.search(r'\(([A-Z0-9.\-_]+)\)$', underlying_name)
+                        if match:
+                            u_code = match.group(1)
+                            source = "underlyingName"
+                        else:
+                            u_code = item.get("underlying")
+                            if u_code:
+                                source = "underlying"
+                            else:
+                                sym = item.get("symbol") or ""
+                                if "80" in sym: 
+                                    u_code = sym.replace("80", "")
+                                    source = "symbol(80)"
+                                elif "19" in sym: 
+                                    u_code = sym.replace("19", "")
+                                    source = "symbol(19)"
+                        
+                        if u_code:
+                            u_code = u_code.strip().upper()
+                            if u_code and len(u_code) > 0:
+                                if ' ' in u_code:
+                                    name_match_alt = re.search(r'\(([A-Z0-9.\-_]+)\)', underlying_name.upper())
+                                    if name_match_alt:
+                                        alt_ticker = name_match_alt.group(1).strip()
+                                        if alt_ticker and ' ' not in alt_ticker and len(alt_ticker) <= 15:
+                                            u_code = alt_ticker
+                                            source = "underlyingName(alt)"
+                                        else:
+                                            u_code_clean = re.sub(r'\s+(ETF|DIAMOND ETF|FUND|TRUST).*$', '', u_code, flags=re.IGNORECASE).strip()
+                                            if u_code_clean and ' ' not in u_code_clean and len(u_code_clean) <= 15:
+                                                u_code = u_code_clean
+                                                source = "underlying(clean)"
+                                            else:
+                                                sym = item.get("symbol") or ""
+                                                if sym:
+                                                    sym_clean = re.sub(r'\d+$', '', sym).strip()
+                                                    if sym_clean and len(sym_clean) >= 2 and len(sym_clean) <= 15:
+                                                        u_code = sym_clean.upper()
+                                                        source = "symbol(clean)"
+                                                    else:
+                                                        skipped_count += 1
+                                                        skipped_reasons['has_space'] = skipped_reasons.get('has_space', 0) + 1
+                                                        skipped_items.append({
+                                                            'symbol': item.get('symbol', 'N/A'),
+                                                            'underlyingName': underlying_name[:50],
+                                                            'u_code': u_code,
+                                                            'reason': 'has_space'
+                                                        })
+                                                        continue
+                                                else:
+                                                    skipped_count += 1
+                                                    skipped_reasons['has_space'] = skipped_reasons.get('has_space', 0) + 1
+                                                    skipped_items.append({
+                                                        'symbol': item.get('symbol', 'N/A'),
+                                                        'underlyingName': underlying_name[:50],
+                                                        'u_code': u_code,
+                                                        'reason': 'has_space'
+                                                    })
+                                                    continue
+                                    else:
+                                        u_code_clean = re.sub(r'\s+(ETF|DIAMOND ETF|FUND|TRUST).*$', '', u_code, flags=re.IGNORECASE).strip()
+                                        if u_code_clean and ' ' not in u_code_clean and len(u_code_clean) <= 15:
+                                            u_code = u_code_clean
+                                            source = "underlying(clean)"
+                                        else:
+                                            sym = item.get("symbol") or ""
+                                            if sym:
+                                                sym_clean = re.sub(r'\d+$', '', sym).strip()
+                                                if sym_clean and len(sym_clean) >= 2 and len(sym_clean) <= 15:
+                                                    u_code = sym_clean.upper()
+                                                    source = "symbol(clean)"
+                                                else:
+                                                    skipped_count += 1
+                                                    skipped_reasons['has_space'] = skipped_reasons.get('has_space', 0) + 1
+                                                    skipped_items.append({
+                                                        'symbol': item.get('symbol', 'N/A'),
+                                                        'underlyingName': underlying_name[:50],
+                                                        'u_code': u_code,
+                                                        'reason': 'has_space'
+                                                    })
+                                                    continue
+                                            else:
+                                                skipped_count += 1
+                                                skipped_reasons['has_space'] = skipped_reasons.get('has_space', 0) + 1
+                                                skipped_items.append({
+                                                    'symbol': item.get('symbol', 'N/A'),
+                                                    'underlyingName': underlying_name[:50],
+                                                    'u_code': u_code,
+                                                    'reason': 'has_space'
+                                                })
+                                                continue
+                                if len(u_code) > 15:
+                                    skipped_count += 1
+                                    skipped_reasons['too_long'] = skipped_reasons.get('too_long', 0) + 1
+                                    skipped_items.append({
+                                        'symbol': item.get('symbol', 'N/A'),
+                                        'underlyingName': underlying_name[:50],
+                                        'u_code': u_code,
+                                        'reason': 'too_long'
+                                    })
+                                    continue
+                                valid_dr_tickers.add(u_code)
+                                ticker_mapping[u_code] = u_code
+                                
+                                sym_clean = item.get("symbol", "").strip().upper()
+                                if sym_clean and sym_clean != u_code:
+                                    sym_no_suffix = sym_clean.replace("80", "").replace("19", "").strip()
+                                    if sym_no_suffix and sym_no_suffix != u_code and len(sym_no_suffix) <= 15 and ' ' not in sym_no_suffix:
+                                        ticker_mapping[sym_no_suffix] = u_code
+                                
+                                if underlying_name:
+                                    name_match = re.search(r'\(([A-Z0-9.\-_]+)\)', underlying_name.upper())
+                                    if name_match:
+                                        name_ticker = name_match.group(1).strip()
+                                        if name_ticker and name_ticker != u_code and len(name_ticker) <= 15 and ' ' not in name_ticker:
+                                            ticker_mapping[name_ticker] = u_code
+                    
+                    if skipped_count > 0:
+                        print(f"  ⚠️ Skipped {skipped_count} items: {skipped_reasons}")
+                    print(f"📊 [Manual Refresh] DR Filter is ENABLED. Found {len(valid_dr_tickers)} unique symbols.")
+            except Exception as dr_err:
+                print(f"❌ [Manual Refresh] Failed to fetch DR whitelist: {dr_err}")
+                valid_dr_tickers = None 
+        else:
+            print(f"🔓 [Manual Refresh] DR Filter is DISABLED. Fetching all stocks.")
+
+        new_db = {}
+        all_markets = ["america", "hongkong", "japan", "china", "singapore", "vietnam", "france", "netherlands", "denmark", "italy", "taiwan", "thailand"]
+        
+        for m in all_markets:
+            c_code = "JP" if m == "japan" else "US"
+            s_ts, e_ts = get_tradingview_range(c_code)
+            print(f"📅 [Manual Refresh] [{m}] Date range: {datetime.fromtimestamp(s_ts, tz=timezone.utc)} to {datetime.fromtimestamp(e_ts, tz=timezone.utc)}")
+            
+            raw_data = await fetch_tradingview_earnings(m, s_ts, e_ts)
+            print(f"📊 [Manual Refresh] [{m}] Received {len(raw_data)} raw items from TradingView")
+            
+            stock_list = map_tv_data_to_object(raw_data, valid_dr_tickers, ticker_mapping)
+            print(f"✅ [Manual Refresh] [{m}] Mapped to {len(stock_list)} stocks")
+            
+            stock_list.sort(key=lambda x: x["date"] if x["date"] else float('inf'))
+            
+            display_name = MARKET_DISPLAY_NAMES.get(m, m.upper())
+            if stock_list:
+                new_db[display_name] = {"totalCount": len(stock_list), "data": stock_list}
+            await asyncio.sleep(0.5)
+
+        # Detect new earnings before updating
+        new_earnings = find_new_earnings(new_db, _previous_earnings_db)
+        
+        # Update earnings database
+        _earnings_db = new_db
+        _last_update_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        save_db_to_disk()
+        
+        # Broadcast new earnings to SSE clients
+        if new_earnings:
+            print(f"📢 [Manual Refresh] Found {len(new_earnings)} new earnings, broadcasting to SSE clients")
+            await broadcast_to_sse_clients({
+                "type": "new_earnings",
+                "earnings": new_earnings,
+                "count": len(new_earnings),
+                "updated_at": _last_update_str
+            })
+        
+        # Update previous earnings state for next comparison
+        _previous_earnings_db = new_db.copy()
+        
+        return {
+            "success": True,
+            "message": "Earnings data refreshed successfully",
+            "updated_at": _last_update_str,
+            "markets": list(new_db.keys()),
+            "total_earnings": sum(m.get("totalCount", 0) for m in new_db.values()),
+            "new_earnings_count": len(new_earnings)
+        }
+    except Exception as e:
+        print(f"❌ [Manual Refresh] Error: {e}")
+        return {"success": False, "error": str(e)}
 
 @app.get("/api/test")
 async def get_earnings(country: str = Query("US")):

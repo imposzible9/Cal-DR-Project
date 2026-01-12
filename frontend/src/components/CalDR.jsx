@@ -378,23 +378,23 @@ export default function DRCal() {
                         {row.dr}
                       </div>
                     </td>
-                    <td className={`py-4 px-3 text-right text-xs font-medium ${textBaseColor}`} style={{ height: "52px" }}>{formatNum(row.open)}</td>
-                    <td className={`py-4 px-3 text-right text-xs font-medium ${textBaseColor}`} style={{ height: "52px" }}>{formatNum(row.high)}</td>
-                    <td className={`py-4 px-3 text-right text-xs font-medium ${textBaseColor}`} style={{ height: "52px" }}>{formatNum(row.low)}</td>
-                    <td className={`py-4 px-3 text-right text-xs font-medium ${textBaseColor}`} style={{ height: "52px" }}>{formatNum(row.last)}</td>
-                    <td className="py-4 px-3 text-right font-medium text-xs" style={{ color: row.pct > 0 ? "#27AE60" : row.pct < 0 ? "#EB5757" : "#111827", height: "52px" }}>
+                    <td className={`py-4 px-3 text-right text-xs font-medium font-mono ${textBaseColor}`} style={{ height: "52px" }}>{formatNum(row.open)}</td>
+                    <td className={`py-4 px-3 text-right text-xs font-medium font-mono ${textBaseColor}`} style={{ height: "52px" }}>{formatNum(row.high)}</td>
+                    <td className={`py-4 px-3 text-right text-xs font-medium font-mono ${textBaseColor}`} style={{ height: "52px" }}>{formatNum(row.low)}</td>
+                    <td className={`py-4 px-3 text-right text-xs font-medium font-mono ${textBaseColor}`} style={{ height: "52px" }}>{formatNum(row.last)}</td>
+                    <td className="py-4 px-3 text-right font-medium text-xs font-mono" style={{ color: row.pct > 0 ? "#27AE60" : row.pct < 0 ? "#EB5757" : "#111827", height: "52px" }}>
                       {row.pct === 0 ? "-" : row.pct > 0 ? `+${formatNum(row.pct)}` : formatNum(row.pct)}
                     </td>
-                    <td className={`py-4 px-3 text-right text-gray-600 text-xs font-medium`} style={{ height: "52px" }}>{formatNum(row.bid)}</td>
-                    <td className={`py-4 px-3 text-right text-gray-600 text-xs font-medium`} style={{ height: "52px" }}>{formatNum(row.offer)}</td>
-                    <td className={`py-4 px-3 text-right text-gray-600 text-xs font-medium`} style={{ height: "52px" }}>{formatInt(row.vol)}</td>
-                    <td className={`py-4 px-3 text-right text-gray-600 text-xs font-medium`} style={{ height: "52px" }}>{formatNum(row.value)}</td>
-                    <td className={`py-4 px-3 text-right text-gray-600 text-xs font-medium border-l border-gray-200`} style={{ height: "52px" }}>{row.marketCap ? formatNum(row.marketCap / 1000000) : "-"}</td>
+                    <td className={`py-4 px-3 text-right text-gray-600 text-xs font-medium font-mono`} style={{ height: "52px" }}>{formatNum(row.bid)}</td>
+                    <td className={`py-4 px-3 text-right text-gray-600 text-xs font-medium font-mono`} style={{ height: "52px" }}>{formatNum(row.offer)}</td>
+                    <td className={`py-4 px-3 text-right text-gray-600 text-xs font-medium font-mono`} style={{ height: "52px" }}>{formatInt(row.vol)}</td>
+                    <td className={`py-4 px-3 text-right text-gray-600 text-xs font-medium font-mono`} style={{ height: "52px" }}>{formatNum(row.value)}</td>
+                    <td className={`py-4 px-3 text-right text-gray-600 text-xs font-medium font-mono border-l border-gray-200`} style={{ height: "52px" }}>{row.marketCap ? formatNum(row.marketCap / 1000000) : "-"}</td>
                     <td className={`py-4 px-3 text-left font-bold text-[#2F80ED]`} style={{ height: "52px" }}>{row.underlying || "-"}</td>
                     <td className={`py-4 px-3 text-right text-gray-600 text-xs font-medium`} style={{ height: "52px" }}>{row.ratio}</td>
-                    <td className={`py-4 px-3 text-right text-gray-600 text-xs font-medium`} style={{ height: "52px" }}>{row.divYield ? formatNum(row.divYield) : "-"}</td>
+                    <td className={`py-4 px-3 text-right text-gray-600 text-xs font-medium font-mono`} style={{ height: "52px" }}>{row.divYield ? formatNum(row.divYield) : "-"}</td>
                     <td className={`py-4 px-3 text-left text-gray-600 text-xs font-medium max-w-[200px] truncate`} title={row.exchange} style={{ height: "52px" }}>{row.exchange || "-"}</td>
-                    <td className={`py-4 px-3 text-right text-gray-600 text-xs font-medium`} style={{ height: "52px" }}>{row.outstandingShare ? formatInt(row.outstandingShare) : "-"}</td>
+                    <td className={`py-4 px-3 text-right text-gray-600 text-xs font-medium font-mono`} style={{ height: "52px" }}>{row.outstandingShare ? formatInt(row.outstandingShare) : "-"}</td>
                   </tr>
                 );
               })}
@@ -407,8 +407,8 @@ export default function DRCal() {
 
   return (
     <div className="min-h-screen w-full bg-[#f5f5f5] flex flex-col items-center pb-10">
-      {/* ✅ ขยายทุกอย่างในหน้า Calculation DR (ทั้งหัวข้อ กล่องคำนวณ และตาราง) ประมาณ 10% */}
-      <div className="w-full max-w-[1040px] scale-[1.2] origin-top">
+      {/* ✅ ขยายทุกอย่างในหน้า Calculation DR (ทั้งหัวข้อ กล่องคำนวณ และตาราง) ประมาณ 20% */}
+      <div className="w-full max-w-[1248px] scale-[1.2] origin-top">
         <h1 className="text-4xl font-bold mb-3 text-black mt-10">Calculation DR</h1>
         <p className="text-[#6B6B6B] mb-8 text-sm md:text-base">
           Calculate DR Fair Value based on Underlying Price, Exchange Rate, and Conversion Ratio.
@@ -454,7 +454,7 @@ export default function DRCal() {
                 {selectedDR ? `Depositary Receipt on ${selectedDR.underlying || selectedDR.underlyingName} Issued by ${selectedDR.issuer}` : "—"}
               </p>
               <div className="w-full h-[175px] bg-white border border-[#e0e0e0] rounded-[12px] shadow-lg mt-4 p-4 relative">
-                <p className="font-bold text-[13px] text-[#6B6B6B]">Conversion Ratio (DR : Underlying)</p>
+                <p className="font-bold text-[13px] text-[#6B6B6B]">Ratio (DR : Underlying)</p>
                 <p className="font-bold text-[26px] text-[#111]">{ratioDR ? `${fmtNum(ratioDR, 0)} : 1` : "—"} </p>
                 <div className="w-full h-[1px] bg-[#9A9A9A] mt-2"></div>
                 <div className="flex items-center mt-2">
@@ -529,8 +529,8 @@ export default function DRCal() {
           </div>
         </div>
 
-          {updatedAt && (
-            <div className="flex flex-col items-end gap-0.5 text-xs text-gray-500 pr-1 mt-4 mb-1">
+        {updatedAt && (
+          <div className="flex flex-col items-end gap-0.5 text-xs text-gray-500 pr-1 mt-4 mb-1">
               <div>
                 Last Updated:{" "}
                 {updatedAt.toLocaleString("en-US", {
@@ -542,10 +542,10 @@ export default function DRCal() {
                   second: "2-digit",
                 })}
               </div>
-            </div>
-          )}
+          </div>
+        )}
 
-          {renderComparisonTable()}
+        {renderComparisonTable()}
         </div>
       </div>
     </div>

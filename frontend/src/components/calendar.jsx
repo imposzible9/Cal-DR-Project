@@ -236,7 +236,7 @@ const formatMarketCapValue = (val, currency = "", isLargeNumber = false) => {
   return (
     <div className="flex items-center justify-center">
       <span 
-        className="font-medium tracking-tight text-[14.4px] px-3 py-1 rounded-lg inline-flex items-center justify-center gap-0.5 min-w-[110px]" 
+        className="font-medium tracking-tight text-[14.4px] px-3 py-1 rounded-lg inline-flex items-center justify-center gap-0.5 min-w-[110px] font-mono" 
         style={{ color, backgroundColor: bgColor }}
       >
         {formattedNum}
@@ -276,7 +276,7 @@ const formatValue = (val, currency = "", isLargeNumber = false) => {
 
   return (
     <div className="flex items-baseline justify-end gap-0.5">
-      <span className="font-medium tracking-tight text-[14.4px]">
+      <span className="font-medium tracking-tight text-[14.4px] font-mono">
         {formattedNum}
         {suffix && <span className="ml-0.5">{suffix}</span>}
       </span>
@@ -292,7 +292,7 @@ const formatColoredValue = (val, suffix = "", currency = "") => {
   
   return (
     <div className="flex items-baseline justify-end gap-0.5">
-      <span className={`font-medium ${colorClass} text-[14.4px]`}>
+      <span className={`font-medium ${colorClass} text-[14.4px] font-mono`}>
         {num > 0 ? "+" : ""}{num.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
         {suffix && <span className="ml-0.5 text-[14.4px] font-normal opacity-80">{suffix}</span>}
       </span>
@@ -310,6 +310,7 @@ export default function Calendar() {
   const [sortKey, setSortKey] = useState(null);
   const [sortOrder, setSortOrder] = useState("asc");
   const [search, setSearch] = useState("");
+  const [selectedDay, setSelectedDay] = useState("All");
 
   const [drLookup, setDrLookup] = useState({});
   const [drData, setDrData] = useState([]);
@@ -609,14 +610,29 @@ export default function Calendar() {
 
   const filtered = useMemo(() => {
     return earnings.filter((e) => {
-      if (!search.trim()) return true;
-      const q = search.toUpperCase();
-      const ticker = (e.ticker || "").toUpperCase();
-      const company = (e.company || "").toUpperCase();
-      const { drToUnderlying, underlyingToDr, underlyingNames } = drLookup;
-      return ticker.includes(q) || company.includes(q) || drToUnderlying[q] === ticker || (ticker.includes(q) && underlyingToDr[ticker]) || underlyingNames[ticker]?.includes(q);
+      // Filter by search
+      if (search.trim()) {
+        const q = search.toUpperCase();
+        const ticker = (e.ticker || "").toUpperCase();
+        const company = (e.company || "").toUpperCase();
+        const { drToUnderlying, underlyingToDr, underlyingNames } = drLookup;
+        const matchesSearch = ticker.includes(q) || company.includes(q) || drToUnderlying[q] === ticker || (ticker.includes(q) && underlyingToDr[ticker]) || underlyingNames[ticker]?.includes(q);
+        if (!matchesSearch) return false;
+      }
+      
+      // Filter by day
+      if (selectedDay !== "All") {
+        const earningDate = new Date((e.date ?? 0) * 1000);
+        if (isNaN(earningDate.getTime())) return false;
+        const dayOfWeek = earningDate.getDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
+        const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+        const earningDayName = dayNames[dayOfWeek];
+        if (earningDayName !== selectedDay) return false;
+      }
+      
+      return true;
     });
-  }, [earnings, search, drLookup]);
+  }, [earnings, search, drLookup, selectedDay]);
 
 const sortedEarnings = useMemo(() => {
   // Add DR metrics to each earning
@@ -758,28 +774,56 @@ const markAsSeen = (earningId) => {
             <i className="bi bi-search absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400" style={{ fontSize: 14 }} />
           </div>
             </div>
-            <div className="flex flex-col items-end gap-0.5 text-xs text-gray-500 pr-1 mb-1.5">
-              <div className="flex items-center gap-3">
+            
+            {/* Day Select Row - ใช้ดีไซน์เหมือนกับส่วนเลือก rating ใน suggestion */}
+            <div className="flex flex-col md:flex-row md:items-end md:justify-between mb-2 gap-2">
+              <div className="overflow-x-auto pb-1">
+                <div className="inline-flex items-center gap-3 bg-white rounded-xl px-2 py-1.5 shadow-sm border border-gray-100">
+                  <span className="text-sm font-semibold text-gray-700 whitespace-nowrap">Days</span>
+                  <div className="flex gap-2">
+                    {["All", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].map((day) => {
+                      const isSelected = selectedDay === day;
+                      return (
+                        <button
+                          key={day}
+                          onClick={() => setSelectedDay(day)}
+                          className={`px-2 py-1 rounded-lg text-xs font-bold transition-all ${
+                            isSelected
+                              ? "bg-[#0B102A] text-white ring-2 ring-offset-1 ring-black/10 shadow-md scale-105"
+                              : "text-gray-600 opacity-60 hover:opacity-100"
+                          }`}
+                        >
+                          {day}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+              <div className="flex flex-col items-end gap-0.5 text-xs text-gray-500 pr-1 mt-1">
                 <div>Found {sortedEarnings.length.toLocaleString()} results</div>
-                {newEarningsCount > 0 && (
-                  <button
-                    onClick={markAllAsSeen}
-                    className="text-blue-600 hover:text-blue-700 font-medium transition-colors"
-                    title="Mark all as read"
-                  >
-                    Mark all as read ({newEarningsCount})
-                  </button>
+                {lastUpdateTime && (
+                  <div>Last Updated: {lastUpdateTime.toLocaleString("en-US", { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" })}</div>
                 )}
               </div>
-              {lastUpdateTime && (
-                <div>Last Updated: {lastUpdateTime.toLocaleString("en-US", { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" })}</div>
+            </div>
+            
+            <div className="flex flex-col items-end gap-0.5 text-xs text-gray-500 pr-1 mb-1.5">
+              {newEarningsCount > 0 && (
+                <button
+                  onClick={markAllAsSeen}
+                  className="text-blue-600 hover:text-blue-700 font-medium transition-colors"
+                  title="Mark all as read"
+                >
+                  Mark all as read ({newEarningsCount})
+                </button>
               )}
             </div>
           </div>
         </div>
         
         {/* Main Table - Scrollable (ไม่ถูก scale แต่ขยายฟอนต์ให้ใหญ่ขึ้นแทน) */}
-        <div className="flex-1 overflow-hidden pb-10 mt-10">
+        <div className="flex-1 overflow-hidden pb-10 mt-9">
           <div className="h-full bg-white rounded-xl shadow-[0_2px_10px_rgba(0,0,0,0.03)] border border-gray-100 overflow-auto">
             {/* ตารางไม่ถูก scale แต่ขยายฟอนต์ให้ใหญ่ขึ้นแทน และให้กินเต็มความกว้างกรอบ 1300px */}
             <table className="min-w-[1300px] w-full text-left border-collapse text-[14.4px]">
@@ -872,7 +916,7 @@ const markAsSeen = (earningId) => {
                           <div className="flex flex-col items-center gap-0.5">
                             <span className="font-bold text-[#0007DE]">{e.highSensitivityDR.symbol}</span>
                             {e.highSensitivityDR.bid > 0 ? (
-                              <span className="text-gray-500 text-[13.4px]">Bid: {formatPrice(e.highSensitivityDR.bid)}</span>
+                              <span className="text-gray-500 text-[13.4px]">Bid: <span className="font-mono">{formatPrice(e.highSensitivityDR.bid)}</span></span>
                             ) : null}
                           </div>
                         ) : <span className="text-gray-400">-</span>}
