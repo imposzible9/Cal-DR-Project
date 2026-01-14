@@ -30,7 +30,7 @@ def debug_log(session_id, run_id, hypothesis_id, location, message, data):
         with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
             f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
     except Exception:
-        pass  # Silently fail if log write fails
+        pass  
 
 # ---------- CONFIG ----------
 DR_LIST_URL = "http://172.17.1.85:8333/dr"
@@ -42,11 +42,9 @@ REQUEST_TIMEOUT = 15
 UPDATE_INTERVAL_SECONDS = 180 
 BATCH_SLEEP_SECONDS = 1.0
 
-# --- History-specific Config ---
-# ไม่ใช้ interval แล้ว แต่ใช้ scheduled time แบบฟิกตามเวลาปิดตลาดของแต่ละ market
 
-# เวลาปิดตลาดตามเวลาไทย (รองรับทั้งหน้าหนาวและหน้าร้อน)
-# หน้าหนาว = Winter (EST/CET), หน้าร้อน = Summer (EDT/CEST)
+
+
 MARKET_CLOSE_CONFIG = {
     # US – NYSE / NASDAQ
     "US": {"winter": time(4, 0), "summer": time(3, 0)},   # หน้าหนาว 04:00, หน้าร้อน 03:00
@@ -71,7 +69,10 @@ DB_FILE = "ratings.sqlite"
 # --- Old JSON file paths for migration ---
 OLD_CACHE_FILE = "ratings_cache_smart.json"
 OLD_STATS_FILE = "ratings_stats.json" 
-OLD_HISTORY_FILE = "ratings_history.json" 
+OLD_HISTORY_FILE = "ratings_history.json"
+
+# --- Mock Data Config ---
+USE_MOCK_DATA = False  # Enable mock rating history from AAPL JSON file 
 
 FAKE_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -87,13 +88,11 @@ def check_table_schema(cur, table_name):
     try:
         cur.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table_name,))
         if not cur.fetchone():
-            return False  # Table doesn't exist
-        
-        # Check if table has the new schema (has daily_rating column, no timeframe column)
+            return False  
+               
         cur.execute(f"PRAGMA table_info({table_name})")
         columns = [row[1] for row in cur.fetchall()]
         
-        # New schema should have daily_rating and weekly_rating, but NOT timeframe
         has_daily_rating = "daily_rating" in columns
         has_weekly_rating = "weekly_rating" in columns
         has_timeframe = "timeframe" in columns
@@ -110,11 +109,9 @@ def init_database():
         con = sqlite3.connect(DB_FILE)
         cur = con.cursor()
         
-        # Enable WAL mode for better concurrency (ตั้งค่าก่อนสร้าง tables)
         cur.execute("PRAGMA journal_mode=WAL")
         cur.execute("PRAGMA busy_timeout=30000")
         
-        # Check if tables exist with old schema
         needs_recreate = False
         if os.path.exists(DB_FILE):
             if not check_table_schema(cur, "rating_stats") or \
@@ -130,7 +127,6 @@ def init_database():
             cur.execute("DROP TABLE IF EXISTS rating_history")
             print("   -> Dropped old tables")
         
-        # Table for raw, unfiltered rating change statistics (7 days retention)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS rating_stats (
                 ticker TEXT NOT NULL,
@@ -145,9 +141,6 @@ def init_database():
             )
         """)
 
-        # Table for filtered ratings (current and prev) with market data
-        # Filters out Neutral and duplicate values separately for daily and weekly
-        # Stores 7 days of history
         cur.execute("""
             CREATE TABLE IF NOT EXISTS rating_main (
                 ticker TEXT NOT NULL,
@@ -176,8 +169,6 @@ def init_database():
             ON rating_main(ticker, timestamp DESC)
         """)
 
-        # Table for the filtered, "noise-free" history (uses TradingView / rating_main as source)
-        # NOTE: rating_history now also stores market data snapshot at end of day + market info
         cur.execute("""
             CREATE TABLE IF NOT EXISTS rating_history (
                 ticker TEXT NOT NULL,
@@ -222,16 +213,12 @@ def init_database():
         except Exception as e:
             print(f"⚠️ Failed to ensure rating_history market-data columns: {e}")
 
-        # Table for calculated accuracy metrics (ใหม่)
-        # เก็บ accuracy สำหรับแต่ละ timestamp (วัน) ของแต่ละ ticker
-        # ตรวจสอบว่าตาราง rating_accuracy มีโครงสร้างเก่าหรือไม่ (มี timeframe column หรือไม่มี currency/high/low = เก่า)
         try:
             cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", ("rating_accuracy",))
             if cur.fetchone():
                 cur.execute("PRAGMA table_info(rating_accuracy)")
                 columns = [row[1] for row in cur.fetchall()]
-                # ถ้ามี timeframe column หรือไม่มี currency/high/low แสดงว่าเป็นโครงสร้างเก่า ต้อง drop และสร้างใหม่
-                if "timeframe" in columns or "currency" not in columns or "high" not in columns or "low" not in columns:
+                if "timeframe" in columns or "currency" not in columns or "high" not in columns or "low" not in columns or "price_prev" not in columns:
                     print("⚠️ Old rating_accuracy schema detected. Dropping and recreating table...")
                     cur.execute("DROP TABLE IF EXISTS rating_accuracy")
                     print("   -> Dropped old rating_accuracy table")
@@ -243,6 +230,7 @@ def init_database():
                 ticker TEXT NOT NULL,
                 timestamp TEXT NOT NULL,
                 price REAL,
+                price_prev REAL,
                 change_pct REAL,
                 currency TEXT,
                 high REAL,
@@ -264,13 +252,10 @@ def init_database():
             )
         """)
 
-        # Create indexes for faster queries
-        # Index on ticker for WHERE clause
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_rating_accuracy_ticker 
             ON rating_accuracy(ticker)
         """)
-        # Composite index on (ticker, timestamp DESC) for WHERE + ORDER BY queries (สำคัญมากสำหรับ performance)
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_rating_accuracy_ticker_timestamp 
             ON rating_accuracy(ticker, timestamp DESC)
@@ -297,11 +282,9 @@ def migrate_from_json_if_needed():
         con = sqlite3.connect(DB_FILE)
         cur = con.cursor()
         
-        # Enable WAL mode for better concurrency
         cur.execute("PRAGMA journal_mode=WAL")
         cur.execute("PRAGMA busy_timeout=30000")
 
-        # Check if rating_stats table has data
         cur.execute("SELECT COUNT(*) FROM rating_stats")
         if cur.fetchone()[0] > 0:
             print("✅ Database already contains data. Skipping migration.")
@@ -310,8 +293,6 @@ def migrate_from_json_if_needed():
         
         print("🚚 Starting data migration from JSON to SQLite...")
 
-        # 1. Migrate ratings_stats.json
-        # Note: Old format has separate entries for daily and weekly, need to combine them
         if os.path.exists(OLD_STATS_FILE):
             print(f"  -> Migrating {OLD_STATS_FILE}...")
             with open(OLD_STATS_FILE, "r", encoding="utf-8") as f:
@@ -364,7 +345,6 @@ def migrate_from_json_if_needed():
             print(f"     Done migrating {len(stats_to_insert)} records from {OLD_STATS_FILE}.")
             os.rename(OLD_STATS_FILE, f"{OLD_STATS_FILE}.migrated")
 
-        # 2. Migrate ratings_history.json
         # Note: Old format has separate entries for daily and weekly, need to combine them
         if os.path.exists(OLD_HISTORY_FILE):
             print(f"  -> Migrating {OLD_HISTORY_FILE}...")
@@ -413,9 +393,6 @@ def migrate_from_json_if_needed():
                 """, history_to_insert)
             print(f"     Done migrating {len(history_to_insert)} records from {OLD_HISTORY_FILE}.")
             os.rename(OLD_HISTORY_FILE, f"{OLD_HISTORY_FILE}.migrated")
-        
-        # Note: rating_main will be populated automatically by the background updater
-        # based on rating_stats data, so we don't need to migrate it here
         
         con.commit()
         print("🎉 Migration completed successfully!")
@@ -537,37 +514,25 @@ def market_code_from_exchange(exchange: str) -> str:
     if "nasdaq copenhagen" in ex_lower:
         return "DK"
     
-    # Vietnam - ตรวจสอบแบบเต็มตาม frontend
     if ("ho chi minh" in ex_lower or "hochiminh" in ex_lower or 
         "hanoi" in ex_lower or "hnx" in ex_lower):
         return "VN"
     
-    # China - ตรวจสอบแบบเต็มตาม frontend
     if "shenzhen" in ex_lower or "shanghai" in ex_lower:
-        return "CN"
-    
-    # Singapore - ตรวจสอบแบบเต็มตาม frontend
+        return "CN" 
+  
     if "singapore exchange" in ex_lower or "sgx" in ex_lower:
         return "SG"
-    
-    # Taiwan - ตรวจสอบแบบเต็มตาม frontend
+   
     if "taiwan stock exchange" in ex_lower:
         return "TW"
     
-    # Hong Kong - ตรวจสอบแบบเต็มตาม frontend
     if "stock exchange of hong kong" in ex_lower or "hkex" in ex_lower:
         return "HK"
     
-    # Japan - ตรวจสอบแบบเต็มตาม frontend
     if "tokyo stock exchange" in ex_lower:
         return "JP"
     
-    # US - ตรวจสอบแบบเต็มตาม frontend (ต้องตรวจสอบก่อน fallback)
-    # รองรับ 4 exchange หลัก:
-    # 1. The Nasdaq Global Select Market
-    # 2. The Nasdaq Stock Market
-    # 3. The New York Stock Exchange
-    # 4. The New York Stock Exchange Archipelago
     if ("nasdaq global select market" in ex_lower or 
         "nasdaq stock market" in ex_lower or 
         "new york stock exchange archipelago" in ex_lower or  # ตรวจสอบ Archipelago ก่อน (เพราะมี "new york stock exchange" อยู่ด้วย)
@@ -763,12 +728,7 @@ async def fetch_single_ticker(client: httpx.AsyncClient, item_data):
 
 
 async def fetch_single_ticker_for_history(client: httpx.AsyncClient, item_data):
-    """
-    Lightweight fetcher for history/backtest:
-    - Uses TradingView symbol constructed from underlying info
-    - Returns raw daily/weekly values + mapped ratings using custom thresholds
-    - Also returns market data (price, change_pct, change_abs, high, low), currency, exchange/market
-    """
+
     ticker = item_data.get("u_code")
     name = item_data.get("u_name")
     exchange = item_data.get("u_exch") or ""
@@ -900,12 +860,6 @@ def filter_noise_from_stats(stats_list):
     return filtered
 
 def update_rating_stats(cur, ticker, timestamp_str, daily_val, daily_rating, weekly_val, weekly_rating):
-    """
-    Stores raw rating data from TradingView into rating_stats.
-    Only stores when rating changes (daily or weekly).
-    Stores both daily and weekly in the same row.
-    """
-    # Get latest rating from rating_stats for this ticker
     cur.execute("""
         SELECT daily_rating, weekly_rating 
         FROM rating_stats 
@@ -943,22 +897,7 @@ def update_rating_stats(cur, ticker, timestamp_str, daily_val, daily_rating, wee
         ))
 
 def update_rating_main(cur, ticker, timestamp_str, daily_val, daily_rating, weekly_val, weekly_rating, market_data):
-    """
-    Updates rating_main with filtered ratings (excludes Neutral and duplicates).
-    Filters Neutral separately for daily and weekly.
-    Only updates when new rating is different from current and not Neutral.
-    
-    Args:
-        cur: Database cursor
-        ticker: Ticker symbol
-        timestamp_str: Timestamp string
-        daily_val: Daily recommendation value
-        daily_rating: Daily rating
-        weekly_val: Weekly recommendation value
-        weekly_rating: Weekly rating
-        market_data: Dict with currency, price, change_pct, change_abs, high, low
-    """
-    # Get latest record from rating_main (get all fields to preserve unchanged values)
+
     cur.execute("""
         SELECT daily_val, daily_rating, daily_prev, daily_changed_at,
                weekly_val, weekly_rating, weekly_prev, weekly_changed_at
@@ -986,10 +925,7 @@ def update_rating_main(cur, ticker, timestamp_str, daily_val, daily_rating, week
     
     # Check if this is the first record for this ticker
     is_first_record = current_main is None
-    
-    # Daily: update logic
-    # 1. First record: always store (even if Neutral)
-    # 2. Subsequent records: only store if NOT Neutral AND different from current
+
     if daily_rating:
         if is_first_record:
             # First record: always store
@@ -1000,10 +936,7 @@ def update_rating_main(cur, ticker, timestamp_str, daily_val, daily_rating, week
             if daily_rating.lower() != "neutral" and daily_rating != current_daily_rating:
                 update_daily = True
                 should_insert = True
-    
-    # Weekly: update logic
-    # 1. First record: always store (even if Neutral)
-    # 2. Subsequent records: only store if NOT Neutral AND different from current
+
     if weekly_rating:
         if is_first_record:
             # First record: always store
@@ -1081,32 +1014,18 @@ def update_rating_main(cur, ticker, timestamp_str, daily_val, daily_rating, week
         ))
 
 def update_rating_history(cur, ticker):
-    """
-    Updates rating_history using data from rating_main.
 
-    New behaviour:
-    - Forแต่ละวันของ ticker นั้น จะเก็บแค่ snapshot สุดท้ายของวันเดียวเท่านั้น
-      (ใช้แถวที่ timestamp มากที่สุดของวันนั้นจาก rating_main)
-    - ใช้เวลา timestamp จากเซิร์ฟเวอร์ (รูปแบบ ISO) ในการตัดวันด้วย strftime('%Y-%m-%d', timestamp)
-    - เก็บ snapshot พร้อมฟิลด์ราคา: price, change_pct, change_abs, high, low, currency
-
-    หมายเหตุ:
-    - ไม่ใช้ A-B-A filter อีกต่อไป เพราะต้องการเพียง snapshot สุดท้ายก่อนตลาดปิดของแต่ละวัน
-    """
     # Deprecated: history is now built by a dedicated history updater from TradingView directly.
     # This function is kept for backward compatibility but does nothing.
     return
 
 def cleanup_old_records_by_date(cur):
-    """
-    Deletes records from a specific date (7 days ago) instead of all records older than 7 days.
-    For example, if today is Dec 8, it will delete all records from Dec 1.
-    """
+
     try:
-        # Calculate the date to delete (today - 7 days) using Thai time
+        # Calculate the date to delete (today - 30 days) using Thai time
         bkk_tz = ZoneInfo("Asia/Bangkok")
         now_thai = datetime.now(bkk_tz)
-        target_date = (now_thai.date() - timedelta(days=7))
+        target_date = (now_thai.date() - timedelta(days=30))
         target_date_str = target_date.isoformat()  # Format: YYYY-MM-DD
         
         # Delete from rating_stats where date matches (using strftime for SQLite compatibility)
@@ -1123,17 +1042,33 @@ def cleanup_old_records_by_date(cur):
         """, (target_date_str,))
         main_deleted = cur.rowcount
         
-        # Do not delete from rating_history here; keep full history for backtesting
+        # Delete from rating_history where date matches (keep 30 days rolling window)
+        cur.execute("""
+            DELETE FROM rating_history 
+            WHERE strftime('%Y-%m-%d', timestamp) = ?
+        """, (target_date_str,))
+        history_deleted = cur.rowcount
         
-        if stats_deleted > 0 or main_deleted > 0:
-            print(f"   -> Cleaned up {stats_deleted} stats and {main_deleted} main records from {target_date_str}.")
+        # Delete from rating_accuracy where date matches (keep 30 days rolling window)
+        cur.execute("""
+            DELETE FROM rating_accuracy 
+            WHERE strftime('%Y-%m-%d', timestamp) = ?
+        """, (target_date_str,))
+        accuracy_deleted = cur.rowcount
         
-        return stats_deleted, main_deleted, 0
+        if stats_deleted > 0 or main_deleted > 0 or history_deleted > 0 or accuracy_deleted > 0:
+            print(f"   -> ✅ Cleanup (30-day rolling window): Deleted records from {target_date_str}")
+            print(f"      - rating_stats: {stats_deleted} records")
+            print(f"      - rating_main: {main_deleted} records")
+            print(f"      - rating_history: {history_deleted} records")
+            print(f"      - rating_accuracy: {accuracy_deleted} records")
+        
+        return stats_deleted, main_deleted, history_deleted, accuracy_deleted
     except Exception as e:
-        print(f"   -> ❌ Error during cleanup by date: {e}")
+        print(f"   -> ❌ Error during cleanup by date (30-day window): {e}")
         import traceback
         traceback.print_exc()
-        return 0, 0, 0
+        return 0, 0, 0, 0
 
 # --- Background Updater ---
 async def background_updater():
@@ -1295,14 +1230,7 @@ def upsert_history_snapshot(
     exchange: str,
     market_data: dict,
 ):
-    """
-    Insert or update a single end-of-day snapshot into rating_history for a given ticker + date.
-    - snapshot_ts_thai คือเวลาที่ดึงข้อมูลจริง (เวลาไทย) ซึ่งควรอยู่ใกล้เวลาปิดตลาดมากที่สุด
-    - Ensures only one record per day (per ticker) using date filter on timestamp.
-    - Sets daily_prev / weekly_prev from previous history record (before this day).
-    """
-    # ใช้เวลาไทยโดยตรง ไม่ต้องแปลง
-    # ตรวจสอบว่า snapshot_ts_thai มี timezone หรือไม่
+
     if snapshot_ts_thai.tzinfo is None:
         # ถ้าไม่มี timezone ให้ถือว่าเป็นเวลาไทย
         bkk_tz = ZoneInfo("Asia/Bangkok")
@@ -1613,10 +1541,7 @@ async def fetch_market_history(market_code: str):
         
         for retry in range(max_retries):
             try:
-                # ใช้ connection แยกสำหรับแต่ละ market เพื่อรองรับ concurrent access
-                # Markets ที่มีเวลาเดียวกัน (เช่น VN+HK ที่ 15:00, IT+FR+NL ที่ 23:30) 
-                # สามารถดึงพร้อมกันได้โดยไม่มีปัญหา database lock
-                # #region agent log
+
                 debug_log(session_id, run_id, "B", f"fetch_market_history:{market_code}:before_connect",
                           f"Before connecting to DB for {market_code}", {"market_code": market_code, "retry": retry})
                 # #endregion
@@ -1625,8 +1550,6 @@ async def fetch_market_history(market_code: str):
                 con.row_factory = sqlite3.Row
                 cur = con.cursor()
                 
-                # Enable WAL mode for better concurrency (รองรับ concurrent reads/writes)
-                # WAL mode ทำให้สามารถมี multiple readers และ 1 writer พร้อมกันได้
                 cur.execute("PRAGMA journal_mode=WAL")
                 wal_result = cur.fetchone()
                 
@@ -1697,13 +1620,10 @@ async def fetch_market_history(market_code: str):
                 daily_rating = data.get("daily_rating")
                 weekly_rating = data.get("weekly_rating")
                 
-                # เก็บข้อมูลแม้ว่า rating จะเป็น Unknown ก็ตาม
-                # เพื่อให้มีข้อมูลครบทุก ticker (แต่จะ log ไว้เพื่อ debug)
                 if (not daily_rating or daily_rating == "Unknown") and (
                     not weekly_rating or weekly_rating == "Unknown"
                 ):
                     print(f"[History] [{market_code}] Warning: {ticker} has both daily and weekly as Unknown, but will still be saved")
-                    # ไม่ skip - เก็บข้อมูลไว้เพื่อให้มีครบทุก ticker
                 
                 market_data = {
                     "currency": data.get("currency", ""),
@@ -1805,10 +1725,7 @@ async def fetch_market_history(market_code: str):
                 # #region agent log
                 debug_log(session_id, run_id, "G", f"fetch_market_history:{market_code}:completed",
                           f"Fetch completed for {market_code}", {"market_code": market_code, "fetched_count": fetched_count, "skipped_count": skipped_count})
-                # #endregion
-                
-                # คำนวณและบันทึก accuracy สำหรับทุก ticker ที่เพิ่งดึงข้อมูลมา
-                # ใช้ Batch Commit เพื่อลด lock time และยังคงมี atomicity ในระดับ batch
+
                 if fetched_tickers:
                     print(f"[Accuracy] [{market_code}] Calculating accuracy for {len(fetched_tickers)} tickers...")
                     accuracy_calculated = 0
@@ -1942,16 +1859,7 @@ async def fetch_market_history(market_code: str):
 
 
 async def market_scheduler(market_code: str):
-    """
-    Scheduler สำหรับแต่ละ market
-    จะ sleep จนถึงเวลาปิดตลาดของ market นั้น แล้วดึงข้อมูลทันที
-    
-    Markets ที่มีเวลาเดียวกันสามารถดึงพร้อมกันได้โดยไม่มีปัญหา database lock:
-    - VN และ HK (15:00)
-    - IT, FR, และ NL (23:30 หน้าหนาว / 22:30 หน้าร้อน)
-    
-    ใช้ WAL mode + connection แยก + retry logic เพื่อรองรับ concurrent access
-    """
+
     bkk_tz = ZoneInfo("Asia/Bangkok")
     
     while True:
@@ -1995,10 +1903,7 @@ async def market_scheduler(market_code: str):
 
 
 async def accuracy_updater():
-    """
-    Background task to recalculate accuracy for all tickers periodically.
-    Runs daily after market close to update accuracy metrics.
-    """
+
     bkk_tz = ZoneInfo("Asia/Bangkok")
     
     while True:
@@ -2107,26 +2012,7 @@ def root():
     return {"status": "ok", "message": "Ratings API is running"}
 
 def calculate_accuracy_from_rating_change(history_rows, window_days=90):
-    """
-    คำนวณ accuracy จาก rating_history โดยดูการเปลี่ยนแปลง rating (เช่น sell -> buy) และตรวจสอบ change_pct
-    
-    Logic:
-    - ดูการเปลี่ยนแปลง rating จาก prev_rating -> rating
-    - ถ้าเปลี่ยนจาก sell/strong sell -> buy/strong buy และ change_pct > 0 = correct
-    - ถ้าเปลี่ยนจาก buy/strong buy -> sell/strong sell และ change_pct < 0 = correct
-    - กรณีอื่นๆ = incorrect
-    
-    Args:
-        history_rows: List of history rows from rating_history table
-        window_days: Number of days to look back
-    
-    Returns:
-        dict with daily and weekly accuracy metrics:
-        {
-            "daily": {"rating": str, "prev": str, "sample_size": int, "correct": int, "incorrect": int, "accuracy": float},
-            "weekly": {"rating": str, "prev": str, "sample_size": int, "correct": int, "incorrect": int, "accuracy": float}
-        }
-    """
+
     if not history_rows:
         return {
             "daily": {"rating": None, "prev": None, "sample_size": 0, "correct": 0, "incorrect": 0, "accuracy": 0.0},
@@ -2254,7 +2140,7 @@ def calculate_accuracy_from_rating_change(history_rows, window_days=90):
         }
     }
 
-def save_accuracy_to_db_new(cur, ticker, timestamp, price, change_pct, currency, high, low, window_days, accuracy_result):
+def save_accuracy_to_db_new(cur, ticker, timestamp, price, price_prev, change_pct, currency, high, low, window_days, accuracy_result):
     """
     บันทึก accuracy ลงในตาราง rating_accuracy (โครงสร้างใหม่)
     
@@ -2262,7 +2148,8 @@ def save_accuracy_to_db_new(cur, ticker, timestamp, price, change_pct, currency,
         cur: Database cursor
         ticker: Stock ticker
         timestamp: Timestamp (ISO format string)
-        price: Current price
+        price: Current price (from rating_history at this timestamp)
+        price_prev: Previous price (from rating_history at previous timestamp)
         change_pct: Price change percentage
         currency: Currency code
         high: High price
@@ -2272,14 +2159,15 @@ def save_accuracy_to_db_new(cur, ticker, timestamp, price, change_pct, currency,
     """
     cur.execute("""
         INSERT OR REPLACE INTO rating_accuracy 
-        (ticker, timestamp, price, change_pct, currency, high, low, window_day,
+        (ticker, timestamp, price, price_prev, change_pct, currency, high, low, window_day,
          daily_rating, daily_prev, samplesize_daily, correct_daily, incorrect_daily, accuracy_daily,
          weekly_rating, weekly_prev, samplesize_weekly, correct_weekly, incorrect_weekly, accuracy_weekly)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         ticker.upper(),
         timestamp,
         price,
+        price_prev,
         change_pct,
         currency or "",
         high,
@@ -2300,21 +2188,7 @@ def save_accuracy_to_db_new(cur, ticker, timestamp, price, change_pct, currency,
     ))
 
 def calculate_and_save_accuracy_for_ticker(cur, ticker, timestamp_str, price, change_pct, currency=None, high=None, low=None, window_days=90):
-    """
-    คำนวณและบันทึก accuracy สำหรับ ticker ที่ระบุ
-    เรียกใช้หลังจากดึงข้อมูลจาก rating_history เสร็จ
-    
-    Args:
-        cur: Database cursor
-        ticker: Stock ticker
-        timestamp_str: Timestamp string (ISO format)
-        price: Current price
-        change_pct: Price change percentage
-        currency: Currency code (optional)
-        high: High price (optional)
-        low: Low price (optional)
-        window_days: Number of days to look back (default 90)
-    """
+
     try:
         # ดึงข้อมูล history จาก rating_history (ย้อนหลัง window_days วัน)
         # ใช้ datetime() function ใน SQLite กับ parameter
@@ -2335,8 +2209,21 @@ def calculate_and_save_accuracy_for_ticker(cur, ticker, timestamp_str, price, ch
         # คำนวณ accuracy
         accuracy_result = calculate_accuracy_from_rating_change(history_rows, window_days)
         
+        # ดึง price_prev จาก rating_history (timestamp ก่อนล่าสุด)
+        price_prev = None
+        cur.execute("""
+            SELECT price
+            FROM rating_history
+            WHERE ticker=? AND timestamp < ?
+            ORDER BY timestamp DESC
+            LIMIT 1
+        """, (ticker.upper(), timestamp_str))
+        prev_row = cur.fetchone()
+        if prev_row:
+            price_prev = prev_row["price"] if "price" in prev_row.keys() else None
+        
         # บันทึกลงใน rating_accuracy
-        save_accuracy_to_db_new(cur, ticker, timestamp_str, price, change_pct, currency, high, low, window_days, accuracy_result)
+        save_accuracy_to_db_new(cur, ticker, timestamp_str, price, price_prev, change_pct, currency, high, low, window_days, accuracy_result)
         
     except Exception as e:
         print(f"⚠️ [Accuracy] Error calculating accuracy for {ticker}: {e}")
@@ -2356,50 +2243,50 @@ def populate_accuracy_on_startup():
         # Enable WAL mode for better concurrency
         cur.execute("PRAGMA journal_mode=WAL")
         cur.execute("PRAGMA busy_timeout=30000")
-        
-        # ดึง tickers ทั้งหมดที่มีข้อมูลใน rating_history
+
         cur.execute("""
-            SELECT DISTINCT ticker 
+            SELECT DISTINCT ticker, timestamp
             FROM rating_history
-            ORDER BY ticker
+            ORDER BY ticker, timestamp DESC
         """)
-        tickers = [row[0] for row in cur.fetchall()]
+        ticker_timestamps = cur.fetchall()
         
-        if not tickers:
-            print("[Accuracy Startup] No tickers found in rating_history")
+        if not ticker_timestamps:
+            print("[Accuracy Startup] No ticker-timestamp pairs found in rating_history")
             con.close()
             return
         
-        print(f"[Accuracy Startup] Found {len(tickers)} tickers in rating_history, calculating accuracy...")
+        print(f"[Accuracy Startup] Found {len(ticker_timestamps)} ticker-timestamp pairs in rating_history, calculating accuracy...")
         
         populated_count = 0
         error_count = 0
         window_days = 90
         
-        for ticker in tickers:
+        for row in ticker_timestamps:
+            ticker = row["ticker"] if "ticker" in row.keys() else None
+            timestamp_str = row["timestamp"] if "timestamp" in row.keys() else None
+            
+            if not ticker or not timestamp_str:
+                continue
+            
             try:
-                # ดึงข้อมูลล่าสุดของ ticker นี้จาก rating_history (สำหรับ timestamp, price, change_pct, currency, high, low)
+                # ดึงข้อมูลของ ticker นี้ที่ timestamp นี้จาก rating_history
                 cur.execute("""
-                    SELECT timestamp, price, change_pct, currency, high, low
+                    SELECT price, change_pct, currency, high, low
                     FROM rating_history
-                    WHERE ticker=?
-                    ORDER BY timestamp DESC
+                    WHERE ticker=? AND timestamp=?
                     LIMIT 1
-                """, (ticker,))
+                """, (ticker, timestamp_str))
                 
-                latest_row = cur.fetchone()
-                if not latest_row:
+                row_data = cur.fetchone()
+                if not row_data:
                     continue
                 
-                timestamp_str = latest_row["timestamp"] if "timestamp" in latest_row.keys() else None
-                price = latest_row["price"] if "price" in latest_row.keys() else None
-                change_pct = latest_row["change_pct"] if "change_pct" in latest_row.keys() else None
-                currency = latest_row["currency"] if "currency" in latest_row.keys() else None
-                high = latest_row["high"] if "high" in latest_row.keys() else None
-                low = latest_row["low"] if "low" in latest_row.keys() else None
-                
-                if not timestamp_str:
-                    continue
+                price = row_data["price"] if "price" in row_data.keys() else None
+                change_pct = row_data["change_pct"] if "change_pct" in row_data.keys() else None
+                currency = row_data["currency"] if "currency" in row_data.keys() else None
+                high = row_data["high"] if "high" in row_data.keys() else None
+                low = row_data["low"] if "low" in row_data.keys() else None
                 
                 # คำนวณและบันทึก accuracy
                 calculate_and_save_accuracy_for_ticker(
@@ -2416,21 +2303,21 @@ def populate_accuracy_on_startup():
                 
                 populated_count += 1
                 
-                # Commit ทุก 100 tickers เพื่อไม่ให้ transaction ใหญ่เกินไป
+                # Commit ทุก 100 records เพื่อไม่ให้ transaction ใหญ่เกินไป
                 if populated_count % 100 == 0:
                     con.commit()
-                    print(f"[Accuracy Startup] Progress: {populated_count}/{len(tickers)} tickers processed...")
+                    print(f"[Accuracy Startup] Progress: {populated_count} records processed...")
                     
             except Exception as e:
                 error_count += 1
-                print(f"[Accuracy Startup] Error processing {ticker}: {e}")
+                print(f"[Accuracy Startup] Error processing {ticker} at {timestamp_str}: {e}")
                 continue
         
         # Commit สุดท้าย
         con.commit()
         con.close()
         
-        print(f"[Accuracy Startup] ✅ Completed: {populated_count} tickers populated, {error_count} errors")
+        print(f"[Accuracy Startup] ✅ Completed: {populated_count} records populated, {error_count} errors")
         
     except Exception as e:
         print(f"[Accuracy Startup] ❌ Fatal error: {e}")
@@ -2438,6 +2325,389 @@ def populate_accuracy_on_startup():
         traceback.print_exc()
         if 'con' in locals() and con:
             con.close()
+
+def load_mock_aapl_data():
+    try:
+        mock_file = os.path.join(os.path.dirname(__file__), "mock_rating_history_aapl.json")
+        if not os.path.exists(mock_file):
+            return {"error": "Mock file not found", "path": mock_file}
+        
+        with open(mock_file, "r", encoding="utf-8") as f:
+            mock_data = json.load(f)
+        
+        # Convert mock data to API format
+        history = mock_data.get("history", [])
+        
+        # Get latest record (first one in history array - most recent)
+        latest = history[0] if history else {}
+        
+        # Build daily history (เรียงจากใหม่ไปเก่า - descending)
+        daily_history = []
+        for h in reversed(history):  # Reverse เพื่อให้ใหม่สุดอยู่ก่อน
+            if h.get("daily_rating") and h.get("daily_changed_at"):
+                daily_history.append({
+                    "rating": h["daily_rating"],
+                    "timestamp": h["daily_changed_at"]
+                })
+        
+        # Build weekly history (เรียงจากใหม่ไปเก่า - descending)
+        weekly_history = []
+        for h in reversed(history):  # Reverse เพื่อให้ใหม่สุดอยู่ก่อน
+            if h.get("weekly_rating") and h.get("weekly_changed_at"):
+                weekly_history.append({
+                    "rating": h["weekly_rating"],
+                    "timestamp": h["weekly_changed_at"]
+                })
+        
+        # Return in same format as /ratings/from-dr-api
+        return {
+            "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "count": 1,
+            "rows": [{
+                "ticker": mock_data.get("ticker", "AAPL"),
+                "currency": mock_data.get("currency", "USD"),
+                "price": latest.get("price"),
+                "changePercent": latest.get("change_pct"),
+                "change": latest.get("change_abs"),
+                "high": latest.get("high"),
+                "low": latest.get("low"),
+                "daily": {
+                    "recommend_all": latest.get("daily_val"),
+                    "rating": latest.get("daily_rating", "Unknown"),
+                    "prev": latest.get("daily_prev", "Unknown"),
+                    "changed_at": latest.get("daily_changed_at"),
+                    "history": daily_history
+                },
+                "weekly": {
+                    "recommend_all": latest.get("weekly_val"),
+                    "rating": latest.get("weekly_rating", "Unknown"),
+                    "prev": latest.get("weekly_prev", "Unknown"),
+                    "changed_at": latest.get("weekly_changed_at"),
+                    "history": weekly_history
+                }
+            }]
+        }
+    except Exception as e:
+        print(f"❌ Mock API Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"error": str(e)}
+
+def get_rating_score(rating):
+
+    if not rating:
+        return 0
+    rating_lower = rating.lower()
+    if rating_lower == "strong buy":
+        return 5
+    elif rating_lower == "buy":
+        return 4
+    elif rating_lower == "neutral":
+        return 3
+    elif rating_lower == "sell":
+        return 2
+    elif rating_lower == "strong sell":
+        return 1
+    return 0
+
+def calculate_accuracy_from_frontend_logic(history, filter_rating=None):
+    """
+    คำนวณ accuracy แบบ frontend logic
+    - รับ history data (ไม่ว่าจะจาก mock หรือ database)
+    - ถ้า filter_rating ระบุมา จะคำนวณเฉพาะสัญญาณที่ตรงกับ filter_rating
+    - เปรียบเทียบ rating sentiment กับ price change
+    
+    Logic:
+    1. เรียง history จากเก่าไปใหม่
+    2. สำหรับแต่ละบรรทัด:
+       - ถ้า rating ไม่เปลี่ยน (Buy→Buy, Sell→Sell):
+         - Buy/Strong Buy rating + Price ↑ = Correct
+         - Buy/Strong Buy rating + Price ↓ = Incorrect
+         - Sell/Strong Sell rating + Price ↓ = Correct
+         - Sell/Strong Sell rating + Price ↑ = Incorrect
+       - ถ้า rating เปลี่ยน:
+         - Rating ↑ + Price ↑ = Correct
+         - Rating ↓ + Price ↓ = Correct
+         - Rating ↑ + Price ↓ = Incorrect
+         - Rating ↓ + Price ↑ = Incorrect
+    """
+    if not history or len(history) < 1:
+        return {
+            "accuracy": 0.0,
+            "correct": 0,
+            "incorrect": 0,
+            "total": 0
+        }
+    
+    # เรียงข้อมูลจากเก่าไปใหม่ (ปกติ history เป็นจากใหม่ไปเก่า)
+    sorted_history = list(reversed(history))
+    
+    correct = 0
+    incorrect = 0
+    comparisons = []
+    
+    # ประมวลผลแต่ละรายการ
+    for i in range(len(sorted_history)):
+        curr_item = sorted_history[i]
+        
+        # ดึง rating ปัจจุบันและ rating ก่อนหน้า
+        curr_rating = curr_item.get("rating", curr_item.get("daily_rating", "")).lower()
+        prev_rating = curr_item.get("prev", curr_item.get("prev_rating", "")).lower()
+        
+        # ดึง change_pct
+        change_pct = curr_item.get("change_pct", 0)
+        
+        # ข้ามถ้าไม่มี rating ปัจจุบันหรือ prev rating
+        if not curr_rating or not prev_rating or change_pct is None:
+            continue
+        
+        # ถ้ามี filter_rating ให้กรองเฉพาะ current rating ที่ตรงกับ filter_rating
+        if filter_rating and curr_rating != filter_rating.lower():
+            continue
+        
+        # ดึง rating scores
+        curr_score = get_rating_score(curr_rating)
+        prev_score = get_rating_score(prev_rating)
+        rating_direction = curr_score - prev_score
+        
+        # กำหนด sentiment ของ rating (positive or negative)
+        is_curr_positive = curr_score >= 4  # Buy, Strong Buy
+        
+        # ตรวจสอบว่าทำนายถูกหรือไม่
+        is_correct = False
+        
+        if rating_direction == 0:
+            # Rating ไม่เปลี่ยน (Buy→Buy, Sell→Sell)
+            if is_curr_positive:
+                # Buy/Strong Buy rating: ราคาควรขึ้น
+                is_correct = change_pct > 0
+            else:
+                # Sell/Strong Sell rating: ราคาควรลง
+                is_correct = change_pct < 0
+        else:
+            # Rating เปลี่ยน
+            if rating_direction > 0 and change_pct > 0:
+                # Rating ↑ และ ราคา ↑
+                is_correct = True
+            elif rating_direction < 0 and change_pct < 0:
+                # Rating ↓ และ ราคา ↓
+                is_correct = True
+        
+        # บันทึกการเปรียบเทียบเพื่อ debug
+        comparisons.append({
+            "prev_rating": prev_rating,
+            "curr_rating": curr_rating,
+            "rating_change": "→" if rating_direction == 0 else ("↑" if rating_direction > 0 else "↓"),
+            "price_change": change_pct,
+            "price_direction": "↑" if change_pct > 0 else "↓" if change_pct < 0 else "→",
+            "result": "✓" if is_correct else "✗",
+            "filter": filter_rating or "All"
+        })
+        
+        if is_correct:
+            correct += 1
+        else:
+            incorrect += 1
+    
+    total = correct + incorrect
+    accuracy = (correct / total * 100) if total > 0 else 0.0
+    
+    print(f"[Accuracy Debug] Filter: {filter_rating or 'All'}, Comparisons: {len(comparisons)}, Details: {comparisons}")
+    print(f"[Accuracy] Filter: {filter_rating or 'All'}, Correct: {correct}, Incorrect: {incorrect}, Total: {total}, Accuracy: {accuracy:.2f}%")
+    
+    return {
+        "accuracy": round(accuracy, 2),
+        "correct": correct,
+        "incorrect": incorrect,
+        "total": total
+    }
+
+def calculate_accuracy_from_mock_old(history):
+    """
+    คำนวณ accuracy โดยเปรียบเทียบการเปลี่ยนแปลงของ rating กับการเปลี่ยนแปลงของราคา
+    
+    วิธี:
+    1. เอาวันที่ N (index i) เทียบกับวันที่ N+1 (index i+1)
+    2. ดู rating ของวันที่ N และวันที่ N+1 -> ดูว่าเพิ่มขึ้น (+) หรือลดลง (-)
+    3. ดู change_pct ของวันที่ N+1 -> ดูว่าราคาเพิ่มขึ้น (+) หรือลดลง (-)
+    4. ถ้าทั้งสองเปลี่ยนไปในทางเดียวกัน = Correct, ถ้าไม่ = Incorrect
+    """
+    if not history or len(history) < 2:
+        return {
+            "accuracy": 0.0,
+            "correct": 0,
+            "incorrect": 0,
+            "total": 0
+        }
+    
+    correct = 0
+    incorrect = 0
+    comparisons = []
+    
+    sorted_history = list(reversed(history))
+    
+    # เทียบแต่ละวันกับวันถัดไป
+    for i in range(len(sorted_history) - 1):
+        curr_day = sorted_history[i]
+        next_day = sorted_history[i + 1]
+
+        curr_rating = curr_day.get("daily_rating", "")
+        next_rating = next_day.get("daily_rating", "")
+
+        next_change_pct = next_day.get("change_pct", 0)
+
+        curr_price = curr_day.get("price", 0)
+        next_price = next_day.get("price", 0)     
+
+        if not curr_rating or not next_rating:
+            continue
+        
+        # คำนวณการเปลี่ยนแปลงของ rating
+        curr_score = get_rating_score(curr_rating)
+        next_score = get_rating_score(next_rating)
+        rating_direction = next_score - curr_score  # + = ขึ้น, - = ลง, 0 = ไม่เปลี่ยน
+        
+        # ข้ามถ้า rating ไม่เปลี่ยน
+        if rating_direction == 0:
+            continue
+        
+        # ตรวจสอบว่า rating และราคาเปลี่ยนไปในทางเดียวกันไหม
+        # rating ขึ้น (+) และราคาขึ้น (+) = Correct
+        # rating ลง (-) และราคาลง (-) = Correct
+        # อื่นๆ = Incorrect
+        
+        is_correct = False
+        if rating_direction > 0 and next_change_pct > 0:
+            # Rating ขึ้น และราคาขึ้น
+            is_correct = True
+        elif rating_direction < 0 and next_change_pct < 0:
+            # Rating ลง และราคาลง
+            is_correct = True
+        
+        # บันทึกการเปรียบเทียบเพื่อ debug
+        comparisons.append({
+            "day1_rating": curr_rating,
+            "day2_rating": next_rating,
+            "rating_change": "↑" if rating_direction > 0 else "↓",
+            "price_change": next_change_pct,
+            "price_direction": "↑" if next_change_pct > 0 else "↓" if next_change_pct < 0 else "→",
+            "result": "✓" if is_correct else "✗"
+        })
+        
+        if is_correct:
+            correct += 1
+        else:
+            incorrect += 1
+    
+    total = correct + incorrect
+    accuracy = (correct / total * 100) if total > 0 else 0.0
+    
+    print(f"[Accuracy Debug] Comparisons: {comparisons}")
+    print(f"[Accuracy] Correct: {correct}, Incorrect: {incorrect}, Total: {total}, Accuracy: {accuracy:.2f}%")
+    
+    return {
+        "accuracy": round(accuracy, 2),
+        "correct": correct,
+        "incorrect": incorrect,
+        "total": total
+    }
+
+def get_mock_aapl_history_formatted(timeframe="1D", filter_rating=None):
+    """
+    Helper function to format mock AAPL data for /ratings/history-with-accuracy endpoint
+    
+    Args:
+        timeframe: "1D" or "1W"
+        filter_rating: Optional rating filter ("Strong Buy", "Buy", "Sell", "Strong Sell")
+    
+    Note: วันแรก (29 DEC) ไม่มี prev rating เพราะเป็นข้อมูลแรกสุด 
+    ดังนั้นจึงเริ่มแสดงจากวันที่ 2 (30 DEC) เป็นต้นไป
+    """
+    try:
+        mock_file = os.path.join(os.path.dirname(__file__), "mock_rating_history_aapl.json")
+        if not os.path.exists(mock_file):
+            return {"error": "Mock file not found"}
+        
+        with open(mock_file, "r", encoding="utf-8") as f:
+            mock_data = json.load(f)
+        
+        history = mock_data.get("history", [])
+        
+        if not history:
+            return {
+                "ticker": "AAPL",
+                "currency": "USD",
+                "price": 0,
+                "changePercent": 0,
+                "change": 0,
+                "high": 0,
+                "low": 0,
+                "current_rating": "Unknown",
+                "prev_rating": "Unknown",
+                "history": [],
+                "accuracy": {"accuracy": 0.0, "correct": 0, "incorrect": 0, "total": 0}
+            }
+        
+        latest = history[0]
+        
+        # Determine rating key based on timeframe
+        if timeframe == "1W":
+            rating_key = "weekly_rating"
+            prev_key = "weekly_prev"
+            changed_at_key = "weekly_changed_at"
+            val_key = "weekly_val"
+        else:  # default to 1D
+            rating_key = "daily_rating"
+            prev_key = "daily_prev"
+            changed_at_key = "daily_changed_at"
+            val_key = "daily_val"
+
+        history_items = []
+        for idx in range(len(history) - 1):  # ข้ามวันสุดท้าย (เก่าสุด)
+            h = history[idx]
+            
+            if h.get(rating_key) and h.get(changed_at_key):
+                rating = h.get(rating_key)
+                prev = h.get(prev_key)
+                
+                if not prev or prev.upper() == "NULL":
+                    continue
+                
+                if rating and rating.lower() not in ["neutral", "unknown"]:
+                    # Get previous price if available
+                    prev_price = history[idx + 1].get("price", 0) if idx + 1 < len(history) else 0
+                    
+                    history_items.append({
+                        "rating": rating,
+                        "prev": prev or "Unknown",
+                        "timestamp": h.get(changed_at_key),
+                        "date": h.get(changed_at_key),
+                        "prev_close": prev_price,
+                        "result_price": h.get("price", 0),
+                        "change_pct": h.get("change_pct", 0),
+                        "change_abs": h.get("change_abs", 0)
+                    })
+
+        accuracy_result = calculate_accuracy_from_frontend_logic(history, filter_rating)
+        
+        return {
+            "ticker": "AAPL",
+            "currency": mock_data.get("currency", "USD"),
+            "price": latest.get("price", 0),
+            "changePercent": latest.get("change_pct", 0),
+            "change": latest.get("change_abs", 0),
+            "high": latest.get("high", 0),
+            "low": latest.get("low", 0),
+            "current_rating": latest.get(rating_key, "Unknown"),
+            "prev_rating": latest.get(prev_key, "Unknown"),
+            "history": history_items,
+            "accuracy": accuracy_result
+        }
+    except Exception as e:
+        print(f"❌ Mock History Format Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"error": str(e)}
 
 def recalc_and_save_accuracy_for_ticker(ticker, timeframe="1D", window_days=90):
     """
@@ -2510,7 +2780,7 @@ def recalc_and_save_accuracy_for_ticker(ticker, timeframe="1D", window_days=90):
         
         for rf in rating_filters:
             accuracy_result = calculate_accuracy(history_items, rf)
-            if accuracy_result["total"] > 0:  # Only save if we have data
+            if accuracy_result["total"] > 0: 
                 save_accuracy_to_db(cur, ticker, timeframe, rf, window_days, accuracy_result)
         
         con.commit()
@@ -2542,29 +2812,30 @@ def get_history_with_accuracy(
     Returns:
         dict with history items (including price data) and accuracy metrics
     """
+    # If mock data is enabled and ticker is AAPL, return mock data
+    if USE_MOCK_DATA and ticker.upper() == "AAPL":
+        print(f"✅ Returning mock data for {ticker} with filter: {filter_rating}")
+        return get_mock_aapl_history_formatted(timeframe, filter_rating)
+    
     # Use database for all tickers (mock data disabled)
     import time
     start_time = time.time()
     try:
         connect_start = time.time()
-        con = sqlite3.connect(DB_FILE, timeout=0.1)  # ลด timeout เป็น 0.1 วินาที (fail very fast)
+        con = sqlite3.connect(DB_FILE, timeout=0.1)  
         connect_time = time.time() - connect_start
         
         con.row_factory = sqlite3.Row
         cur = con.cursor()
         
-        # Set PRAGMA statements (ไม่ต้อง set journal_mode=WAL ถ้า database ใช้ WAL แล้ว)
         pragma_start = time.time()
-        cur.execute("PRAGMA busy_timeout=100")  # ลดเหลือ 100ms (fail very fast)
-        # ไม่ต้อง set cache_size เพราะตั้งค่าไว้แล้วที่ init_database() และไม่จำเป็นสำหรับ read-only queries
+        cur.execute("PRAGMA busy_timeout=100")
         pragma_time = time.time() - pragma_start
-        
-        # ดึงข้อมูลทั้งหมดจาก rating_accuracy table สำหรับ ticker นี้ (รวม currency, high, low)
-        # ใช้ index (ticker, timestamp DESC) เพื่อความเร็ว
+
         query2_start = time.time()
         cur.execute("""
             SELECT 
-                timestamp, price, change_pct, currency, high, low, window_day,
+                timestamp, price, price_prev, change_pct, currency, high, low, window_day,
                 daily_rating, daily_prev, samplesize_daily, correct_daily, incorrect_daily, accuracy_daily,
                 weekly_rating, weekly_prev, samplesize_weekly, correct_weekly, incorrect_weekly, accuracy_weekly
             FROM rating_accuracy
@@ -2574,9 +2845,7 @@ def get_history_with_accuracy(
         
         acc_rows = cur.fetchall()
         query2_time = time.time() - query2_start
-        
-        # Close connection immediately after fetchall() to reduce lock time
-        # Data is already in memory, no need to keep connection open
+
         con.close()
         
         if not acc_rows:
@@ -2594,40 +2863,25 @@ def get_history_with_accuracy(
                 "accuracy": {"accuracy": 0.0, "correct": 0, "incorrect": 0, "total": 0}
             }
         
-        # ดึงข้อมูลล่าสุดสำหรับ accuracy metrics
         acc_row_latest = acc_rows[0]
         
-        # ใช้ข้อมูลจาก rating_accuracy ตาม timeframe (direct access - faster)
         if timeframe == "1D":
-            accuracy_result = {
-                "accuracy": acc_row_latest["accuracy_daily"] or 0.0,
-                "correct": acc_row_latest["correct_daily"] or 0,
-                "incorrect": acc_row_latest["incorrect_daily"] or 0,
-                "total": acc_row_latest["samplesize_daily"] or 0
-            }
             rating_key = "daily_rating"
             prev_key = "daily_prev"
         else:  # timeframe == "1W"
-            accuracy_result = {
-                "accuracy": acc_row_latest["accuracy_weekly"] or 0.0,
-                "correct": acc_row_latest["correct_weekly"] or 0,
-                "incorrect": acc_row_latest["incorrect_weekly"] or 0,
-                "total": acc_row_latest["samplesize_weekly"] or 0
-            }
             rating_key = "weekly_rating"
             prev_key = "weekly_prev"
         
-        # Build history items from rating_accuracy table (optimized - single pass)
         history_items = []
-        rows_len = len(acc_rows)  # Cache length to avoid repeated calls
         
         # Process rows in one pass (optimized)
-        for idx, acc_row in enumerate(acc_rows):
+        for acc_row in acc_rows:
             # Direct access (faster than .keys() check every time)
             timestamp = acc_row["timestamp"]
             rating = acc_row[rating_key]
             prev_rating = acc_row[prev_key]
             price = acc_row["price"] or 0
+            price_prev = acc_row["price_prev"] or 0
             change_pct = acc_row["change_pct"] or 0
             
             # Skip if missing essential data
@@ -2645,17 +2899,11 @@ def get_history_with_accuracy(
                 if prev_rating_lower in ("unknown", ""):
                     continue
             
-            # Calculate prev_close from next row (simpler - no separate map)
-            prev_close = price
-            if idx < rows_len - 1:
-                next_price = acc_rows[idx + 1]["price"]
-                if next_price is not None:
-                    prev_close = next_price
+            # ใช้ price_prev จากตาราง rating_accuracy โดยตรง
+            prev_close = price_prev if price_prev else 0
             
             change_abs = price - prev_close if price and prev_close else 0
-            
-            # Format date (simplified - let frontend handle if needed, or format minimal)
-            # Just use timestamp as-is, frontend can format it
+
             history_items.append({
                 "rating": rating,
                 "prev": prev_rating or "Unknown",
@@ -2666,6 +2914,9 @@ def get_history_with_accuracy(
                 "change_pct": change_pct,
                 "change_abs": change_abs
             })
+        
+        # คำนวณ accuracy โดยรองรับ filter_rating
+        accuracy_result = calculate_accuracy_from_frontend_logic(history_items, filter_rating)
         
         # Get current rating from latest accuracy record (direct access - faster)
         current_rating = acc_row_latest[rating_key] or "Unknown"
@@ -2747,71 +2998,7 @@ def get_mock_aapl_history():
     Return ข้อมูล rating history ของ AAPL จาก mock JSON file
     Format ตรงกับ /ratings/from-dr-api เพื่อให้ frontend ใช้ได้ทันที
     """
-    try:
-        mock_file = os.path.join(os.path.dirname(__file__), "mock_rating_history_aapl.json")
-        if not os.path.exists(mock_file):
-            return {"error": "Mock file not found", "path": mock_file}, 404
-        
-        with open(mock_file, "r", encoding="utf-8") as f:
-            mock_data = json.load(f)
-        
-        # Convert mock data to API format
-        history = mock_data.get("history", [])
-        
-        # Get latest record (first one in history array - most recent)
-        latest = history[0] if history else {}
-        
-        # Build daily history (เรียงจากใหม่ไปเก่า - descending)
-        daily_history = []
-        for h in reversed(history):  # Reverse เพื่อให้ใหม่สุดอยู่ก่อน
-            if h.get("daily_rating") and h.get("daily_changed_at"):
-                daily_history.append({
-                    "rating": h["daily_rating"],
-                    "timestamp": h["daily_changed_at"]
-                })
-        
-        # Build weekly history (เรียงจากใหม่ไปเก่า - descending)
-        weekly_history = []
-        for h in reversed(history):  # Reverse เพื่อให้ใหม่สุดอยู่ก่อน
-            if h.get("weekly_rating") and h.get("weekly_changed_at"):
-                weekly_history.append({
-                    "rating": h["weekly_rating"],
-                    "timestamp": h["weekly_changed_at"]
-                })
-        
-        # Return in same format as /ratings/from-dr-api
-        return {
-            "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "count": 1,
-            "rows": [{
-                "ticker": mock_data.get("ticker", "AAPL"),
-                "currency": mock_data.get("currency", "USD"),
-                "price": latest.get("price"),
-                "changePercent": latest.get("change_pct"),
-                "change": latest.get("change_abs"),
-                "high": latest.get("high"),
-                "low": latest.get("low"),
-                "daily": {
-                    "recommend_all": latest.get("daily_val"),
-                    "rating": latest.get("daily_rating", "Unknown"),
-                    "prev": latest.get("daily_prev", "Unknown"),
-                    "changed_at": latest.get("daily_changed_at"),
-                    "history": daily_history
-                },
-                "weekly": {
-                    "recommend_all": latest.get("weekly_val"),
-                    "rating": latest.get("weekly_rating", "Unknown"),
-                    "prev": latest.get("weekly_prev", "Unknown"),
-                    "changed_at": latest.get("weekly_changed_at"),
-                    "history": weekly_history
-                }
-            }]
-        }
-    except Exception as e:
-        print(f"❌ Mock API Error: {e}")
-        import traceback
-        traceback.print_exc()
-        return {"error": str(e)}, 500
+    return load_mock_aapl_data()
 
 @app.post("/ratings/recalculate-accuracy/{ticker}")
 def recalculate_accuracy_endpoint(
@@ -2845,7 +3032,15 @@ def ratings_from_dr_api():
     Fetches latest ratings, stats, and history from the SQLite DB 
     and reconstructs the JSON response to match the original format.
     Now reads from rating_main instead of ratings table.
+    
+    If USE_MOCK_DATA is True, returns mock AAPL data from mock_rating_history_aapl.json
     """
+    # If mock data is enabled, return mock AAPL data
+    if USE_MOCK_DATA:
+        result = load_mock_aapl_data()
+        print(f"✅ Mock data loaded, returning: {result}")
+        return result
+    
     rows = []
     updated_at_str = "-"
     try:
@@ -2876,7 +3071,7 @@ def ratings_from_dr_api():
             main_row = cur.fetchone()
             
             if not main_row:
-                continue  # Skip if no data
+                continue 
             
             # Get filtered history
             cur.execute("""

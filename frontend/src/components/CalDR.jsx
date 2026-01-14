@@ -109,7 +109,6 @@ export default function DRCal() {
         const data = await res.json();
         setAllDR(data.rows || []);
         
-        // Convert updated_at to Date object (same as DRList)
         if (data.updated_at) {
           const date = new Date(data.updated_at * 1000);
           if (!isNaN(date.getTime())) {
@@ -407,8 +406,7 @@ export default function DRCal() {
 
   return (
     <div className="min-h-screen w-full bg-[#f5f5f5] flex flex-col items-center pb-10">
-      {/* ✅ ขยายทุกอย่างในหน้า Calculation DR (ทั้งหัวข้อ กล่องคำนวณ และตาราง) ประมาณ 20% */}
-      <div className="w-full max-w-[1248px] scale-[1.2] origin-top">
+      <div className="w-full max-w-[1040px] scale-[1.2] origin-top">
         <h1 className="text-4xl font-bold mb-3 text-black mt-10">Calculation DR</h1>
         <p className="text-[#6B6B6B] mb-8 text-sm md:text-base">
           Calculate DR Fair Value based on Underlying Price, Exchange Rate, and Conversion Ratio.
@@ -416,7 +414,7 @@ export default function DRCal() {
 
         <div className="w-full min-h-[627px] mt-2">
         <div className="flex w-full">
-          <div className="flex-1 h-[427px] bg-[#FFFFFF] rounded-tl-[12px] rounded-bl-[12px] shadow-[0_10px_25px_rgba(0,0,0,0.12)] px-6 pt-10 border border-[#e0e0e0]">
+          <div className="flex-1 min-h-[427px] bg-[#FFFFFF] rounded-tl-[12px] rounded-bl-[12px] shadow-[0_10px_25px_rgba(0,0,0,0.12)] px-6 pt-10 border border-[#e0e0e0]">
             <h2 className="font-semibold text-[26px] text-black mb-[14px]">Select DR</h2>
             <div className="relative w-full h-[48px]">
               <input
@@ -474,7 +472,7 @@ export default function DRCal() {
             </div>
           </div>
 
-          <div className="flex-1 h-[427px] bg-[#0B102A] rounded-tr-[16px] rounded-br-[16px] shadow-lg p-6">
+          <div className="flex-1 bg-[#0B102A] rounded-tr-[16px] rounded-br-[16px] shadow-lg p-6">
             <div className="w-full h-[253px] bg-white/20 border border-[#9A9A9A] rounded-[12px] shadow-lg p-6">
               <div className="mb-4">
                 <p className="font-bold text-[13px] text-white mb-1">Underlying Price</p>
@@ -521,9 +519,18 @@ export default function DRCal() {
                 <span className="text-white font-bold text-[16px]">Fair Bid</span>
                 <span className="text-white font-bold text-[18px]">{hasInput ? `${fmtTHB(fairBidTHB)} THB` : "-  THB"}</span>
               </div>
-              <div className="flex justify-between items-center px-4">
+              <div className="flex justify-between items-center px-4 mb-4">
                 <span className="text-white font-bold text-[16px]">Fair Ask</span>
                 <span className="text-white font-bold text-[18px]">{hasInput ? `${fmtTHB(fairAskTHB)} THB` : "-  THB"}</span>
+              </div>
+            </div>
+
+            {/* Warning Box */}
+            <div className="mt-0 px-0">
+              <div className="w-full bg-red-500/20 backdrop-blur-sm border border-red-500 rounded-[12px] p-4">
+                <p className="text-red-400 text-[12px] leading-relaxed">
+                  <span className="font-extrabold">หมายเหตุ:</span> ระบบแสดงราคา Fair Bid / Fair Ask เพื่อเป็นข้อมูลประกอบการตัดสินใจเบื้องต้นเท่านั้น โดยประมวลผลจากราคาสินทรัพย์อ้างอิง อัตราแลกเปลี่ยน และ อัตราส่วนต่อสินทรัพย์อ้างอิง ราคาบนกระดานซื้อขายจริงอาจแตกต่างไปตามสภาพคล่องของ DR
+                </p>
               </div>
             </div>
           </div>

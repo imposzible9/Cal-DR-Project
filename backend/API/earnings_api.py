@@ -16,7 +16,7 @@ TRADINGVIEW_SCAN_URL = "https://scanner.tradingview.com/{market}/scan?label-prod
 # ✅ เพิ่ม DR_LIST_URL เพื่อใช้ดึงรายชื่อหุ้นที่มี DR
 DR_LIST_URL = "http://172.17.1.85:8333/dr"
 # ✅ เพิ่มการตั้งค่าเปิด-ปิดฟิลเตอร์ DR (True = กรองเฉพาะหุ้นที่มี DR, False = เอาหุ้นทั้งหมด)
-ENABLE_DR_FILTER = False
+ENABLE_DR_FILTER = True
 CACHE_FILE = "earnings_cache.json"
 UPDATE_INTERVAL_SECONDS = 3600  # อัปเดตทุก 1 ชั่วโมง
 
@@ -68,36 +68,72 @@ def get_market_code(country_code: str):
 def get_tradingview_range(country: str = "US"):
     now_utc = datetime.now(timezone.utc)
     today_date = now_utc.date()
-    # ✅ แก้ไข: หาวันจันทร์ของสัปดาห์นี้ (this Monday) แทน next Monday
+    # ✅ คำนวณวันจันทร์ของสัปดาห์หน้า (next Monday)
     # weekday() คืนค่า 0=Monday, 1=Tuesday, ..., 6=Sunday
-    # ถ้าวันนี้เป็นวันจันทร์ (weekday=0) จะได้ this_monday = today_date
-    # ถ้าวันนี้เป็นวันอังคาร (weekday=1) จะได้ this_monday = today_date - 1 day
-    # ถ้าวันนี้เป็นวันอาทิตย์ (weekday=6) จะได้ this_monday = today_date - 6 days
-    this_monday = today_date - timedelta(days=today_date.weekday())
-    this_monday_dt = datetime.combine(this_monday, time.min).replace(tzinfo=timezone.utc)
+    # ถ้าวันนี้เป็นวันจันทร์ (weekday=0) จะได้ next_monday = today_date + 7 days
+    # ถ้าวันนี้เป็นวันอังคาร-อาทิตย์ จะได้ next_monday = today_date + (7 - weekday) days
+    days_until_monday = 7 - today_date.weekday()
+    if days_until_monday == 0:  # ถ้าวันนี้เป็นวันจันทร์ ให้ไปสัปดาห์หน้า
+        days_until_monday = 7
+    next_monday = today_date + timedelta(days=days_until_monday)
+    next_monday_dt = datetime.combine(next_monday, time.min).replace(tzinfo=timezone.utc)
     offset_hours = 15 if country.upper() == "JP" else 0
-    start_dt = this_monday_dt + timedelta(hours=offset_hours)
+    start_dt = next_monday_dt + timedelta(hours=offset_hours)
     end_dt = start_dt + timedelta(days=7)
     return int(start_dt.timestamp()), int(end_dt.timestamp())
 
 async def fetch_tradingview_earnings(market_code: str, start_ts: int, end_ts: int):
+    """Fetch earnings data from TradingView with pagination to get all results"""
     url = TRADINGVIEW_SCAN_URL.format(market=market_code)
-    payload = {
-        "filter": [
-            {"left": "is_primary", "operation": "equal", "right": True},
-            {"left": "earnings_release_date,earnings_release_next_date", "operation": "in_range", "right": [start_ts, end_ts]}
-        ],
-        "options": {"lang": "th"},
-        "markets": [market_code],
-        "columns": COLUMNS_MAP,
-        "sort": {"sortBy": "market_cap_basic", "sortOrder": "desc"},
-        "range": [0, 300]
-    }
+    all_data = []
+    page_size = 500  # ดึงครั้งละ 500 ตัว
+    offset = 0
+    
     async with httpx.AsyncClient() as client:
-        try:
-            resp = await client.post(url, json=payload, headers=FAKE_HEADERS, timeout=15)
-            return resp.json().get("data", []) if resp.status_code == 200 else []
-        except Exception: return []
+        while True:
+            payload = {
+                "filter": [
+                    {"left": "is_primary", "operation": "equal", "right": True},
+                    {"left": "earnings_release_date,earnings_release_next_date", "operation": "in_range", "right": [start_ts, end_ts]},
+                    {"left": "earnings_release_date,earnings_release_next_date", "operation": "nequal", "right": end_ts}
+                ],
+                "options": {"lang": "th"},
+                "markets": [market_code],
+                "symbols": {
+                    "query": {"types": []},
+                    "tickers": []
+                },
+                "columns": COLUMNS_MAP,
+                "sort": {"sortBy": "market_cap_basic", "sortOrder": "desc"},
+                "preset": None,
+                "range": [offset, offset + page_size]
+            }
+            try:
+                resp = await client.post(url, json=payload, headers=FAKE_HEADERS, timeout=15)
+                if resp.status_code != 200:
+                    break
+                
+                page_data = resp.json().get("data", [])
+                if not page_data:
+                    break
+                
+                all_data.extend(page_data)
+                
+                # ถ้าดึงมาได้น้อยกว่า page_size แสดงว่าเป็นหน้าสุดท้ายแล้ว
+                if len(page_data) < page_size:
+                    break
+                
+                offset += page_size
+                
+                # จำกัดสูงสุดที่ 5000 ตัวเพื่อป้องกัน infinite loop
+                if offset >= 5000:
+                    break
+                    
+            except Exception as e:
+                print(f"⚠️ Error fetching page {offset}: {e}")
+                break
+    
+    return all_data
 
 # ✅ แก้ไขให้รับ valid_tickers และ ticker_mapping เพื่อกรองเอาเฉพาะหุ้นที่มี DR
 def map_tv_data_to_object(raw_data, valid_tickers: set = None, ticker_mapping: dict = None):
@@ -115,6 +151,9 @@ def map_tv_data_to_object(raw_data, valid_tickers: set = None, ticker_mapping: d
         logoid = str(obj.get("logoid") or "").upper().strip()
         ticker_name = str(obj["name"]).upper().strip()
         description = str(obj.get("description") or "").upper().strip()
+        
+        # ✅ กำหนดค่าเริ่มต้นสำหรับ matched_underlying (ใช้เมื่อ DR Filter ปิด)
+        matched_underlying = None
         
         # ✅ ตัวกรอง: ถ้ามี Whitelist ให้ตรวจสอบทั้ง logoid และ ticker_name
         # ใช้ ticker_mapping เพื่อ match ticker จาก TradingView กับ underlying code
@@ -294,7 +333,7 @@ def find_new_earnings(current_db: dict, previous_db: dict) -> list:
     return new_earnings
 
 async def background_updater():
-    global _earnings_db, _last_update_str
+    global _earnings_db, _last_update_str, _previous_earnings_db
     while True:
         try:
             print(f"🔄 [Background] Updating Earnings Data at {datetime.now()}")
@@ -592,14 +631,54 @@ app.add_middleware(
 @app.get("/api/earnings")
 async def get_earnings(country: str = Query("US")):
     if country.upper() == "ALL":
-        return {"updated_at": _last_update_str, "data": _earnings_db}
+        # Calculate date range for US market (default)
+        s_ts, e_ts = get_tradingview_range("US")
+        start_date = datetime.fromtimestamp(s_ts, tz=timezone.utc)
+        end_date = datetime.fromtimestamp(e_ts, tz=timezone.utc)
+        return {
+            "updated_at": _last_update_str,
+            "date_range": {
+                "start": start_date.isoformat(),
+                "end": end_date.isoformat(),
+                "start_display": start_date.strftime("%Y-%m-%d %H:%M:%S UTC"),
+                "end_display": end_date.strftime("%Y-%m-%d %H:%M:%S UTC"),
+                "note": "Shows earnings from next Monday to next Sunday (excluding end date)"
+            },
+            "data": _earnings_db
+        }
     
     market_code = get_market_code(country)
     display_name = MARKET_DISPLAY_NAMES.get(market_code, "")
     
+    # Calculate date range for the requested country
+    c_code = "JP" if market_code == "japan" else "US"
+    s_ts, e_ts = get_tradingview_range(c_code)
+    start_date = datetime.fromtimestamp(s_ts, tz=timezone.utc)
+    end_date = datetime.fromtimestamp(e_ts, tz=timezone.utc)
+    
     if display_name in _earnings_db:
-        return {"updated_at": _last_update_str, "data": {display_name: _earnings_db[display_name]}}
-    return {"updated_at": _last_update_str, "data": {}}
+        return {
+            "updated_at": _last_update_str,
+            "date_range": {
+                "start": start_date.isoformat(),
+                "end": end_date.isoformat(),
+                "start_display": start_date.strftime("%Y-%m-%d %H:%M:%S UTC"),
+                "end_display": end_date.strftime("%Y-%m-%d %H:%M:%S UTC"),
+                "note": "Shows earnings from next Monday to next Sunday (excluding end date)"
+            },
+            "data": {display_name: _earnings_db[display_name]}
+        }
+    return {
+        "updated_at": _last_update_str,
+        "date_range": {
+            "start": start_date.isoformat(),
+            "end": end_date.isoformat(),
+            "start_display": start_date.strftime("%Y-%m-%d %H:%M:%S UTC"),
+            "end_display": end_date.strftime("%Y-%m-%d %H:%M:%S UTC"),
+            "note": "Shows earnings from next Monday to next Sunday (excluding end date)"
+        },
+        "data": {}
+    }
 
 @app.get("/api/earnings/stream")
 async def earnings_stream():

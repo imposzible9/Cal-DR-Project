@@ -42,9 +42,9 @@ const getCountryFromExchange = (exchange = "") => {
   if (ex.includes("MILAN")) return "IT";
   if (ex.includes("COPENHAGEN")) return "DK";
   if (ex.includes("EURONEXT") || ex.includes("PARIS") || ex.includes("AMSTERDAM")) {
-      if (ex.includes("PARIS")) return "FR";
-      if (ex.includes("AMSTERDAM")) return "NL";
-      return "FR"; 
+    if (ex.includes("PARIS")) return "FR";
+    if (ex.includes("AMSTERDAM")) return "NL";
+    return "FR";
   }
   if (ex.includes("HONG KONG")) return "HK";
   if (ex.includes("VIETNAM") || ex.includes("HOCHIMINH")) return "VN";
@@ -128,8 +128,8 @@ const formatInt = (n) => {
 const renderPriceWithCurrency = (price, currency) => {
   return (
     <div className="flex items-baseline justify-end gap-0.5">
-      <span className="font-medium text-gray-600 text-[14.4px] font-mono">{formatPrice(price)}</span>
-      <span className="text-[14.4px] text-gray-400 font-normal uppercase">{currency}</span>
+      <span className="font-medium text-gray-800 text-[14.4px] font-mono">{formatPrice(price)}</span>
+      <span className="text-[14.4px] text-gray-600 font-normal uppercase">{currency}</span>
     </div>
   );
 };
@@ -148,13 +148,13 @@ const FilterDropdown = ({ label, value, options, onSelect }) => {
   return (
     <div className="relative z-[60]" ref={ref}>
       <button onClick={() => setIsOpen(!isOpen)} className="flex items-center justify-between gap-2 px-4 py-2 bg-white border border-gray-200 rounded-xl text-sm min-w-[140px] hover:border-gray-300 transition-colors shadow-sm h-[37.33px]">
-        <span className="text-gray-600 font-medium truncate">{currentLabel}</span>
+        <span className="text-gray-800 font-medium truncate">{currentLabel}</span>
         <svg className={`w-4 h-4 text-gray-400 transition-transform ${isOpen ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
       </button>
       {isOpen && (
         <div className="absolute top-full left-0 mt-1 w-full bg-white border border-gray-100 rounded-xl shadow-lg z-[100] py-1 overflow-hidden">
           {options.map((opt) => (
-            <button key={opt.val} onClick={() => { onSelect(opt.val); setIsOpen(false); }} className={`w-full text-left px-4 py-1.5 text-sm flex items-center gap-2 hover:bg-gray-50 ${value === opt.val ? "text-[#0B102A] font-semibold bg-gray-50" : "text-gray-600"}`}>
+            <button key={opt.val} onClick={() => { onSelect(opt.val); setIsOpen(false); }} className={`w-full text-left px-4 py-1.5 text-sm flex items-center gap-2 hover:bg-gray-50 ${value === opt.val ? "text-[#0B102A] font-semibold bg-gray-50" : "text-gray-800"}`}>
               {opt.color && <span className={`w-2 h-2 rounded-full ${opt.color}`}></span>}{opt.label}
             </button>
           ))}
@@ -196,9 +196,9 @@ const RatingChangeCell = ({ prev, current, showChange }) => {
 // --- Tooltip Component ---
 const Tooltip = ({ show, position, children }) => {
   if (!show || !position) return null;
-  
+
   return (
-    <div 
+    <div
       className="fixed z-[5000] pointer-events-none transition-opacity duration-200"
       style={{
         left: `${position.x}px`,
@@ -242,21 +242,21 @@ const RatingHistoryModal = ({ item, timeframe, onClose }) => {
       try {
         const ticker = item.displaySymbol || item.symbol;
         const tf = timeframe === "1W" ? "1W" : "1D";
-        
+
         // Use local API for development
         const baseUrl = "http://172.18.1.56:8335";
         const url = `${baseUrl}/ratings/history-with-accuracy/${ticker}?timeframe=${tf}`;
         console.log("🔍 Fetching from URL:", url);
-        
+
         const response = await fetch(url);
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`);
         }
-        
+
         const data = await response.json();
         console.log("📦 API Response:", data);
         console.log("📊 History items count:", data.history?.length || 0);
-        
+
         if (data.history && Array.isArray(data.history)) {
           // Store raw data (unfiltered)
           setRawHistoryData(data.history);
@@ -284,24 +284,89 @@ const RatingHistoryModal = ({ item, timeframe, onClose }) => {
     }
 
     fetchHistoryWithAccuracy();
-  }, [item, timeframe]); // Removed filterRating from dependencies - no need to refetch when filter changes
+  }, [item, timeframe]);
 
   // Filter history data based on filterRating (client-side filtering)
   useEffect(() => {
     if (!rawHistoryData || rawHistoryData.length === 0) {
       setHistoryData([]);
+      setAccuracy({ accuracy: 0, correct: 0, incorrect: 0, total: 0 });
       return;
     }
 
-    // Filter out Unknown and Neutral ratings first
     let filtered = filterNeutralFromHistory(rawHistoryData);
-    
-    // Then apply filterRating if set
+
     if (filterRating) {
       filtered = filtered.filter(item => item.rating === filterRating);
     }
-    
+
     setHistoryData(filtered);
+
+    // คำนวณ accuracy สำหรับข้อมูลที่กรองแล้ว
+    if (filtered.length > 0) {
+      let correct = 0;
+      let incorrect = 0;
+
+      filtered.forEach((item) => {
+        // ดึง rating ปัจจุบันและ rating ก่อนหน้า
+        const ratingPrev = item.prev?.toLowerCase() || "";
+        const ratingCurr = item.rating?.toLowerCase() || "";
+        const changePct = item.change_pct || 0;
+
+        // ข้ามถ้าไม่มี rating
+        if (!ratingPrev || !ratingCurr) {
+          return;
+        }
+
+        const scorePrev = RATING_SCORE[ratingPrev] || 0;
+        const scoreCurr = RATING_SCORE[ratingCurr] || 0;
+        const ratingDirection = scoreCurr - scorePrev;
+
+        // กำหนด sentiment ของ rating (positive or negative)
+        const isCurrPositive = scoreCurr >= 4; // Buy, Strong Buy
+
+        // ตรวจสอบว่าทำนายถูกหรือไม่
+        let isCorrect = false;
+        
+        if (ratingDirection === 0) {
+          // Rating ไม่เปลี่ยน (Buy→Buy, Sell→Sell)
+          if (isCurrPositive) {
+            // Buy/Strong Buy rating: ราคาควรขึ้น
+            isCorrect = changePct > 0;
+          } else {
+            // Sell/Strong Sell rating: ราคาควรลง
+            isCorrect = changePct < 0;
+          }
+        } else {
+          // Rating เปลี่ยน
+          if (ratingDirection > 0 && changePct > 0) {
+            // Rating ↑ และ ราคา ↑
+            isCorrect = true;
+          } else if (ratingDirection < 0 && changePct < 0) {
+            // Rating ↓ และ ราคา ↓
+            isCorrect = true;
+          }
+        }
+
+        if (isCorrect) {
+          correct += 1;
+        } else {
+          incorrect += 1;
+        }
+      });
+
+      const total = correct + incorrect;
+      const accuracy_pct = total > 0 ? (correct / total * 100) : 0;
+
+      setAccuracy({
+        accuracy: Math.round(accuracy_pct),
+        correct: correct,
+        incorrect: incorrect,
+        total: total
+      });
+    } else {
+      setAccuracy({ accuracy: 0, correct: 0, incorrect: 0, total: 0 });
+    }
   }, [rawHistoryData, filterRating]);
 
   if (!item) return null;
@@ -315,13 +380,13 @@ const RatingHistoryModal = ({ item, timeframe, onClose }) => {
     try {
       const d = new Date(dateStr);
       if (isNaN(d.getTime())) return dateStr;
-      
+
       const day = d.getDate();
       const month = d.toLocaleDateString('en-US', { month: 'short' }).toUpperCase();
       const year = d.getFullYear();
       const today = new Date();
       const isToday = d.toDateString() === today.toDateString();
-      
+
       return `${day} ${month} ${year}${isToday ? " • Today" : ""}`;
     } catch {
       return dateStr;
@@ -332,7 +397,7 @@ const RatingHistoryModal = ({ item, timeframe, onClose }) => {
     <div className="fixed inset-0 z-[2000] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-[#0B102A]/40 backdrop-blur-md transition-opacity" onClick={onClose}></div>
       <div className="relative bg-white w-full max-w-[600px] rounded-3xl shadow-2xl overflow-hidden">
-        
+
         {/* Header Section - Dark Theme */}
         <div className="bg-[#0B102A] px-6 py-5">
           <div className="flex justify-between items-center mb-2">
@@ -352,7 +417,7 @@ const RatingHistoryModal = ({ item, timeframe, onClose }) => {
               </div>
             </div>
           </div>
-          
+
           <div className="flex justify-between items-center mb-1 mt-0">
             <p className="text-xs text-gray-400">Filter Accuracy</p>
             <p className="text-xs text-gray-400">Auto-selected : Current Signal</p>
@@ -360,14 +425,14 @@ const RatingHistoryModal = ({ item, timeframe, onClose }) => {
 
           {/* Filter Accuracy Section */}
           <div>
-            
+
             {/* Rating Buttons */}
             <div className="flex gap-2 mb-2">
               {["Strong Sell", "Sell", "Buy", "Strong Buy"].map((rating) => {
                 const isSelected = filterRating === rating;
                 const isSell = rating === "Sell" || rating === "Strong Sell";
                 const isBuy = rating === "Buy" || rating === "Strong Buy";
-                
+
                 let selectedClasses = "";
                 if (isSelected) {
                   if (isSell) {
@@ -378,7 +443,7 @@ const RatingHistoryModal = ({ item, timeframe, onClose }) => {
                 } else {
                   selectedClasses = "bg-transparent border-gray-600 text-gray-300 hover:border-gray-500";
                 }
-                
+
                 return (
                   <button
                     key={rating}
@@ -433,11 +498,11 @@ const RatingHistoryModal = ({ item, timeframe, onClose }) => {
                   const scoreCurr = RATING_SCORE[(log.rating || "").toLowerCase()] || 0;
                   const isPositive = (scoreCurr > scorePrev);
                   const isNegative = (scoreCurr < scorePrev);
-                  
+
                   let dotColor = "bg-gray-400";
                   if (isPositive) dotColor = "bg-[#27AE60]";
                   else if (isNegative) dotColor = "bg-[#EB5757]";
-                  
+
                   const changePct = log.change_pct || 0;
 
                   return (
@@ -461,7 +526,7 @@ const RatingHistoryModal = ({ item, timeframe, onClose }) => {
                           </svg>
                           <span className={`text-sm font-bold ${getRatingTextColor(log.rating)}`}>{log.rating}</span>
                         </div>
-                        
+
                         {/* Horizontal Divider */}
                         <div className="border-b border-gray-300 mb-2"></div>
 
@@ -528,7 +593,7 @@ export default function Suggestion() {
   const [country, setCountry] = useState("All");
   const [searchTerm, setSearchTerm] = useState("");
   const [data, setData] = useState([]);
-  const [filterRating, setFilterRating] = useState(null); 
+  const [filterRating, setFilterRating] = useState(null);
   const [changeFilter, setChangeFilter] = useState("All");
   const [selectedItem, setSelectedItem] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -538,7 +603,7 @@ export default function Suggestion() {
   const [showCountryMenu, setShowCountryMenu] = useState(false);
   const countryDropdownRef = useRef(null);
   const selectedCountryLabel = useMemo(() => countryOptions.find((c) => c.code === country)?.label || "All Markets", [country]);
-  
+
   const [hoveredRow, setHoveredRow] = useState(null);
   const [tooltipPosition, setTooltipPosition] = useState({ x: 0, y: 0 });
   const tableRef = useRef(null);
@@ -553,18 +618,16 @@ export default function Suggestion() {
     let isMounted = true;
     async function fetchData() {
       try {
-        // ใช้ mock API ถ้า USE_MOCK_DATA = true
         const ratingsApiUrl = USE_MOCK_DATA ? MOCK_RATINGS_API : RATINGS_API;
-        const [resDR, resRating] = await Promise.all([ fetch(API_URL), fetch(ratingsApiUrl) ]);
-        
-        // Check if responses are ok
+        const [resDR, resRating] = await Promise.all([fetch(API_URL), fetch(ratingsApiUrl)]);
+
         if (!resDR.ok) {
           throw new Error(`DR API error: ${resDR.status} ${resDR.statusText}`);
         }
         if (!resRating.ok) {
           throw new Error(`Ratings API error: ${resRating.status} ${resRating.statusText}`);
         }
-        
+
         const jsonDR = await resDR.json();
         const jsonRating = await resRating.json();
         if (!isMounted) return;
@@ -585,111 +648,107 @@ export default function Suggestion() {
 
         const ratingMap = {};
         (jsonRating.rows || []).forEach((r) => { if (r.ticker) ratingMap[r.ticker.toUpperCase()] = r; });
-        
+
         // Build a map of all DRs grouped by underlying
         const drByUnderlying = new Map();
         (jsonDR.rows || []).forEach((item) => {
-            let uName = item.underlying || (item.symbol || "").toUpperCase().replace(/\d+$/, "").toUpperCase().trim();
-            
-            // ถ้าใช้ mock data ให้แสดงเฉพาะ AAPL
-            if (USE_MOCK_DATA && uName !== "AAPL") {
-                return; // Skip non-AAPL items when using mock data
-            }
-            
-            if (!drByUnderlying.has(uName)) {
-                drByUnderlying.set(uName, []);
-            }
-            drByUnderlying.get(uName).push(item);
+          let uName = item.underlying || (item.symbol || "").toUpperCase().replace(/\d+$/, "").toUpperCase().trim();
+
+          if (USE_MOCK_DATA && uName !== "AAPL") {
+            return;
+          }
+
+          if (!drByUnderlying.has(uName)) {
+            drByUnderlying.set(uName, []);
+          }
+          drByUnderlying.get(uName).push(item);
         });
-        
+
         const underlyingMap = new Map();
         drByUnderlying.forEach((drList, uName) => {
-            // Calculate Most Popular DR (highest volume)
-            let mostPopularDR = null;
-            let maxVolume = -1;
-            drList.forEach((dr) => {
-                const vol = Number(dr.totalVolume) || 0;
-                if (vol > maxVolume) {
-                    maxVolume = vol;
-                    mostPopularDR = {
-                        symbol: dr.symbol || "",
-                        volume: vol
-                    };
-                }
-            });
-            
-            // If no DR with volume found, use the first DR even if volume is 0
-            if (!mostPopularDR && drList.length > 0) {
-                mostPopularDR = {
-                    symbol: drList[0].symbol || "",
-                    volume: 0
-                };
+
+          let mostPopularDR = null;
+          let maxVolume = -1;
+          drList.forEach((dr) => {
+            const vol = Number(dr.totalVolume) || 0;
+            if (vol > maxVolume) {
+              maxVolume = vol;
+              mostPopularDR = {
+                symbol: dr.symbol || "",
+                volume: vol
+              };
             }
-            
-            // Calculate High Sensitivity DR (lowest bid > 0)
-            let highSensitivityDR = null;
-            let minBid = Infinity;
-            drList.forEach((dr) => {
-                const bid = Number(dr.bidPrice) || 0;
-                if (bid > 0 && bid < minBid) {
-                    minBid = bid;
-                    highSensitivityDR = {
-                        symbol: dr.symbol || "",
-                        bid: bid
-                    };
-                }
-            });
-            
-            // If only one DR exists, use it for both columns
-            if (drList.length === 1 && drList[0]) {
-                const singleDR = drList[0];
-                const vol = Number(singleDR.totalVolume) || 0;
-                const bid = Number(singleDR.bidPrice) || 0;
-                
-                if (!mostPopularDR) {
-                    mostPopularDR = { symbol: singleDR.symbol || "", volume: vol };
-                }
-                if (!highSensitivityDR && bid > 0) {
-                    highSensitivityDR = { symbol: singleDR.symbol || "", bid: bid };
-                }
+          });
+
+          if (!mostPopularDR && drList.length > 0) {
+            mostPopularDR = {
+              symbol: drList[0].symbol || "",
+              volume: 0
+            };
+          }
+
+          let highSensitivityDR = null;
+          let minBid = Infinity;
+          drList.forEach((dr) => {
+            const bid = Number(dr.bidPrice) || 0;
+            if (bid > 0 && bid < minBid) {
+              minBid = bid;
+              highSensitivityDR = {
+                symbol: dr.symbol || "",
+                bid: bid
+              };
             }
-            
-            const firstItem = drList[0];
-            const rt = ratingMap[uName];
-            underlyingMap.set(uName, {
-                ...firstItem, 
-                last: rt?.price || 0, 
-                percentChange: rt?.changePercent || 0, 
-                change: rt?.change || 0,
-                high: rt?.high || 0, 
-                low: rt?.low || 0, 
-                displaySymbol: uName, 
-                displayName: getShortName(firstItem), 
-                ratingDay: rt?.daily?.rating ?? "Unknown", 
-                prevDay: rt?.daily?.prev ?? "Unknown", 
-                timeDay: rt?.daily?.changed_at, 
-                ratingWeek: rt?.weekly?.rating ?? "Unknown", 
-                prevWeek: rt?.weekly?.prev ?? "Unknown", 
-                timeWeek: rt?.weekly?.changed_at,
-                ratingDayHistory: rt?.daily?.history || [],
-                ratingWeekHistory: rt?.weekly?.history || [],
-                currency: rt?.currency || "", 
-                exchangeCountry: getCountryFromExchange(firstItem.underlyingExchange),
-                mostPopularDR: mostPopularDR,
-                highSensitivityDR: highSensitivityDR
-            });
+          });
+
+          if (drList.length === 1 && drList[0]) {
+            const singleDR = drList[0];
+            const vol = Number(singleDR.totalVolume) || 0;
+            const bid = Number(singleDR.bidPrice) || 0;
+
+            if (!mostPopularDR) {
+              mostPopularDR = { symbol: singleDR.symbol || "", volume: vol };
+            }
+            if (!highSensitivityDR && bid > 0) {
+              highSensitivityDR = { symbol: singleDR.symbol || "", bid: bid };
+            }
+          }
+
+          const firstItem = drList[0];
+          const rt = ratingMap[uName];
+          underlyingMap.set(uName, {
+            ...firstItem,
+            last: rt?.price || 0,
+            percentChange: rt?.changePercent || 0,
+            change: rt?.change || 0,
+            high: rt?.high || 0,
+            low: rt?.low || 0,
+            displaySymbol: uName,
+            displayName: getShortName(firstItem),
+            ratingDay: rt?.daily?.rating ?? "Unknown",
+            prevDay: rt?.daily?.prev ?? "Unknown",
+            timeDay: rt?.daily?.changed_at,
+            ratingWeek: rt?.weekly?.rating ?? "Unknown",
+            prevWeek: rt?.weekly?.prev ?? "Unknown",
+            timeWeek: rt?.weekly?.changed_at,
+            ratingDayHistory: rt?.daily?.history || [],
+            ratingWeekHistory: rt?.weekly?.history || [],
+            currency: rt?.currency || "",
+            exchangeCountry: getCountryFromExchange(firstItem.underlyingExchange),
+            mostPopularDR: mostPopularDR,
+            highSensitivityDR: highSensitivityDR
+          });
         });
         setData(Array.from(underlyingMap.values()));
         setLoading(false);
-      } catch (err) { 
-        if(isMounted) {
+      } catch (err) {
+        if (isMounted) {
           console.error('Error fetching data:', err);
           setLoading(false);
         }
       }
     }
     fetchData();
-    const intervalId = setInterval(fetchData, 60000); 
+    const intervalId = setInterval(fetchData, 60000);
     return () => { isMounted = false; clearInterval(intervalId); };
   }, []);
 
@@ -697,7 +756,7 @@ export default function Suggestion() {
     setSortConfig((prev) => {
       if (prev.key === key) {
         if (prev.direction === "asc") return { key, direction: "desc" };
-        return { key: null, direction: "asc" }; 
+        return { key: null, direction: "asc" };
       }
       return { key, direction: "asc" };
     });
@@ -719,39 +778,37 @@ export default function Suggestion() {
   const processedData = useMemo(() => {
     const term = searchTerm.toLowerCase();
     let mapped = data.map((row) => {
-      // Use rating directly from DB (latest timestamp record)
       let currentRating = timeframe === "1W" ? row.ratingWeek : row.ratingDay;
       let prevRating = timeframe === "1W" ? row.prevWeek : row.prevDay;
       let changeTime = timeframe === "1W" ? row.timeWeek : row.timeDay;
-      
+
       const currScore = RATING_SCORE[currentRating.toLowerCase()] || 0;
       const prevScore = RATING_SCORE[prevRating.toLowerCase()] || 0;
-      return { 
-        ...row, 
-        displayPct: row.percentChange, 
-        displayChange: row.change, 
-        technicalRating: currentRating, 
-        prevTechnicalRating: prevRating, 
-        displayTime: formatSmartTime(changeTime), 
-        changeDirection: currScore > prevScore ? "Positive" : currScore < prevScore ? "Negative" : "Neutral", 
-        sortPrice: Number(row.last) || 0, 
-        hasData: row.percentChange !== undefined 
+      return {
+        ...row,
+        displayPct: row.percentChange,
+        displayChange: row.change,
+        technicalRating: currentRating,
+        prevTechnicalRating: prevRating,
+        displayTime: formatSmartTime(changeTime),
+        changeDirection: currScore > prevScore ? "Positive" : currScore < prevScore ? "Negative" : "Neutral",
+        sortPrice: Number(row.last) || 0,
+        hasData: row.percentChange !== undefined
       };
     });
-    
-    if (term) mapped = mapped.filter(row => 
-      row.displaySymbol.toLowerCase().includes(term) || 
+
+    if (term) mapped = mapped.filter(row =>
+      row.displaySymbol.toLowerCase().includes(term) ||
       row.displayName.toLowerCase().startsWith(term)
     );
 
     if (filterRating) mapped = mapped.filter(row => row.technicalRating.toLowerCase() === filterRating.toLowerCase());
     if (changeFilter !== "All") {
-        if (changeFilter === "Positive") mapped = mapped.filter(row => row.changeDirection === "Positive");
-        else if (changeFilter === "Negative") mapped = mapped.filter(row => row.changeDirection === "Negative");
+      if (changeFilter === "Positive") mapped = mapped.filter(row => row.changeDirection === "Positive");
+      else if (changeFilter === "Negative") mapped = mapped.filter(row => row.changeDirection === "Negative");
     }
     if (country !== "All") mapped = mapped.filter(row => row.exchangeCountry === country);
-    
-    // 🔥 Filter out Neutral ratings from display
+
     mapped = mapped.filter(row => {
       const rating = row.technicalRating.toLowerCase();
       return rating !== "neutral";
@@ -797,68 +854,66 @@ export default function Suggestion() {
 
   const handleRatingFilterClick = (rating) => { if (filterRating === rating) setFilterRating(null); else setFilterRating(rating); };
   const RATINGS_OPTIONS = ["Strong Buy", "Buy", "Sell", "Strong Sell"];
-  const CHANGE_OPTIONS = [ { label: "Latest Only", val: "All" }, { label: "Show Changes", val: "ShowChanges", color: "bg-blue-500" }, { label: "Positive", val: "Positive", color: "bg-[#137333]" }, { label: "Negative", val: "Negative", color: "bg-[#C5221F]" } ];
+  const CHANGE_OPTIONS = [{ label: "Latest Only", val: "All" }, { label: "Show Changes", val: "ShowChanges", color: "bg-blue-500" }, { label: "Positive", val: "Positive", color: "bg-[#137333]" }, { label: "Negative", val: "Negative", color: "bg-[#C5221F]" }];
   const shouldShowChange = filterRating !== null || changeFilter !== "All";
 
   return (
     <div className="h-screen w-full bg-[#f5f5f5] overflow-hidden flex justify-center">
-      {/* ✅ กำหนดความกว้างสูงสุดของหน้า Suggestion ที่ 1248px */}
       <div className="w-full max-w-[1248px] flex flex-col h-full">
-        {/* ✅ ส่วนหัว + ฟิลเตอร์: ใช้ความกว้างฐาน 1040px แล้วค่อย scale 1.2 → กว้างสุด ~1248px */}
         <div className="pt-10 pb-0 px-0 flex-shrink-0" style={{ overflow: 'visible', zIndex: 100 }}>
           <div className="w-[1040px] max-w-full mx-auto scale-[1.2] origin-top" style={{ overflow: 'visible' }}>
             <h1 className="text-3xl font-bold mb-3 text-black">Suggestion</h1>
             <p className="text-[#6B6B6B] mb-8 text-sm md:text-base">Technical Ratings (Underlying Assets)</p>
-            
+
             {/* Filters Row */}
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-2">
-          <div className="flex flex-col sm:flex-row items-center gap-3">
-              <div className="flex bg-white p-1 rounded-xl border border-gray-200 shadow-sm h-[37.33px]">
-                <button onClick={() => setTimeframe("1D")} className={`px-3 py-1 rounded-lg text-sm font-medium transition-all ${timeframe === "1D" ? "bg-[#0B102A] text-white shadow-md" : "text-gray-600 hover:bg-gray-50"}`}>1 Day</button>
-                <button onClick={() => setTimeframe("1W")} className={`px-3 py-1 rounded-lg text-sm font-medium transition-all ${timeframe === "1W" ? "bg-[#0B102A] text-white shadow-md" : "text-gray-600 hover:bg-gray-50"}`}>1 Week</button>
+              <div className="flex flex-col sm:flex-row items-center gap-3">
+                <div className="flex bg-white p-1 rounded-xl border border-gray-200 shadow-sm h-[37.33px]">
+                  <button onClick={() => setTimeframe("1D")} className={`px-3 py-1 rounded-lg text-sm font-medium transition-all ${timeframe === "1D" ? "bg-[#0B102A] text-white shadow-md" : "text-gray-800 hover:bg-gray-50"}`}>1 Day</button>
+                  <button onClick={() => setTimeframe("1W")} className={`px-3 py-1 rounded-lg text-sm font-medium transition-all ${timeframe === "1W" ? "bg-[#0B102A] text-white shadow-md" : "text-gray-800 hover:bg-gray-50"}`}>1 Week</button>
+                </div>
+                <div className="relative z-[200]" ref={countryDropdownRef} style={{ isolation: 'isolate', overflow: 'visible' }}>
+                  <button type="button" onClick={() => setShowCountryMenu((prev) => !prev)} className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 min-w-[180px] h-[37.33px]">
+                    <span>{selectedCountryLabel}</span>
+                    <svg className={`h-4 w-4 transition-transform text-gray-500 ${showCountryMenu ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" /></svg>
+                  </button>
+                  {showCountryMenu && (
+                    <div className="absolute left-0 top-full z-[9999] mt-2 w-56 max-h-72 overflow-auto rounded-2xl border border-gray-200 bg-white shadow-[0_10px_30px_rgba(15,23,42,0.15)] py-1" style={{ transform: 'translateZ(0)' }}>
+                      {countryOptions.map((opt) => (
+                        <button key={opt.code} onClick={() => { setCountry(opt.code); setShowCountryMenu(false); }} className={`flex w-full items-center justify-between px-4 py-1.5 text-left text-sm transition-colors ${country === opt.code ? "bg-[#EEF2FF] text-[#0B102A] font-semibold" : "text-gray-700 hover:bg-gray-50"}`}>
+                          <span>{opt.label}</span>
+                          {country === opt.code && <i className="bi bi-check-lg text-[#0B102A] text-base"></i>}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <FilterDropdown label="Rating change" value={changeFilter} options={CHANGE_OPTIONS} onSelect={setChangeFilter} />
               </div>
-              <div className="relative z-[200]" ref={countryDropdownRef} style={{ isolation: 'isolate', overflow: 'visible' }}>
-                <button type="button" onClick={() => setShowCountryMenu((prev) => !prev)} className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 min-w-[180px] h-[37.33px]">
-                  <span>{selectedCountryLabel}</span>
-                  <svg className={`h-4 w-4 transition-transform text-gray-500 ${showCountryMenu ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" /></svg>
-                </button>
-                {showCountryMenu && (
-                  <div className="absolute left-0 top-full z-[9999] mt-2 w-56 max-h-72 overflow-auto rounded-2xl border border-gray-200 bg-white shadow-[0_10px_30px_rgba(15,23,42,0.15)] py-1" style={{ transform: 'translateZ(0)' }}>
-                    {countryOptions.map((opt) => (
-                      <button key={opt.code} onClick={() => { setCountry(opt.code); setShowCountryMenu(false); }} className={`flex w-full items-center justify-between px-4 py-1.5 text-left text-sm transition-colors ${country === opt.code ? "bg-[#EEF2FF] text-[#0B102A] font-semibold" : "text-gray-700 hover:bg-gray-50"}`}>
-                        <span>{opt.label}</span>
-                        {country === opt.code && <i className="bi bi-check-lg text-[#0B102A] text-base"></i>}
-                      </button>
+              <div className="relative w-full md:w-auto">
+                <input type="text" placeholder="Search DR..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="bg-white pl-4 pr-10 py-2 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#0B102A] w-full md:w-64 text-sm shadow-sm h-[37.33px]" />
+                <i className="bi bi-search absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400" style={{ fontSize: 14 }} />
+              </div>
+            </div>
+
+            {/* Rating Select Row */}
+            <div className="flex flex-col md:flex-row md:items-end md:justify-between mb-2 gap-2">
+              <div className="overflow-x-auto pb-1">
+                <div className="inline-flex items-center gap-3 bg-white rounded-xl px-2 py-1.5 shadow-sm border border-gray-100">
+                  <span className="text-sm font-semibold text-gray-700 whitespace-nowrap">Ratings</span>
+                  <div className="flex gap-2">
+                    {RATINGS_OPTIONS.map((rating) => (
+                      <button key={rating} onClick={() => handleRatingFilterClick(rating)} className={`px-2 py-1 rounded-lg text-xs font-bold transition-all ${getRatingStyle(rating)} ${filterRating === rating ? "ring-2 ring-offset-1 ring-black/10 shadow-md scale-105" : "opacity-60 hover:opacity-100"}`}>{rating}</button>
                     ))}
                   </div>
+                </div>
+              </div>
+              <div className="flex flex-col items-end gap-0.5 text-xs text-gray-500 pr-1 mt-1">
+                <div>Found {processedData.length.toLocaleString()} results</div>
+                {lastUpdateTime && (
+                  <div>Last Updated: {lastUpdateTime.toLocaleString("en-US", { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" })}</div>
                 )}
               </div>
-              <FilterDropdown label="Rating change" value={changeFilter} options={CHANGE_OPTIONS} onSelect={setChangeFilter} />
-          </div>
-          <div className="relative w-full md:w-auto">
-            <input type="text" placeholder="Search DR..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="bg-white pl-4 pr-10 py-2 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#0B102A] w-full md:w-64 text-sm shadow-sm h-[37.33px]" />
-            <i className="bi bi-search absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400" style={{ fontSize: 14 }} />
-          </div>
-        </div>
-
-        {/* Rating Select Row */}
-        <div className="flex flex-col md:flex-row md:items-end md:justify-between mb-2 gap-2">
-            <div className="overflow-x-auto pb-1">
-                <div className="inline-flex items-center gap-3 bg-white rounded-xl px-2 py-1.5 shadow-sm border border-gray-100">
-                    <span className="text-sm font-semibold text-gray-700 whitespace-nowrap">Ratings</span>
-                    <div className="flex gap-2">
-                        {RATINGS_OPTIONS.map((rating) => (
-                          <button key={rating} onClick={() => handleRatingFilterClick(rating)} className={`px-2 py-1 rounded-lg text-xs font-bold transition-all ${getRatingStyle(rating)} ${filterRating === rating ? "ring-2 ring-offset-1 ring-black/10 shadow-md scale-105" : "opacity-60 hover:opacity-100"}`}>{rating}</button>
-                        ))}
-                    </div>
-                </div>
-            </div>
-            <div className="flex flex-col items-end gap-0.5 text-xs text-gray-500 pr-1 mt-1">
-              <div>Found {processedData.length.toLocaleString()} results</div>
-              {lastUpdateTime && (
-                <div>Last Updated: {lastUpdateTime.toLocaleString("en-US", { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" })}</div>
-              )}
-            </div>
             </div>
           </div>
         </div>
@@ -866,43 +921,42 @@ export default function Suggestion() {
         {/* Main Table - Scrollable */}
         <div className="flex-1 overflow-hidden pb-10 mt-9">
           <div className="h-full bg-white rounded-xl shadow border border-gray-100 overflow-auto">
-            {/* ตารางไม่ถูก scale และกำหนดขนาดฟอนต์ข้อมูลทุกคอลัมน์เป็น 15px */}
             <table className="w-full text-left border-collapse text-[14.4px]">
-            <thead className="bg-[#0B102A] text-white font-semibold sticky top-0" style={{ zIndex: 50 }}>
-              <tr className="h-[50px]">
-                {[{key: 'symbol', label: 'Symbol', align: 'left'}, {key: 'rating', label: 'Technical Rating', align: 'center', width: '190px'}, {key: 'time', label: 'Last Update', align: 'center'}, {key: 'popularDR', label: 'Most Popular DR', align: 'center'}, {key: 'sensitivityDR', label: 'High Sensitivity DR', align: 'center'}, {key: 'price', label: 'Price', align: 'right'}, {key: 'pct', label: '%Change', align: 'right'}, {key: 'chg', label: 'Change', align: 'right'}, {key: 'high', label: 'High', align: 'right'}, {key: 'low', label: 'Low', align: 'right'}].map(h => (
-                  <th
-                    key={h.key}
-                    className={`px-4 cursor-pointer text-${h.align} whitespace-nowrap relative`}
-                    style={h.width ? { minWidth: h.width, width: h.width } : {}}
-                    onClick={() => handleSort(h.key)}
-                  >
-                    <div className={`flex items-center justify-${h.align === 'left' ? 'start' : h.align === 'center' ? 'center' : 'end'} gap-0.5`}>{h.label} <SortIndicator colKey={h.key} /></div>
-                    {sortConfig.key === h.key && (
-                      <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#2F80ED] z-50">
-                        <div className="absolute bottom-[-4px] left-1/2 -translate-x-1/2 w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[4px] border-t-[#2F80ED]"></div>
-                      </div>
-                    )}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100" ref={tableRef}>
+              <thead className="bg-[#0B102A] text-white font-semibold sticky top-0" style={{ zIndex: 50 }}>
+                <tr className="h-[50px]">
+                  {[{ key: 'symbol', label: 'Symbol', align: 'left' }, { key: 'rating', label: 'Technical Rating', align: 'center', width: '190px' }, { key: 'time', label: 'Last Update', align: 'center' }, { key: 'popularDR', label: 'Most Popular DR', align: 'center' }, { key: 'sensitivityDR', label: 'High Sensitivity DR', align: 'center' }, { key: 'price', label: 'Price', align: 'right' }, { key: 'pct', label: '%Change', align: 'right' }, { key: 'chg', label: 'Change', align: 'right' }, { key: 'high', label: 'High', align: 'right' }, { key: 'low', label: 'Low', align: 'right' }].map(h => (
+                    <th
+                      key={h.key}
+                      className={`px-4 cursor-pointer text-${h.align} whitespace-nowrap relative`}
+                      style={h.width ? { minWidth: h.width, width: h.width } : {}}
+                      onClick={() => handleSort(h.key)}
+                    >
+                      <div className={`flex items-center justify-${h.align === 'left' ? 'start' : h.align === 'center' ? 'center' : 'end'} gap-0.5`}>{h.label} <SortIndicator colKey={h.key} /></div>
+                      {sortConfig.key === h.key && (
+                        <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#2F80ED] z-50">
+                          <div className="absolute bottom-[-4px] left-1/2 -translate-x-1/2 w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[4px] border-t-[#2F80ED]"></div>
+                        </div>
+                      )}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100" ref={tableRef}>
                 {processedData.map((row, idx) => (
-                  <tr 
-                    key={idx} 
-                    onClick={() => setSelectedItem(row)} 
-                    className={`transition-colors ${idx % 2 === 0 ? "bg-white" : "bg-[#F7F8FA]"} hover:bg-gray-50 cursor-pointer relative`} 
+                  <tr
+                    key={idx}
+                    onClick={() => setSelectedItem(row)}
+                    className={`transition-colors ${idx % 2 === 0 ? "bg-white" : "bg-[#F7F8FA]"} hover:bg-gray-50 cursor-pointer relative`}
                     style={{ height: "52px" }}
                   >
                     <td className="px-4 align-middle overflow-hidden max-w-[130px]">
                       <div className="flex flex-col w-full">
                         <span className="font-bold text-[#2F80ED] truncate block">{row.displaySymbol}</span>
-                        <span className="text-[12.4px] text-gray-400 truncate block" title={row.displayName}>{row.displayName}</span>
+                        <span className="text-[12.4px] text-gray-600 truncate block" title={row.displayName}>{row.displayName}</span>
                       </div>
                     </td>
-                    <td 
-                      className="px-3 align-middle text-center" 
+                    <td
+                      className="px-3 align-middle text-center"
                       style={{ minWidth: '190px', width: '190px' }}
                       onMouseEnter={(e) => {
                         e.stopPropagation();
@@ -915,26 +969,26 @@ export default function Suggestion() {
                     >
                       <RatingChangeCell prev={row.prevTechnicalRating} current={row.technicalRating} showChange={shouldShowChange} />
                     </td>
-                    <td className="px-4 align-middle text-center whitespace-nowrap text-gray-600 font-medium">{row.displayTime}</td>
+                    <td className="px-4 align-middle text-center whitespace-nowrap text-gray-800 font-medium">{row.displayTime}</td>
                     <td className="px-4 align-middle text-center">
                       {row.mostPopularDR ? (
                         <div className="flex flex-col items-center gap-0.5">
                           <span className="font-bold text-[#50B728]">{row.mostPopularDR.symbol}</span>
-                          <span className="text-gray-500 text-[13.4px]">Vol: <span className="font-mono">{formatInt(row.mostPopularDR.volume)}</span></span>
+                          <span className="text-gray-600 text-[13.4px]">Vol: <span className="font-mono">{formatInt(row.mostPopularDR.volume)}</span></span>
                         </div>
-                      ) : <span className="text-gray-400">-</span>}
+                      ) : <span className="text-gray-600">-</span>}
                     </td>
                     <td className="px-4 align-middle text-center">
                       {row.highSensitivityDR ? (
                         <div className="flex flex-col items-center gap-0.5">
                           <span className="font-bold text-[#0007DE]">{row.highSensitivityDR.symbol}</span>
-                          <span className="text-gray-500 text-[13.4px]">Bid: <span className="font-mono">{formatPrice(row.highSensitivityDR.bid)}</span></span>
+                          <span className="text-gray-600 text-[13.4px]">Bid: <span className="font-mono">{formatPrice(row.highSensitivityDR.bid)}</span></span>
                         </div>
-                      ) : <span className="text-gray-400">-</span>}
+                      ) : <span className="text-gray-600">-</span>}
                     </td>
                     <td className="px-4 align-middle text-right">{renderPriceWithCurrency(row.sortPrice, row.currency)}</td>
-                    <td className={`px-4 align-middle text-right font-medium ${row.displayPct > 0 ? "text-[#27AE60]" : row.displayPct < 0 ? "text-[#EB5757]" : "text-gray-600"}`}>{row.hasData ? <span className="font-mono">{row.displayPct > 0 ? "+" : ""}{formatPct(row.displayPct)}%</span> : "-"}</td>
-                    <td className={`px-4 align-middle text-right font-medium ${row.displayChange > 0 ? "text-[#27AE60]" : row.displayChange < 0 ? "text-[#EB5757]" : "text-gray-600"}`}>
+                    <td className={`px-4 align-middle text-right font-medium ${row.displayPct > 0 ? "text-[#27AE60]" : row.displayPct < 0 ? "text-[#EB5757]" : "text-gray-800"}`}>{row.hasData ? <span className="font-mono">{row.displayPct > 0 ? "+" : ""}{formatPct(row.displayPct)}%</span> : "-"}</td>
+                    <td className={`px-4 align-middle text-right font-medium ${row.displayChange > 0 ? "text-[#27AE60]" : row.displayChange < 0 ? "text-[#EB5757]" : "text-gray-800"}`}>
                       <div className="flex items-baseline justify-end gap-0.5">
                         <span className="font-mono">{row.hasData ? (row.displayChange > 0 ? `+${formatPrice(row.displayChange)}` : formatPrice(row.displayChange)) : "-"}</span>
                       </div>
@@ -948,12 +1002,12 @@ export default function Suggestion() {
           </div>
         </div>
       </div>
-      
+
       {/* Tooltip */}
       <Tooltip show={hoveredRow !== null} position={tooltipPosition}>
         Click to view rating history
       </Tooltip>
-      
+
       {/* Rating History Modal */}
       {selectedItem && <RatingHistoryModal item={selectedItem} timeframe={timeframe} onClose={() => setSelectedItem(null)} />}
     </div>

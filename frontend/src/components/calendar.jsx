@@ -45,25 +45,19 @@ const extractSymbol = (str) => {
   if (!str) return "";
   const strUpper = String(str).toUpperCase().trim();
   
-  // Try to extract from pattern (TICKER) first
   const match = strUpper.match(/\(([^)]+)\)$/);
   if (match) {
     return match[1].trim();
   }
   
-  // If no parentheses, try to use the string directly (might be just the ticker)
-  // But also check if it contains spaces (likely a full name, not a ticker)
   if (strUpper.includes(" ") && strUpper.length > 10) {
-    // Likely a full company name, try to extract ticker from common patterns
-    // For example: "JPMORGAN CHASE & CO. (JPM)" or "JPMORGAN CHASE & CO."
+
     const words = strUpper.split(/\s+/);
-    // If first word looks like a ticker (short, uppercase, no special chars except dots/dashes)
     if (words[0] && /^[A-Z0-9.\-]{1,6}$/.test(words[0])) {
       return words[0];
     }
   }
   
-  // Fallback: return the string as-is (might be just the ticker)
   return strUpper;
 };
 
@@ -74,8 +68,6 @@ const calculateDRMetrics = (ticker, drList) => {
 
   const tickerUpper = String(ticker).toUpperCase().trim();
 
-  // Find all DRs with matching underlying
-  // Try multiple matching strategies
   const matchingDRs = drList.filter((dr) => {
     // Strategy 1: Extract from underlying field
     const underlying1 = extractSymbol(dr.underlying || "");
@@ -113,9 +105,8 @@ const calculateDRMetrics = (ticker, drList) => {
   }
 
   // Calculate Most Popular DR (highest volume)
-  // If no volume data, use first matching DR
   let mostPopularDR = null;
-  let maxVolume = -1; // Start with -1 to allow 0 volume
+  let maxVolume = -1; 
   matchingDRs.forEach((dr) => {
     const vol = Number(dr.totalVolume) || 0;
     if (vol > maxVolume) {
@@ -136,7 +127,6 @@ const calculateDRMetrics = (ticker, drList) => {
   }
 
   // Calculate High Sensitivity DR (lowest bid > 0)
-  // If no bid data, use first matching DR with lowest symbol (usually lowest price)
   let highSensitivityDR = null;
   let minBid = Infinity;
   matchingDRs.forEach((dr) => {
@@ -280,7 +270,7 @@ const formatValue = (val, currency = "", isLargeNumber = false) => {
         {formattedNum}
         {suffix && <span className="ml-0.5">{suffix}</span>}
       </span>
-      {currency && <span className="text-[14.4px] text-gray-400 font-normal uppercase">{currency}</span>}
+      {currency && <span className="text-[14.4px] text-gray-600 font-normal uppercase">{currency}</span>}
     </div>
   );
 };
@@ -329,7 +319,7 @@ export default function Calendar() {
       const saved = localStorage.getItem('calendar_seen_earnings');
       if (saved) {
         setSeenEarningsIds(new Set(JSON.parse(saved)));
-        setIsFirstLoad(false); // Not first load if we have saved data
+        setIsFirstLoad(false); 
       }
     } catch (e) {
       console.error('Error loading seen earnings:', e);
@@ -381,7 +371,7 @@ export default function Calendar() {
   useEffect(() => {
     axios.get("https://api.ideatrade1.com/caldr").then(res => {
       const rows = res.data?.rows || [];
-      setDrData(rows); // Store full DR data
+      setDrData(rows); 
       const drToUnderlying = {}, underlyingToDr = {}, underlyingNames = {};
       rows.forEach((r) => {
         const dr = r.symbol?.toUpperCase();
@@ -447,22 +437,18 @@ export default function Calendar() {
           
           // Check for new earnings
           const currentIds = new Set(finalData.map(e => `${e.ticker}-${e.date}`));
-          
-          // Always check for new earnings, even on first load
-          // Compare with existing seenEarningsIds to detect truly new symbols
+
           const unseenIds = [...currentIds].filter(id => !seenEarningsIds.has(id));
           setNewEarningsCount(unseenIds.length);
           
-          // If this is first load and localStorage was empty, mark all as seen (but still notify if there are new ones)
           if (isFirstLoad) {
-            // Only mark as seen if we had no previous data
-            // If we have seenEarningsIds from localStorage, keep them and only add new ones
+            
             if (seenEarningsIds.size === 0) {
-              // First time ever - mark all as seen
+              
               setSeenEarningsIds(currentIds);
-              setNewEarningsCount(0); // No new ones on first ever load
+              setNewEarningsCount(0); 
             } else {
-              // We have previous data - add new IDs to seen set
+              
               const updatedSeenIds = new Set([...seenEarningsIds, ...currentIds]);
               setSeenEarningsIds(updatedSeenIds);
             }
@@ -490,7 +476,7 @@ export default function Calendar() {
     let reconnectTimeout = null;
     let reconnectAttempts = 0;
     const maxReconnectAttempts = 10;
-    const baseReconnectDelay = 1000; // Start with 1 second
+    const baseReconnectDelay = 1000;
 
     const connectSSE = () => {
       try {
@@ -499,7 +485,7 @@ export default function Calendar() {
         
         eventSource.onopen = () => {
           console.log('✅ [SSE] Connection established successfully');
-          reconnectAttempts = 0; // Reset on successful connection
+          reconnectAttempts = 0; 
         };
 
         eventSource.onmessage = (event) => {
@@ -511,16 +497,12 @@ export default function Calendar() {
               const newEarnings = data.earnings;
               const newIds = new Set(newEarnings.map(e => `${e.ticker}-${e.date}`));
               
-              // Use functional setState to access current seenEarningsIds
               setSeenEarningsIds(currentSeenIds => {
-                // Check which ones are truly new (not in currentSeenIds)
                 const unseenIds = [...newIds].filter(id => !currentSeenIds.has(id));
                 
                 if (unseenIds.length > 0) {
-                  // Update new earnings count
                   setNewEarningsCount(prev => prev + unseenIds.length);
                   
-                  // Add new earnings to existing earnings list
                   setEarnings(prev => {
                     const existingIds = new Set(prev.map(e => `${e.ticker}-${e.date}`));
                     const trulyNew = newEarnings.filter(e => !existingIds.has(`${e.ticker}-${e.date}`));
@@ -534,16 +516,13 @@ export default function Calendar() {
                   
                   console.log(`📢 Received ${unseenIds.length} new earnings via SSE`);
                   
-                  // Return updated seen IDs
                   return new Set([...currentSeenIds, ...newIds]);
                 }
                 
-                // No new earnings, return unchanged
                 return currentSeenIds;
               });
             } else if (data.type === 'heartbeat') {
-              // Heartbeat - connection is alive (uncomment to see heartbeats)
-              // console.log('💓 [SSE] Heartbeat received');
+
             } else if (data.type === 'connected') {
               console.log('✅ [SSE]', data.message);
             }
@@ -573,7 +552,7 @@ export default function Calendar() {
             // Fallback to polling if SSE fails completely
             const fallbackInterval = setInterval(() => {
               loadData(false);
-            }, 300000); // 5 minutes
+            }, 300000); 
             
             return () => {
               clearInterval(fallbackInterval);
@@ -624,7 +603,7 @@ export default function Calendar() {
       if (selectedDay !== "All") {
         const earningDate = new Date((e.date ?? 0) * 1000);
         if (isNaN(earningDate.getTime())) return false;
-        const dayOfWeek = earningDate.getDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
+        const dayOfWeek = earningDate.getDay(); 
         const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
         const earningDayName = dayNames[dayOfWeek];
         if (earningDayName !== selectedDay) return false;
@@ -740,9 +719,7 @@ const markAsSeen = (earningId) => {
 
   return (
     <div className="h-screen w-full bg-[#f5f5f5] overflow-hidden flex justify-center">
-      {/* ✅ กรอบคอนเทนต์กว้างขึ้น เพื่อให้ตารางยืดเข้าใกล้ขอบตามที่ต้องการ */}
       <div className="w-full max-w-[1248px] flex flex-col h-full">
-        {/* ✅ ส่วนหัว + ฟิลเตอร์: ใช้ความกว้างฐาน 1040px แล้วค่อย scale 1.2 → กว้างเท่ากับตาราง 1248px */}
         <div className="pt-10 pb-0 px-0 flex-shrink-0" style={{ overflow: 'visible', zIndex: 100 }}>
           <div className="w-[1040px] max-w-full mx-auto scale-[1.2] origin-top" style={{ overflow: 'visible' }}>
             <h1 className="text-3xl font-bold mb-3 text-black">Earnings Calendar</h1>
@@ -775,7 +752,6 @@ const markAsSeen = (earningId) => {
           </div>
             </div>
             
-            {/* Day Select Row - ใช้ดีไซน์เหมือนกับส่วนเลือก rating ใน suggestion */}
             <div className="flex flex-col md:flex-row md:items-end md:justify-between mb-2 gap-2">
               <div className="overflow-x-auto pb-1">
                 <div className="inline-flex items-center gap-3 bg-white rounded-xl px-2 py-1.5 shadow-sm border border-gray-100">
@@ -825,10 +801,9 @@ const markAsSeen = (earningId) => {
         {/* Main Table - Scrollable (ไม่ถูก scale แต่ขยายฟอนต์ให้ใหญ่ขึ้นแทน) */}
         <div className="flex-1 overflow-hidden pb-10 mt-9">
           <div className="h-full bg-white rounded-xl shadow-[0_2px_10px_rgba(0,0,0,0.03)] border border-gray-100 overflow-auto">
-            {/* ตารางไม่ถูก scale แต่ขยายฟอนต์ให้ใหญ่ขึ้นแทน และให้กินเต็มความกว้างกรอบ 1300px */}
             <table className="min-w-[1300px] w-full text-left border-collapse text-[14.4px]">
               <colgroup>
-                <col style={{ minWidth: '120px' }} />
+                <col style={{ width: '250px', maxWidth: '250px' }} />
                 <col style={{ minWidth: '150px' }} />
                 <col style={{ minWidth: '110px' }} />
                 <col style={{ minWidth: '110px' }} />
@@ -894,43 +869,43 @@ const markAsSeen = (earningId) => {
                       style={{ height: "52px" }}
                       onClick={() => e.isNew && markAsSeen(e.earningId)}
                     >
-                      <td className="px-4 align-middle">
-                        <div className="flex flex-col">
-                          <span className="font-bold text-[#2F80ED] text-[14.4px] leading-tight">{e.ticker}</span>
-                          <span className="text-[12.4px] text-gray-400 truncate w-full mt-0.5" title={e.company}>{e.company}</span>
+                      <td className="px-4 align-middle overflow-hidden" style={{ width: '250px', maxWidth: '250px' }}>
+                        <div className="flex flex-col overflow-hidden w-full min-w-0">
+                          <span className="font-bold text-[#2F80ED] text-[14.4px] leading-tight truncate" title={e.ticker}>{e.ticker}</span>
+                          <span className="text-[12.4px] text-gray-600 truncate w-full mt-0.5" title={e.company}>{e.company}</span>
                         </div>
                       </td>
-                      <td className="px-4 align-middle text-center text-gray-600 font-medium">{formatMarketCapValue(e.marketCap, e.currency, true)}</td>
+                      <td className="px-4 align-middle text-center text-gray-800 font-medium">{formatMarketCapValue(e.marketCap, e.currency, true)}</td>
                       <td className="px-4 align-middle text-center">
                         {e.mostPopularDR ? (
                           <div className="flex flex-col items-center gap-0.5">
                             <span className="font-bold text-[#50B728]">{e.mostPopularDR.symbol}</span>
                             {e.mostPopularDR.volume > 0 ? (
-                              <span className="text-gray-500 text-[13.4px]">Vol: {formatInt(e.mostPopularDR.volume)}</span>
+                              <span className="text-gray-600 text-[13.4px]">Vol: {formatInt(e.mostPopularDR.volume)}</span>
                             ) : null}
                           </div>
-                        ) : <span className="text-gray-400">-</span>}
+                        ) : <span className="text-gray-600">-</span>}
                       </td>
                       <td className="px-4 align-middle text-center">
                         {e.highSensitivityDR ? (
                           <div className="flex flex-col items-center gap-0.5">
                             <span className="font-bold text-[#0007DE]">{e.highSensitivityDR.symbol}</span>
                             {e.highSensitivityDR.bid > 0 ? (
-                              <span className="text-gray-500 text-[13.4px]">Bid: <span className="font-mono">{formatPrice(e.highSensitivityDR.bid)}</span></span>
+                              <span className="text-gray-600 text-[13.4px]">Bid: <span className="font-mono">{formatPrice(e.highSensitivityDR.bid)}</span></span>
                             ) : null}
                           </div>
-                        ) : <span className="text-gray-400">-</span>}
+                        ) : <span className="text-gray-600">-</span>}
                       </td>
-                      <td className="px-4 align-middle text-right text-gray-600 font-medium">{formatColoredValue(e.epsEstimate, e.currency)}</td>
-                      <td className="px-4 align-middle text-right text-gray-600 font-semibold">{formatColoredValue(displayEpsRep, e.currency)}</td>
+                      <td className="px-4 align-middle text-right text-gray-800 font-medium">{formatColoredValue(e.epsEstimate, e.currency)}</td>
+                      <td className="px-4 align-middle text-right text-gray-800 font-semibold">{formatColoredValue(displayEpsRep, e.currency)}</td>
                       <td className="px-4 align-middle text-right font-medium">{formatColoredValue(displaySurprise, "", e.currency)}</td>
                       <td className="px-4 align-middle text-right font-medium">{formatColoredValue(displayPctSurprise, "%")}</td>
-                      <td className="px-4 align-middle text-right text-gray-600 font-medium">{formatValue(e.revenueForecast, e.currency, true)}</td>
-                      <td className="px-4 align-middle text-right text-gray-600 font-semibold">{formatValue(displayRevAct, e.currency, true)}</td>
-                      <td className="px-4 align-middle text-right text-gray-600 font-medium whitespace-nowrap">
+                      <td className="px-4 align-middle text-right text-gray-800 font-medium">{formatValue(e.revenueForecast, e.currency, true)}</td>
+                      <td className="px-4 align-middle text-right text-gray-800 font-semibold">{formatValue(displayRevAct, e.currency, true)}</td>
+                      <td className="px-4 align-middle text-right text-gray-800 font-medium whitespace-nowrap">
                         {formatDate(e.date)}
                       </td>
-                      <td className="px-4 align-middle text-right text-gray-600 font-medium whitespace-nowrap">
+                      <td className="px-4 align-middle text-right text-gray-800 font-medium whitespace-nowrap">
                         {formatDate(e.period)}
                       </td>
                     </tr>
