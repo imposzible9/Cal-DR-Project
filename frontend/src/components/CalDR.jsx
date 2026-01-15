@@ -114,7 +114,9 @@ export default function DRCal() {
 
 
   const tableRef = useRef(null);
-  const SPREAD_PCT = 0.002; 
+  const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
+
+  const searchInputRef = useRef(null);
 
   // ================== ดึง DR ทั้งหมด ==================
   useEffect(() => {
@@ -216,6 +218,37 @@ export default function DRCal() {
     return 0;
   }, [selectedDR]);
 
+  const dynamicSpreadPct = useMemo(() => {
+  if (!selectedDR) return 0.002; // fallback สุดท้าย 0.2%
+
+  const bid = Number(selectedDR.bidPrice || 0);
+  const ask = Number(selectedDR.offerPrice || 0);
+
+  let spread = null;
+
+  // (A) ใช้ spread จริงจากกระดาน DR ก่อน
+  if (bid > 0 && ask > 0 && ask > bid) {
+    const mid = (bid + ask) / 2;
+    if (mid > 0) {
+      spread = (ask - bid) / mid; // เช่น 0.004 = 0.4%
+    }
+  }
+
+  // (B) fallback → ใช้ liquidity
+  if (spread == null) {
+    const value = Number(selectedDR.totalValue || 0); // ตรวจหน่วยตาม API
+    spread =
+      value >= 50_000_000 ? 0.001 : // 0.10%
+      value >= 10_000_000 ? 0.002 : // 0.20%
+      value >= 2_000_000  ? 0.004 : // 0.40%
+                           0.008;  // 0.80%
+  }
+
+  // clamp กันตลาดบาง/ข้อมูลเพี้ยน
+  return clamp(spread, 0.001, 0.02); // 0.10% – 2.00%
+}, [selectedDR]);
+
+
   // ================== fair value ==================
   const fairMidTHB = useMemo(() => {
     const und = Number(underlyingValue || 0);
@@ -224,8 +257,8 @@ export default function DRCal() {
     return (und * fx) / ratioDR;
   }, [underlyingValue, fxTHBPerUnderlying, ratioDR]);
 
-  const fairBidTHB = fairMidTHB * (1 - SPREAD_PCT / 2);
-  const fairAskTHB = fairMidTHB * (1 + SPREAD_PCT / 2);
+  const fairBidTHB = fairMidTHB * (1 - dynamicSpreadPct / 2);
+  const fairAskTHB = fairMidTHB * (1 + dynamicSpreadPct / 2);
   const hasInput = underlyingValue && fxTHBPerUnderlying;
 
   // ================== Suggest ==================
@@ -495,12 +528,13 @@ export default function DRCal() {
             <h2 className="font-semibold text-[26px] text-black mb-[14px]">Select DR</h2>
             <div className="relative w-full h-[48px]">
               <input
+                ref={searchInputRef}
                 type="text"
                 placeholder="Select DR"
                 value={searchText}
                 onChange={handleSearchChange}
                 onKeyDown={handleSearchKeyDown}
-                onFocus={() => setShowSuggest(true)}
+                onClick={(e) => { e.target.select(); setShowSuggest(true); }}
                 className="w-full h-full bg-white border border-[#d0d0d0] rounded-[12px] pl-4 pr-12 text-black shadow-lg focus:outline-none"
               />
               <svg xmlns="http://www.w3.org/2000/svg" className="absolute right-4 top-1/2 -translate-y-1/2 h-6 w-6 text-black" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -550,7 +584,7 @@ export default function DRCal() {
           </div>
 
           <div className="flex-1 bg-[#0B102A] rounded-tr-[16px] rounded-br-[16px] shadow-lg p-6">
-            <div className="w-full h-[253px] bg-white/20 border border-[#9A9A9A] rounded-[12px] shadow-lg p-6">
+            <div className="w-full h-[253px] bg-white/20 border border-[#9A9A9A] rounded-[12px] shadow-lg p-6 flex flex-col">
               <div className="mb-4">
                 <p className="font-bold text-[13px] text-white mb-1">Underlying Price</p>
                 <div className="w-full h-[46px] bg-white/20 border border-[#9A9A9A] rounded-[12px] flex items-center hover:border-[#4AB6FF] transition-colors duration-150">
@@ -586,14 +620,20 @@ export default function DRCal() {
                   <div className="w-[100px] flex justify-center text-white font-bold text-[13px]">{"THB/" + (underlyingCurrency || "USD")}</div>
                 </div>
               </div>
-
+              
               {loadingRealtime && (
-                <span className="text-xs text-blue-300 ml-2">Calculating fair value…</span>
+                <span className="text-xs text-blue-300 ml-2">
+                  Calculating fair value…
+                </span>
               )}
 
-
               <div className="flex justify-center gap-2 mt-4 w-full">
-                <button onClick={onReset} className="w-[139px] h-[38px] bg-white rounded-[8px] flex justify-center items-center gap-2 text-black font-bold text-[12px] hover:bg-gray-200 transition-colors">Clear</button>
+                <button
+                  onClick={onReset}
+                  className="w-[139px] h-[38px] bg-white rounded-[8px] flex justify-center items-center gap-2 text-black font-bold text-[12px] hover:bg-gray-200 transition-colors"
+                >
+                  Clear
+                </button>
               </div>
             </div>
 
