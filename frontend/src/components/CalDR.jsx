@@ -422,7 +422,7 @@ export default function DRCal() {
     if (filteredTableData.length === 0) return null;
 
     return (
-      <div ref={tableRef} className="w-full mt-2 bg-white rounded-xl shadow-[0_4px_20px_rgba(0,0,0,0.05)] border border-gray-100 overflow-hidden">
+      <div ref={tableRef} className="w-full mt-2 bg-white rounded-xl shadow-[0_4px_20px_rgba(0,0,0,0.05)] border border-gray-100 overflow-hidden font-['Sarabun']">
         <div className="overflow-x-auto">
           <table className="w-full text-xs text-left border-separate border-spacing-0">
             <thead className="bg-[#0B102A] text-white font-bold">
@@ -522,7 +522,7 @@ export default function DRCal() {
           Calculate DR Fair Value based on Underlying Price, Exchange Rate, and Conversion Ratio.
         </p>
 
-        <div className="w-full min-h-[627px] mt-2">
+      <div className="w-full min-h-[627px] mt-2 font-sarabun">
         <div className="flex w-full">
           <div className="flex-1 min-h-[427px] bg-[#FFFFFF] rounded-tl-[12px] rounded-bl-[12px] shadow-[0_10px_25px_rgba(0,0,0,0.12)] px-6 pt-10 border border-[#e0e0e0]">
             <h2 className="font-semibold text-[26px] text-black mb-[14px]">Select DR</h2>
@@ -620,7 +620,7 @@ export default function DRCal() {
                   <div className="w-[100px] flex justify-center text-white font-bold text-[13px]">{"THB/" + (underlyingCurrency || "USD")}</div>
                 </div>
               </div>
-              
+
               {loadingRealtime && (
                 <span className="text-xs text-blue-300 ml-2">
                   Calculating fair value…
