@@ -1,5 +1,7 @@
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import Optional, Dict, Any
 from contextlib import asynccontextmanager
 import httpx
 import uvicorn
@@ -259,6 +261,35 @@ def init_database():
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_rating_accuracy_ticker_timestamp 
             ON rating_accuracy(ticker, timestamp DESC)
+        """)
+
+        # --- User Behavior Tracking Table ---
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS user_behavior (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                event_data TEXT,
+                page_path TEXT,
+                timestamp TEXT NOT NULL,
+                user_agent TEXT,
+                ip_address TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # สร้าง indexes สำหรับ user_behavior
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_user_behavior_session 
+            ON user_behavior(session_id)
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_user_behavior_event_type 
+            ON user_behavior(event_type)
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_user_behavior_timestamp 
+            ON user_behavior(timestamp DESC)
         """)
 
         con.commit()
@@ -3135,5 +3166,271 @@ def ratings_from_dr_api():
             con.close()
         return {"updated_at": updated_at_str, "count": 0, "rows": []}
 
+
+# ==================== USER BEHAVIOR TRACKING API ====================
+
+class TrackingEvent(BaseModel):
+    session_id: str
+    event_type: str
+    event_data: Optional[Dict[str, Any]] = None
+    page_path: Optional[str] = None
+    timestamp: Optional[str] = None
+    user_agent: Optional[str] = None
+
+
+@app.post("/api/track")
+async def track_event(event: TrackingEvent, request: Request):
+    """
+    บันทึก tracking event จาก frontend
+    รองรับ event types: page_view, stock_view, search, click, session_start, session_end, filter, calculation
+    """
+    try:
+        con = sqlite3.connect(DB_FILE)
+        cur = con.cursor()
+        
+        # Enable WAL mode
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA busy_timeout=30000")
+        
+        # Get client IP address
+        client_ip = request.client.host if request.client else None
+        
+        # Convert event_data to JSON string
+        event_data_json = json.dumps(event.event_data, ensure_ascii=False) if event.event_data else None
+        
+        # Use provided timestamp or current time
+        timestamp_str = event.timestamp or datetime.now(ZoneInfo("Asia/Bangkok")).isoformat()
+        
+        cur.execute("""
+            INSERT INTO user_behavior (session_id, event_type, event_data, page_path, timestamp, user_agent, ip_address)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            event.session_id,
+            event.event_type,
+            event_data_json,
+            event.page_path,
+            timestamp_str,
+            event.user_agent,
+            client_ip
+        ))
+        
+        con.commit()
+        con.close()
+        
+        return {"success": True, "message": "Event tracked successfully"}
+        
+    except Exception as e:
+        print(f"❌ Tracking Error: {e}")
+        if 'con' in locals() and con:
+            con.close()
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/analytics/summary")
+async def get_analytics_summary(
+    days: int = Query(default=7, description="จำนวนวันย้อนหลังที่ต้องการดู"),
+    event_type: Optional[str] = Query(default=None, description="กรองตาม event type")
+):
+    """
+    ดึงสรุปข้อมูล analytics
+    - จำนวน sessions ทั้งหมด
+    - จำนวน page views ต่อหน้า
+    - หุ้นที่ถูกดูบ่อยที่สุด
+    - คำค้นหายอดนิยม
+    """
+    try:
+        con = sqlite3.connect(DB_FILE)
+        con.row_factory = sqlite3.Row
+        cur = con.cursor()
+        
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA busy_timeout=30000")
+        
+        # คำนวณ date cutoff
+        cutoff_date = (datetime.now(ZoneInfo("Asia/Bangkok")) - timedelta(days=days)).isoformat()
+        
+        # 1. Total unique sessions
+        cur.execute("""
+            SELECT COUNT(DISTINCT session_id) as total_sessions
+            FROM user_behavior
+            WHERE timestamp >= ?
+        """, (cutoff_date,))
+        total_sessions = cur.fetchone()["total_sessions"]
+        
+        # 2. Total events
+        cur.execute("""
+            SELECT COUNT(*) as total_events
+            FROM user_behavior
+            WHERE timestamp >= ?
+        """, (cutoff_date,))
+        total_events = cur.fetchone()["total_events"]
+        
+        # 3. Page views breakdown
+        cur.execute("""
+            SELECT 
+                json_extract(event_data, '$.page_name') as page_name,
+                page_path,
+                COUNT(*) as view_count
+            FROM user_behavior
+            WHERE event_type = 'page_view' AND timestamp >= ?
+            GROUP BY page_path
+            ORDER BY view_count DESC
+            LIMIT 10
+        """, (cutoff_date,))
+        page_views = [{"page_name": row["page_name"], "page_path": row["page_path"], "count": row["view_count"]} for row in cur.fetchall()]
+        
+        # 4. Most viewed stocks
+        cur.execute("""
+            SELECT 
+                json_extract(event_data, '$.ticker') as ticker,
+                json_extract(event_data, '$.stock_name') as stock_name,
+                COUNT(*) as view_count
+            FROM user_behavior
+            WHERE event_type = 'stock_view' AND timestamp >= ?
+            GROUP BY ticker
+            ORDER BY view_count DESC
+            LIMIT 10
+        """, (cutoff_date,))
+        top_stocks = [{"ticker": row["ticker"], "stock_name": row["stock_name"], "count": row["view_count"]} for row in cur.fetchall()]
+        
+        # 5. Popular searches
+        cur.execute("""
+            SELECT 
+                json_extract(event_data, '$.query') as search_query,
+                COUNT(*) as search_count
+            FROM user_behavior
+            WHERE event_type = 'search' AND timestamp >= ?
+            GROUP BY search_query
+            ORDER BY search_count DESC
+            LIMIT 10
+        """, (cutoff_date,))
+        top_searches = [{"query": row["search_query"], "count": row["search_count"]} for row in cur.fetchall()]
+        
+        # 6. Events by type
+        cur.execute("""
+            SELECT event_type, COUNT(*) as count
+            FROM user_behavior
+            WHERE timestamp >= ?
+            GROUP BY event_type
+            ORDER BY count DESC
+        """, (cutoff_date,))
+        events_by_type = [{"event_type": row["event_type"], "count": row["count"]} for row in cur.fetchall()]
+        
+        # 7. Daily activity (last N days)
+        cur.execute("""
+            SELECT 
+                date(timestamp) as date,
+                COUNT(*) as event_count,
+                COUNT(DISTINCT session_id) as session_count
+            FROM user_behavior
+            WHERE timestamp >= ?
+            GROUP BY date(timestamp)
+            ORDER BY date DESC
+        """, (cutoff_date,))
+        daily_activity = [{"date": row["date"], "events": row["event_count"], "sessions": row["session_count"]} for row in cur.fetchall()]
+        
+        con.close()
+        
+        return {
+            "success": True,
+            "period_days": days,
+            "summary": {
+                "total_sessions": total_sessions,
+                "total_events": total_events,
+                "page_views": page_views,
+                "top_stocks": top_stocks,
+                "top_searches": top_searches,
+                "events_by_type": events_by_type,
+                "daily_activity": daily_activity
+            }
+        }
+        
+    except Exception as e:
+        print(f"❌ Analytics Error: {e}")
+        import traceback
+        traceback.print_exc()
+        if 'con' in locals() and con:
+            con.close()
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/analytics/events")
+async def get_analytics_events(
+    limit: int = Query(default=100, description="จำนวน events ที่ต้องการ"),
+    offset: int = Query(default=0, description="Offset สำหรับ pagination"),
+    event_type: Optional[str] = Query(default=None, description="กรองตาม event type"),
+    session_id: Optional[str] = Query(default=None, description="กรองตาม session")
+):
+    """
+    ดึงรายการ events ทั้งหมด (สำหรับ admin dashboard)
+    """
+    try:
+        con = sqlite3.connect(DB_FILE)
+        con.row_factory = sqlite3.Row
+        cur = con.cursor()
+        
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA busy_timeout=30000")
+        
+        # Build query with optional filters
+        query = "SELECT * FROM user_behavior WHERE 1=1"
+        params = []
+        
+        if event_type:
+            query += " AND event_type = ?"
+            params.append(event_type)
+        
+        if session_id:
+            query += " AND session_id = ?"
+            params.append(session_id)
+        
+        query += " ORDER BY timestamp DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+        
+        cur.execute(query, params)
+        events = []
+        for row in cur.fetchall():
+            events.append({
+                "id": row["id"],
+                "session_id": row["session_id"],
+                "event_type": row["event_type"],
+                "event_data": json.loads(row["event_data"]) if row["event_data"] else None,
+                "page_path": row["page_path"],
+                "timestamp": row["timestamp"],
+                "user_agent": row["user_agent"],
+                "ip_address": row["ip_address"]
+            })
+        
+        # Get total count
+        count_query = "SELECT COUNT(*) as total FROM user_behavior WHERE 1=1"
+        count_params = []
+        if event_type:
+            count_query += " AND event_type = ?"
+            count_params.append(event_type)
+        if session_id:
+            count_query += " AND session_id = ?"
+            count_params.append(session_id)
+        
+        cur.execute(count_query, count_params)
+        total = cur.fetchone()["total"]
+        
+        con.close()
+        
+        return {
+            "success": True,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "events": events
+        }
+        
+    except Exception as e:
+        print(f"❌ Events Error: {e}")
+        if 'con' in locals() and con:
+            con.close()
+        return {"success": False, "error": str(e)}
+
+
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8335)
+

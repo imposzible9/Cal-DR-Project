@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, useTransition, useRef } from "react";
 import swipeImg from "../assets/swipe.png";
+import { trackStockView, trackSearch, trackFilter } from "../utils/tracker";
 
 // const API_URL = "http://172.17.1.85:8333/dr";
 const API_URL = "https://api.ideatrade1.com/caldr";
@@ -170,7 +171,14 @@ export default function DRList() {
 
   /* SEARCH DEBOUNCE */
   useEffect(() => {
-    const t = setTimeout(() => setSearch(searchTerm.trim()), 250);
+    const t = setTimeout(() => {
+      const trimmedSearch = searchTerm.trim();
+      setSearch(trimmedSearch);
+      // Track search if there's a search term
+      if (trimmedSearch) {
+        trackSearch(trimmedSearch);
+      }
+    }, 250);
     return () => clearTimeout(t);
   }, [searchTerm]);
 
@@ -243,6 +251,26 @@ export default function DRList() {
     (s) => setWatchlist((prev) => (prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s])),
     []
   );
+
+  // Track stock view when detailRow changes
+  useEffect(() => {
+    if (detailRow) {
+      trackStockView(detailRow.dr, detailRow.underlyingName || detailRow.underlying);
+    }
+  }, [detailRow]);
+
+  // Track filter changes
+  useEffect(() => {
+    if (countryFilter !== 'all') {
+      trackFilter('country', countryFilter);
+    }
+  }, [countryFilter]);
+
+  useEffect(() => {
+    if (drFilter !== 'all') {
+      trackFilter('dr_filter', drFilter);
+    }
+  }, [drFilter]);
 
   useEffect(() => {
     let mounted = true;
