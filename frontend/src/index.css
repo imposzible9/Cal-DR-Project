@@ -19,6 +19,10 @@
   font-family: 'Sarabun', sans-serif;
 }
 
+.font-sarabun {
+  font-family: 'Sarabun', sans-serif;
+}
+
 /* DR Column Right Shadow */
 .dr-shadow-right::after {
   content: '';
