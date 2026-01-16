@@ -76,6 +76,10 @@ FX_PAIR_MAP = {
 # หรือถ้าอยาก override ทั้งตัวเต็ม: {"NYSE:DISNEY": "NYSE:DIS"}
 # -----------------------------
 TV_SYMBOL_OVERRIDES: dict[str, str] = {
+    # ✅ เคสที่เจอ: Euronext Paris OR ดึง close ไม่ได้ / scan ไม่ตอบ
+    # เปลี่ยนค่าด้านขวาได้ตาม log ที่เห็น (เช่น "PAR:OR" ฯลฯ)
+    "EPA:OR": "EURONEXT:OR",
+
     # ตัวอย่าง:
     # "NYSE:DISNEY": "NYSE:DIS",
     # "NYSE:BRKB": "NYSE:BRK.B",
@@ -131,19 +135,46 @@ def _trim_warm_keys():
 _tv_client: httpx.AsyncClient | None = None
 _idea_client: httpx.AsyncClient | None = None
 
+# ✅ แก้หลัก: fallback columns + debug log ตอน error
 async def tv_scan_close(tv_ticker: str) -> float:
     """
     tv_ticker เช่น 'NASDAQ:AAPL' หรือ 'FX_IDC:USDTHB'
     """
-    payload = {"symbols": {"tickers": [tv_ticker], "query": {"types": []}}, "columns": ["close"]}
+    columns = ["last", "close", "open"]
+    payload = {"symbols": {"tickers": [tv_ticker], "query": {"types": []}}, "columns": columns}
+
     assert _tv_client is not None
     r = await _tv_client.post(TV_SCAN_URL, json=payload)
     r.raise_for_status()
     data = r.json()
+
     try:
-        return float(data["data"][0]["d"][0])
-    except Exception:
-        raise HTTPException(500, f"Cannot fetch close for {tv_ticker}")
+        d = data["data"][0]["d"]  # list ตาม columns
+        for i, col in enumerate(columns):
+            v = d[i]
+            if v is None:
+                continue
+            fv = float(v)
+            if fv == fv and fv > 0:  # fv==fv กัน NaN
+                return fv
+
+        # ไม่มี field ไหนใช้ได้เลย
+        raise HTTPException(500, f"No usable price fields for {tv_ticker} (tried {columns})")
+
+    except HTTPException:
+        # ถ้าเป็น HTTPException เราปล่อยให้ไหลออกไปตามเดิม
+        raise
+
+    except Exception as e:
+        # ✅ log ชัด ๆ เพื่อดู response จริงจาก TradingView
+        try:
+            print("TV_SCAN_ERROR ticker=", tv_ticker)
+            print("TV_SCAN_ERROR columns=", columns)
+            print("TV_SCAN_ERROR response=", data)
+        except Exception:
+            pass
+
+        raise HTTPException(500, f"Cannot fetch close for {tv_ticker}: {type(e).__name__}")
 
 async def get_price_cached(kind: str, tv_ticker: str, ttl: int = CACHE_TTL_SECONDS) -> float:
     """
