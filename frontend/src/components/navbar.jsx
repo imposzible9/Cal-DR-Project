@@ -90,10 +90,18 @@ const Navbar = () => {
             >
               Calendar
               {calendarNotifications > 0 && (
-                <span className="absolute -top-1 right-[-10px] bg-red-500 text-white text-[9px] font-bold rounded-full h-4 w-4 flex items-center justify-center">
-                  {calendarNotifications > 99 ? '99+' : calendarNotifications}
+                <span className="absolute -top-0.5 -right-1.5 flex h-2.5 w-2.5">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-500 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500"></span>
                 </span>
               )}
+            </Link>
+
+            <Link
+              to="/news"
+              className={`text-sm font-medium transition-colors ${isActive('/news') ? 'text-blue-500' : 'text-gray-700 hover:text-gray-900'}`}
+            >
+              News
             </Link>
           </nav>
         </div>
@@ -208,13 +216,27 @@ const Navbar = () => {
                   }`}
                 >
                   <span className="flex items-center justify-between">
-                    Calendar
-                    {calendarNotifications > 0 && (
-                      <span className="bg-red-500 text-white text-xs font-bold rounded-full h-5 w-5 flex items-center justify-center">
-                        {calendarNotifications > 99 ? '99+' : calendarNotifications}
-                      </span>
-                    )}
+                    <span className="relative">
+                      Calendar
+                      {calendarNotifications > 0 && (
+                        <span className="absolute -top-1 -right-3 flex h-2.5 w-2.5">
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-500 opacity-75"></span>
+                          <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500"></span>
+                        </span>
+                      )}
+                    </span>
                   </span>
+                </Link>
+
+                <Link
+                  to="/news"
+                  className={`block px-4 py-3 text-base font-medium transition-colors ${
+                    isActive('/news')
+                      ? 'text-blue-500 bg-blue-50'
+                      : 'text-gray-700 hover:bg-gray-50'
+                  }`}
+                >
+                  News
                 </Link>
               </div>
             </nav>

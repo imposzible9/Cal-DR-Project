@@ -1,5 +1,5 @@
 import { Routes, Route } from "react-router-dom";
-import { Navbar, SuggestionPage, DRCal, DRList, CalendarPage } from "./components";
+import { Navbar, SuggestionPage, DRCal, DRList, CalendarPage, News } from "./components";
 
 function App() {
   return (
@@ -12,6 +12,7 @@ function App() {
         <Route path="/caldr" element={<DRCal />} />
         <Route path="/suggestion" element={<SuggestionPage />} />
         <Route path="/calendar" element={<CalendarPage />} />
+        <Route path="/news" element={<News />} />
       </Routes>
     </>
   );

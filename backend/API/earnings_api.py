@@ -56,6 +56,150 @@ _sse_clients: list[asyncio.Queue] = []
 _sse_lock = asyncio.Lock()
 
 # ================= HELPERS =================
+def extract_symbol(text):
+    """Extract ticker symbol from text (e.g., from 'AAPL INC' or 'Company (AAPL)')"""
+    if not text:
+        return ""
+    text_upper = str(text).upper().strip()
+    
+    # Try to extract from parentheses first
+    match = re.search(r'\(([A-Z0-9.\-_]+)\)$', text_upper)
+    if match:
+        return match.group(1).strip()
+    
+    # If it's already a short symbol (no spaces, < 10 chars), return as-is
+    if ' ' not in text_upper and len(text_upper) < 10:
+        return text_upper
+    
+    return text_upper
+
+def is_exchange_match(earnings_exchange, dr_exchange):
+    """Check if exchange names match (handles variations)"""
+    if not earnings_exchange or not dr_exchange:
+        return True  # If no exchange info, allow match
+    
+    earnings_ex = str(earnings_exchange).upper().strip()
+    dr_ex = str(dr_exchange).upper().strip()
+    
+    # Exact match
+    if earnings_ex == dr_ex:
+        return True
+    
+    # Partial match
+    if earnings_ex in dr_ex or dr_ex in earnings_ex:
+        return True
+    
+    # Handle common exchange name variations
+    exchange_map = {
+        'TSE': ['TOKYO', 'TOKYO STOCK EXCHANGE'],
+        'HKEX': ['HONG KONG', 'STOCK EXCHANGE OF HONG KONG'],
+        'NYSE': ['NEW YORK', 'NEW YORK STOCK EXCHANGE'],
+        'NASDAQ': ['NASDAQ'],
+        'SSE': ['SHANGHAI', 'SHANGHAI STOCK EXCHANGE'],
+        'SZSE': ['SHENZHEN', 'SHENZHEN STOCK EXCHANGE']
+    }
+    
+    for code, names in exchange_map.items():
+        if earnings_ex.find(code) != -1 or any(name in earnings_ex for name in names):
+            if dr_ex.find(code) != -1 or any(name in dr_ex for name in names):
+                return True
+    
+    return False
+
+def calculate_dr_metrics(ticker, exchange, dr_rows):
+    """
+    Calculate DR metrics (mostPopularDR, highSensitivityDR) for a given ticker and exchange.
+    
+    Args:
+        ticker: Stock ticker symbol
+        exchange: Exchange name
+        dr_rows: List of DR data from DR API
+    
+    Returns:
+        dict with mostPopularDR and highSensitivityDR
+    """
+    if not ticker or not dr_rows:
+        return {"mostPopularDR": None, "highSensitivityDR": None}
+    
+    ticker_upper = str(ticker).upper().strip()
+    
+    # Find matching DRs
+    matching_drs = []
+    for dr in dr_rows:
+        # Check if ticker matches
+        ticker_matches = False
+        
+        # Strategy 1: Extract from underlying field
+        underlying1 = extract_symbol(dr.get("underlying") or "")
+        if underlying1 and underlying1 == ticker_upper:
+            ticker_matches = True
+        
+        # Strategy 2: Extract from underlyingName field
+        if not ticker_matches:
+            underlying2 = extract_symbol(dr.get("underlyingName") or "")
+            if underlying2 and underlying2 == ticker_upper:
+                ticker_matches = True
+        
+        # Strategy 3: Direct match
+        if not ticker_matches:
+            underlying_direct = str(dr.get("underlying") or dr.get("underlyingName") or "").upper().strip()
+            if underlying_direct == ticker_upper:
+                ticker_matches = True
+        
+        if not ticker_matches:
+            continue
+        
+        # If ticker matches, check exchange
+        dr_exchange = dr.get("underlyingExchange") or dr.get("exchange") or ""
+        if is_exchange_match(exchange, dr_exchange):
+            matching_drs.append(dr)
+    
+    if not matching_drs:
+        return {"mostPopularDR": None, "highSensitivityDR": None}
+    
+    # Calculate Most Popular DR (highest volume)
+    most_popular_dr = None
+    max_volume = -1
+    for dr in matching_drs:
+        vol = float(dr.get("totalVolume") or 0)
+        if vol > max_volume:
+            max_volume = vol
+            most_popular_dr = {
+                "symbol": dr.get("symbol") or "",
+                "volume": vol
+            }
+    
+    # If no DR with volume found, use first matching DR
+    if not most_popular_dr and matching_drs:
+        most_popular_dr = {
+            "symbol": matching_drs[0].get("symbol") or "",
+            "volume": 0
+        }
+    
+    # Calculate High Sensitivity DR (lowest bid > 0)
+    high_sensitivity_dr = None
+    min_bid = float('inf')
+    for dr in matching_drs:
+        bid = float(dr.get("bidPrice") or 0)
+        if bid > 0 and bid < min_bid:
+            min_bid = bid
+            high_sensitivity_dr = {
+                "symbol": dr.get("symbol") or "",
+                "bid": bid
+            }
+    
+    # If still no DR with bid, use first matching DR
+    if not high_sensitivity_dr and matching_drs:
+        high_sensitivity_dr = {
+            "symbol": matching_drs[0].get("symbol") or "",
+            "bid": 0
+        }
+    
+    return {
+        "mostPopularDR": most_popular_dr,
+        "highSensitivityDR": high_sensitivity_dr
+    }
+
 def get_market_code(country_code: str):
     mapping = {
         "US": "america", "TH": "thailand", "HK": "hongkong", "JP": "japan",
@@ -135,8 +279,8 @@ async def fetch_tradingview_earnings(market_code: str, start_ts: int, end_ts: in
     
     return all_data
 
-# ✅ แก้ไขให้รับ valid_tickers และ ticker_mapping เพื่อกรองเอาเฉพาะหุ้นที่มี DR
-def map_tv_data_to_object(raw_data, valid_tickers: set = None, ticker_mapping: dict = None):
+# ✅ แก้ไขให้รับ valid_tickers, ticker_mapping และ dr_rows เพื่อคำนวณ DR metrics
+def map_tv_data_to_object(raw_data, valid_tickers: set = None, ticker_mapping: dict = None, dr_rows: list = None):
     mapped_list = []
     seen = set()
     current_ts = datetime.now(timezone.utc).timestamp()
@@ -155,69 +299,81 @@ def map_tv_data_to_object(raw_data, valid_tickers: set = None, ticker_mapping: d
         # ✅ กำหนดค่าเริ่มต้นสำหรับ matched_underlying (ใช้เมื่อ DR Filter ปิด)
         matched_underlying = None
         
-        # ✅ ตัวกรอง: ถ้ามี Whitelist ให้ตรวจสอบทั้ง logoid และ ticker_name
-        # ใช้ ticker_mapping เพื่อ match ticker จาก TradingView กับ underlying code
-        if valid_tickers is not None:
+        # ✅ ตัวกรอง: ถ้ามี Whitelist ให้ตรวจสอบทั้ง ticker และ exchange
+        # ต้องตรวจสอบว่า ticker และ exchange match กับ DR list หรือไม่
+        if valid_tickers is not None and dr_rows is not None:
             matched = False
             matched_ticker = None
             matched_underlying = None
             
+            # Get exchange from earnings data
+            earnings_exchange = obj.get("exchange", "")
+            
+            # Helper function to check if ticker+exchange match any DR
+            def check_ticker_exchange_match(ticker_to_check):
+                if not ticker_to_check:
+                    return None
+                ticker_upper = str(ticker_to_check).upper().strip()
+                
+                # Search in DR rows for matching ticker AND exchange
+                for dr in dr_rows:
+                    # Extract ticker from DR
+                    dr_ticker = None
+                    underlying_name = dr.get("underlyingName") or ""
+                    match = re.search(r'\(([A-Z0-9.\-_]+)\)$', underlying_name)
+                    if match:
+                        dr_ticker = match.group(1)
+                    else:
+                        dr_ticker = dr.get("underlying")
+                    
+                    if not dr_ticker:
+                        continue
+                    
+                    dr_ticker_upper = str(dr_ticker).upper().strip()
+                    
+                    # Check if ticker matches
+                    if ticker_upper != dr_ticker_upper:
+                        continue
+                    
+                    # Check if exchange matches
+                    dr_exchange = dr.get("underlyingExchange") or dr.get("exchange") or ""
+                    if is_exchange_match(earnings_exchange, dr_exchange):
+                        return dr_ticker_upper
+                
+                return None
+            
             # ลำดับการตรวจสอบ:
-            # 1) ตรวจสอบ ticker_name ใน valid_tickers โดยตรง
-            if ticker_name in valid_tickers:
+            # 1) ตรวจสอบ ticker_name
+            matched_underlying = check_ticker_exchange_match(ticker_name)
+            if matched_underlying:
                 matched = True
                 matched_ticker = ticker_name
-                matched_underlying = ticker_name
-            # 2) ตรวจสอบ ticker_name ใน ticker_mapping (ถ้ามี)
-            elif ticker_mapping and ticker_name in ticker_mapping:
-                matched_underlying = ticker_mapping[ticker_name]
-                if matched_underlying in valid_tickers:
-                    matched = True
-                    matched_ticker = ticker_name
-                    # Debug: แสดง warning ถ้า match กับ underlying code ที่ไม่ตรงกับ ticker_name
-                    if matched_underlying != ticker_name and len(mapped_list) < 10:
-                        print(f"  ⚠️ Warning: ticker_name='{ticker_name}' matched with underlying='{matched_underlying}' (via mapping)")
-            # 3) ตรวจสอบ logoid ใน valid_tickers
-            elif logoid and logoid in valid_tickers:
-                matched = True
-                matched_ticker = logoid
-                matched_underlying = logoid
-            # 4) ตรวจสอบ logoid ใน ticker_mapping (ถ้ามี)
-            elif ticker_mapping and logoid and logoid in ticker_mapping:
-                matched_underlying = ticker_mapping[logoid]
-                if matched_underlying in valid_tickers:
+            # 2) ตรวจสอบ logoid
+            elif logoid:
+                matched_underlying = check_ticker_exchange_match(logoid)
+                if matched_underlying:
                     matched = True
                     matched_ticker = logoid
-            # 5) ลอง extract ticker symbol จาก name (ถ้า format เป็น "TICKER" หรือ "TICKER - ...")
-            # 6) ลอง extract ticker symbol จาก description (ถ้ามี)
+            # 3) ลอง extract ticker symbol จาก name
             if not matched:
-                # ลอง extract ticker symbol จาก name (เอาคำแรก หรือส่วนก่อน "-" หรือ ",")
                 name_parts = re.split(r'[-,\s]+', ticker_name)
                 for part in name_parts:
-                    if part and part in valid_tickers:
-                        matched = True
-                        matched_ticker = part
-                        matched_underlying = part
-                        break
-                    elif ticker_mapping and part and part in ticker_mapping:
-                        matched_underlying = ticker_mapping[part]
-                        if matched_underlying in valid_tickers:
+                    if part:
+                        matched_underlying = check_ticker_exchange_match(part)
+                        if matched_underlying:
                             matched = True
                             matched_ticker = part
                             break
-                
-                # ⚠️ ไม่ใช้ description เพื่อ match เพราะอาจจะ match ผิด (เช่น "JP Morgan" -> "JP" ซึ่งอาจ match กับ underlying code อื่น)
-                # ถ้าต้องการใช้ description ต้องระวังมาก เพราะอาจ match ผิดได้
             
             if not matched:
                 # Debug: แสดง ticker ที่ไม่ match (แสดงแค่ 10 ตัวแรกเพื่อไม่ให้ log เยอะเกินไป)
                 if len([x for x in mapped_list if not hasattr(x, '_debug_shown')]) < 10:
-                    print(f"  ⚠️ Filtered out: logoid='{logoid}', name='{ticker_name}' (not in {len(valid_tickers)} DR tickers)")
+                    print(f"  ⚠️ Filtered out: logoid='{logoid}', name='{ticker_name}', exchange='{earnings_exchange}' (not in DR list or exchange mismatch)")
                 continue  # ไม่พบใน whitelist ให้ข้าม
             else:
                 # Debug: แสดง ticker ที่ match ได้ (แสดงแค่ 10 ตัวแรก)
                 if len(mapped_list) < 10:
-                    print(f"  ✅ Matched: logoid='{logoid}', name='{ticker_name}' -> underlying='{matched_underlying}'")
+                    print(f"  ✅ Matched: logoid='{logoid}', name='{ticker_name}', exchange='{earnings_exchange}' -> underlying='{matched_underlying}'")
         
         event_date = obj["earnings_release_next_date"] or obj["earnings_release_date"]
         
@@ -244,6 +400,11 @@ def map_tv_data_to_object(raw_data, valid_tickers: set = None, ticker_mapping: d
         # ถ้าไม่มี matched_underlying ให้ใช้ ticker_name (กรณีที่ไม่ได้ filter)
         final_ticker = matched_underlying if matched_underlying else ticker_name
         
+        # Calculate DR metrics if dr_rows is provided
+        dr_metrics = {"mostPopularDR": None, "highSensitivityDR": None}
+        if dr_rows:
+            dr_metrics = calculate_dr_metrics(final_ticker, obj["exchange"], dr_rows)
+        
         mapped_list.append({
             "ticker": final_ticker,
             "company": obj["description"],
@@ -257,7 +418,9 @@ def map_tv_data_to_object(raw_data, valid_tickers: set = None, ticker_mapping: d
             "date": event_date, 
             "period": obj["earnings_release_next_calendar_date"],
             "currency": obj["currency"],
-            "exchange": obj["exchange"]
+            "exchange": obj["exchange"],
+            "mostPopularDR": dr_metrics["mostPopularDR"],
+            "highSensitivityDR": dr_metrics["highSensitivityDR"]
         })
     return mapped_list
 
@@ -341,6 +504,7 @@ async def background_updater():
             # ✅ ปรับปรุง Logic การดึงรายชื่อหุ้นที่มี DR ตามค่า ENABLE_DR_FILTER
             valid_dr_tickers = None
             ticker_mapping = {}  # Mapping table: {ticker_from_tv: underlying_code}
+            dr_rows = []  # Store DR rows for DR metrics calculation
             if ENABLE_DR_FILTER:
                 valid_dr_tickers = set()
                 skipped_count = 0
@@ -566,11 +730,11 @@ async def background_updater():
                     else:
                         print(f"⚠️ [Background] 2653 NOT found in raw_data")
                 
-                # ✅ ส่ง valid_dr_tickers และ ticker_mapping ไปใช้กรองข้อมูล (ถ้าเป็น None จะไม่กรอง)
+                # ✅ ส่ง valid_dr_tickers, ticker_mapping และ dr_rows ไปใช้กรองข้อมูล
                 if valid_dr_tickers:
                     print(f"  🔍 [Background] [{m}] Filtering with {len(valid_dr_tickers)} DR tickers. Sample: {list(valid_dr_tickers)[:5]}")
                     print(f"  📋 [Background] [{m}] Ticker mapping table has {len(ticker_mapping)} entries")
-                stock_list = map_tv_data_to_object(raw_data, valid_dr_tickers, ticker_mapping)
+                stock_list = map_tv_data_to_object(raw_data, valid_dr_tickers, ticker_mapping, dr_rows)
                 print(f"✅ [Background] [{m}] Mapped to {len(stock_list)} stocks (from {len(raw_data)} raw items)")
                 
                 # ตรวจสอบหุ้น 2653 ใน stock_list สำหรับตลาดญี่ปุ่น
@@ -748,6 +912,7 @@ async def force_refresh_earnings():
         # ✅ ปรับปรุง Logic การดึงรายชื่อหุ้นที่มี DR ตามค่า ENABLE_DR_FILTER
         valid_dr_tickers = None
         ticker_mapping = {}  # Mapping table: {ticker_from_tv: underlying_code}
+        dr_rows = []  # Store DR rows for DR metrics calculation
         if ENABLE_DR_FILTER:
             valid_dr_tickers = set()
             skipped_count = 0
@@ -900,7 +1065,7 @@ async def force_refresh_earnings():
             raw_data = await fetch_tradingview_earnings(m, s_ts, e_ts)
             print(f"📊 [Manual Refresh] [{m}] Received {len(raw_data)} raw items from TradingView")
             
-            stock_list = map_tv_data_to_object(raw_data, valid_dr_tickers, ticker_mapping)
+            stock_list = map_tv_data_to_object(raw_data, valid_dr_tickers, ticker_mapping, dr_rows)
             print(f"✅ [Manual Refresh] [{m}] Mapped to {len(stock_list)} stocks")
             
             stock_list.sort(key=lambda x: x["date"] if x["date"] else float('inf'))
