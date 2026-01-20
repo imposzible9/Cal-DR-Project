@@ -411,7 +411,7 @@ export default function DRList() {
           <button
             type="button"
             onClick={() => setDrFilter((prev) => (prev === "watchlist" ? "all" : "watchlist"))}
-            className={`flex items-center gap-2 rounded-xl px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium shadow-sm border transition-colors justify-center shrink-0 ${drFilter === "watchlist"
+            className={`flex items-center gap-2 rounded-xl px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium shadow-sm border transition-colors justify-center shrink-0 h-[37.33px] ${drFilter === "watchlist"
               ? "bg-[#0B102A] border-[#0B102A] text-white"
               : "bg-white border-gray-200 text-gray-700 hover:bg-gray-50"
               }`}
@@ -430,7 +430,7 @@ export default function DRList() {
               placeholder="Search DR..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="bg-white pl-3 sm:pl-4 pr-10 py-2 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#0B102A] focus:border-transparent w-full lg:w-64 text-xs sm:text-sm shadow-sm"
+              className="bg-white pl-3 sm:pl-4 pr-10 py-2 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#0B102A] focus:border-transparent w-full lg:w-64 text-xs sm:text-sm shadow-sm h-[37.33px]"
             />
             <i
               className="bi bi-search absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400"
@@ -440,7 +440,7 @@ export default function DRList() {
           <div className="shrink-0">
             <button
               onClick={() => setShowSettings(true)}
-              className="flex items-center gap-1 sm:gap-2 bg-white text-gray-700 border border-gray-200 hover:bg-gray-50 rounded-xl px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium shadow-sm transition-all"
+              className="flex items-center gap-1 sm:gap-2 bg-white text-gray-700 border border-gray-200 hover:bg-gray-50 rounded-xl px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium shadow-sm transition-all h-[37.33px]"
             >
               <span className="hidden sm:inline">Customize</span>
               <i className="bi bi-sliders2" style={{ '--bi-stroke-width': '1.8px' }}></i>
@@ -1218,7 +1218,7 @@ export default function DRList() {
         </div>
       )}
 
-      <style jsx>{`
+      <style>{`
         @keyframes tooltipFadeIn {
           from {
             opacity: 0;

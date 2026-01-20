@@ -1,0 +1,18 @@
+# FastAPI และ Server
+fastapi>=0.104.1
+uvicorn[standard]>=0.24.0
+
+# HTTP Client
+httpx>=0.25.1
+
+# Environment Variables
+python-dotenv>=1.0.0
+
+# CORS Middleware (มากับ FastAPI แล้ว แต่ระบุไว้เผื่อ)
+# fastapi แถมมาให้
+
+# Optional: ถ้ามีการใช้ async features เพิ่มเติม
+anyio>=4.0.0
+
+# Optional: ถ้ามี SQLite operations
+# sqlite3 มาพร้อม Python แล้ว ไม่ต้องติดตั้ง
