@@ -263,11 +263,12 @@ def init_database():
             ON rating_accuracy(ticker, timestamp DESC)
         """)
 
-        # --- User Behavior Tracking Table ---
+        # --- 1. User Behavior Tracking Table (Detailed Logs) ---
         cur.execute("""
             CREATE TABLE IF NOT EXISTS user_behavior (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id TEXT NOT NULL,
+                user_id TEXT, -- Stores IP Address as requested
                 event_type TEXT NOT NULL,
                 event_data TEXT,
                 page_path TEXT,
@@ -275,6 +276,27 @@ def init_database():
                 user_agent TEXT,
                 ip_address TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # --- 2. Visitor Stats Table (Unique IP Counting) ---
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS visitor_stats (
+                ip_address TEXT PRIMARY KEY,
+                first_seen TEXT,
+                last_seen TEXT,
+                total_visits INTEGER DEFAULT 0
+            )
+        """)
+
+        # --- 3. User Page Analytics Table (Page visits per User/IP) ---
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS user_page_analytics (
+                ip_address TEXT,
+                page_name TEXT,
+                visit_count INTEGER DEFAULT 0,
+                last_visit TEXT,
+                PRIMARY KEY (ip_address, page_name)
             )
         """)
         
@@ -3171,6 +3193,7 @@ def ratings_from_dr_api():
 
 class TrackingEvent(BaseModel):
     session_id: str
+    user_id: Optional[str] = None
     event_type: str
     event_data: Optional[Dict[str, Any]] = None
     page_path: Optional[str] = None
@@ -3184,6 +3207,7 @@ async def track_event(event: TrackingEvent, request: Request):
     บันทึก tracking event จาก frontend
     รองรับ event types: page_view, stock_view, search, click, session_start, session_end, filter, calculation
     """
+    print(f"🔍 [TRACK] Processing {event.event_type} from {request.client.host if request.client else 'Unknown'}")
     try:
         con = sqlite3.connect(DB_FILE)
         cur = con.cursor()
@@ -3191,21 +3215,119 @@ async def track_event(event: TrackingEvent, request: Request):
         # Enable WAL mode
         cur.execute("PRAGMA journal_mode=WAL")
         cur.execute("PRAGMA busy_timeout=30000")
-        
+
+        # ตรวจสอบและเพิ่ม column user_id ถ้ายังไม่มี (Migration)
+        try:
+            cur.execute("PRAGMA table_info(user_behavior)")
+            columns = [row[1] for row in cur.fetchall()]
+            if "user_id" not in columns:
+                print("📦 Adding 'user_id' column to user_behavior table...")
+                cur.execute("ALTER TABLE user_behavior ADD COLUMN user_id TEXT")
+        except Exception as e:
+            print(f"⚠️ Failed to migrate user_behavior: {e}")
+
         # Get client IP address
         client_ip = request.client.host if request.client else None
         
+        # ✅ Use IP Address as user_id (Requested by user)
+        # นี้จะทำให้การนับ user_id = การนับ IP Address
+        final_user_id = client_ip
+
         # Convert event_data to JSON string
         event_data_json = json.dumps(event.event_data, ensure_ascii=False) if event.event_data else None
         
         # Use provided timestamp or current time
         timestamp_str = event.timestamp or datetime.now(ZoneInfo("Asia/Bangkok")).isoformat()
         
+        # ====================================================================================
+        # 🟢 1. UNIQUE VISITORS (Count unique IPs)
+        # ====================================================================================
+        # Table: visitor_stats (ip_address, first_seen, last_seen, total_visits)
+        # ------------------------------------------------------------------------------------
+        try:
+            # Ensure table exists
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS visitor_stats (
+                    ip_address TEXT PRIMARY KEY,
+                    first_seen TEXT,
+                    last_seen TEXT,
+                    total_visits INTEGER DEFAULT 0
+                )
+            """)
+            
+            # Upsert visitor data
+            cur.execute("SELECT ip_address FROM visitor_stats WHERE ip_address = ?", (client_ip,))
+            existing_visitor = cur.fetchone()
+            
+            current_time = datetime.now(ZoneInfo("Asia/Bangkok")).isoformat()
+            
+            if existing_visitor:
+                cur.execute("""
+                    UPDATE visitor_stats 
+                    SET last_seen = ?, total_visits = total_visits + 1
+                    WHERE ip_address = ?
+                """, (current_time, client_ip))
+            else:
+                cur.execute("""
+                    INSERT INTO visitor_stats (ip_address, first_seen, last_seen, total_visits)
+                    VALUES (?, ?, ?, 1)
+                """, (client_ip, current_time, current_time))
+                
+        except Exception as e:
+            print(f"⚠️ Failed to update visitor_stats: {e}")
+
+        # ====================================================================================
+        # 🟢 2. USER PAGE ANALYTICS (User X viewed Page Y N times)
+        # ====================================================================================
+        # Table: user_page_analytics (ip_address, page_name, visit_count, last_visit)
+        # ------------------------------------------------------------------------------------
+        try:
+            if event.event_type == 'page_view':
+                # Ensure table exists
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS user_page_analytics (
+                        ip_address TEXT,
+                        page_name TEXT,
+                        visit_count INTEGER DEFAULT 0,
+                        last_visit TEXT,
+                        PRIMARY KEY (ip_address, page_name)
+                    )
+                """)
+                
+                # Determine readable page name
+                page_name_raw = event.event_data.get('page_name') if event.event_data else None
+                page_path_raw = event.page_path
+                
+                # Logic to determine "Page Name" (DR List, Cal DR, Suggestion, etc.)
+                final_page_name = page_name_raw or page_path_raw or "Unknown Page"
+                if page_path_raw == "/drlist": final_page_name = "DR List"
+                elif page_path_raw == "/caldr": final_page_name = "Cal DR" 
+                elif page_path_raw == "/suggestion": final_page_name = "Suggestion"
+                elif page_path_raw == "/calendar": final_page_name = "Calendar"
+                
+                # Upsert page visit data
+                cur.execute("""
+                    INSERT INTO user_page_analytics (ip_address, page_name, visit_count, last_visit)
+                    VALUES (?, ?, 1, ?)
+                    ON CONFLICT(ip_address, page_name) DO UPDATE SET
+                    visit_count = visit_count + 1,
+                    last_visit = excluded.last_visit
+                """, (client_ip, final_page_name, current_time))
+                
+        except Exception as e:
+            print(f"⚠️ Failed to update user_page_analytics: {e}")
+
+        # ====================================================================================
+        # 🟢 3. DETAILED LOGS (Log everything)
+        # ====================================================================================
+        # Table: user_behavior (Already exists)
+        # ------------------------------------------------------------------------------------
         cur.execute("""
-            INSERT INTO user_behavior (session_id, event_type, event_data, page_path, timestamp, user_agent, ip_address)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO user_behavior (session_id, user_id, event_type, event_data, page_path, timestamp, user_agent, ip_address)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             event.session_id,
+            final_user_id, # บันทึก IP ลงใน user_id
             event.event_type,
             event_data_json,
             event.page_path,
@@ -3264,6 +3386,14 @@ async def get_analytics_summary(
             WHERE timestamp >= ?
         """, (cutoff_date,))
         total_events = cur.fetchone()["total_events"]
+
+        # 2.5 Total unique users (based on IP)
+        cur.execute("""
+            SELECT COUNT(DISTINCT ip_address) as total_users
+            FROM user_behavior
+            WHERE timestamp >= ?
+        """, (cutoff_date,))
+        total_users = cur.fetchone()["total_users"]
         
         # 3. Page views breakdown
         cur.execute("""
@@ -3336,6 +3466,7 @@ async def get_analytics_summary(
             "period_days": days,
             "summary": {
                 "total_sessions": total_sessions,
+                "total_users": total_users,
                 "total_events": total_events,
                 "page_views": page_views,
                 "top_stocks": top_stocks,

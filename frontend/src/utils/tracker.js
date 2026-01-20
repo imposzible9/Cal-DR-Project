@@ -3,11 +3,11 @@
  * ระบบติดตามพฤติกรรมผู้ใช้งาน - พร้อมระบบนับจำนวนครั้ง
  */
 
-const API_BASE_URL = 'http://localhost:8000';
+const API_BASE_URL = 'http://localhost:8335';
 
 // ==================== DEBUG MODE ====================
 // เปิด DEBUG_MODE = true เพื่อทดสอบระบบโดยไม่เก็บ database
-const DEBUG_MODE = true;
+const DEBUG_MODE = false;
 // ===================================================
 
 // ==================== STATISTICS STORAGE ====================
@@ -45,7 +45,19 @@ const saveStats = (stats) => {
     }
 };
 
-// ==================== SESSION ID ====================
+// ==================== USER ID & SESSION ID ====================
+// User ID: Persistent across sessions (stored in localStorage)
+const getUserId = () => {
+    let userId = localStorage.getItem('tracker_user_id');
+    if (!userId) {
+        // Generate a random user ID (simple UUID-like)
+        userId = `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        localStorage.setItem('tracker_user_id', userId);
+    }
+    return userId;
+};
+
+// Session ID: Ephemeral (stored in sessionStorage)
 const getSessionId = () => {
     let sessionId = sessionStorage.getItem('tracker_session_id');
     if (!sessionId) {
@@ -60,6 +72,7 @@ const getSessionId = () => {
 const sendTrackingEvent = async (eventType, eventData = {}, pagePath = window.location.pathname) => {
     const payload = {
         session_id: getSessionId(),
+        user_id: getUserId(),
         event_type: eventType,
         event_data: eventData,
         page_path: pagePath,
@@ -334,6 +347,14 @@ export const initTracker = () => {
     }
 };
 
+/**
+ * Track user starring/unstarring a stock
+ */
+export const trackFavorite = (ticker, action) => {
+    // action: 'add' or 'remove'
+    sendTrackingEvent('favorite', { ticker, action });
+};
+
 export default {
     trackPageView,
     trackStockView,
@@ -343,6 +364,7 @@ export default {
     trackSessionEnd,
     trackFilter,
     trackCalculation,
+    trackFavorite,
     initTracker,
     showStats,
     clearStats
