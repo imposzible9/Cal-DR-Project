@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState, useRef } from "react";
 
 // const API_BASE = "http://172.17.1.85:8333";
-const API_BASE = "https://api.ideatrade1.com";
+const API_BASE = "https://api.ideatrade1.com";       // DR snapshot
+const CALC_API_BASE = "http://localhost:8002";      // DR real-time calc
 
 const EXCHANGE_CURRENCY_MAP = {
   "The Nasdaq Global Select Market": "USD",
@@ -19,6 +20,7 @@ const EXCHANGE_CURRENCY_MAP = {
   "Shenzhen Stock Exchange": "CNY",
   "Hochiminh Stock Exchange": "VND",
 };
+
 
 // Helper functions for table formatting
 const formatNum = (n) => {
@@ -49,6 +51,15 @@ const extractSymbol = (str) => {
   return match ? match[1] : str;
 };
 
+const fxDecimalsByCcy = (ccy) => {
+  if (!ccy) return 2;
+  const u = String(ccy).toUpperCase();
+  if (u === "JPY" || u === "CNY" || u === "TWD" || u === "SGD" || u === "DKK") return 4;
+  if (u === "VND") return 6;
+  return 2; // USD/HKD/EUR ปกติ
+};
+
+
 export default function DRCal() {
   // ================== state สำหรับ DR & การค้นหา ==================
   const [allDR, setAllDR] = useState([]);
@@ -64,6 +75,43 @@ export default function DRCal() {
   // ================== state สำหรับการคำนวณ ==================
   const [underlyingValue, setUnderlyingValue] = useState("");
   const [fxTHBPerUnderlying, setFxTHBPerUnderlying] = useState("");
+  const [underlyingCurrency, setUnderlyingCurrency] = useState("USD");
+
+  const [loadingRealtime, setLoadingRealtime] = useState(false);
+
+  const [defaultDR, setDefaultDR] = useState(null);
+
+  const fetchRealtimeUnderlying = async (drSymbol) => {
+    try {
+      setLoadingRealtime(true);
+
+      const res = await fetch(`${CALC_API_BASE}/api/calc/dr/${drSymbol}`);
+      if (!res.ok) throw new Error("Failed realtime calc");
+
+      const data = await res.json();
+
+      const ccy = String(data.currency ?? "USD");
+      setUnderlyingCurrency(ccy);
+
+      setUnderlyingValue(
+        data.underlying_price != null
+          ? Number(data.underlying_price).toFixed(2)
+          : ""
+      );
+
+      const dec = fxDecimalsByCcy(ccy);
+      setFxTHBPerUnderlying(
+        data.fx_rate != null
+          ? Number(data.fx_rate).toFixed(dec)
+          : ""
+      );
+    } catch (err) {
+      console.error("Realtime calc error:", err);
+    } finally {
+      setLoadingRealtime(false);
+    }
+  };
+
 
   const tableRef = useRef(null);
   const SPREAD_PCT = 0.002; 
@@ -117,8 +165,14 @@ export default function DRCal() {
         }
 
         if (data.rows.length > 0) {
-          setSelectedDR(data.rows[0]);
-          setSearchText(data.rows[0].symbol);
+          setAllDR(data.rows || []);
+
+          const first = data.rows[0];
+          setDefaultDR(first);              // ✅ เก็บ default
+          setSelectedDR(first);
+          setSearchText(first.symbol);
+
+          fetchRealtimeUnderlying(first.symbol); // ✅ ดึง realtime
         }
       } catch (err) {
         console.error(err);
@@ -146,10 +200,10 @@ export default function DRCal() {
       minimumFractionDigits: 2,
     }).format(Number(n || 0))}%`;
 
-  const underlyingCurrency = useMemo(() => {
+  /*const underlyingCurrency = useMemo(() => {
     if (!selectedDR) return "";
     return EXCHANGE_CURRENCY_MAP[selectedDR.underlyingExchange] || "";
-  }, [selectedDR]);
+  }, [selectedDR]);*/
 
   // ================== ratio ==================
   const ratioDR = useMemo(() => {
@@ -192,9 +246,21 @@ export default function DRCal() {
     setSearchText(dr.symbol);
     setShowSuggest(false);
     setHighlightIndex(-1);
-    setUnderlyingValue("");
-    setFxTHBPerUnderlying("");
+
+    // ไม่ต้อง clear
+    setUnderlyingCurrency(
+      EXCHANGE_CURRENCY_MAP[dr.underlyingExchange] || "USD"
+    );
+
+    // fetch realtime
+    fetchRealtimeUnderlying(dr.symbol);
+
+    setUnderlyingCurrency(EXCHANGE_CURRENCY_MAP[dr.underlyingExchange] || "USD"); // ✅ fallback ระหว่างรอ realtime
+
+    // 🔥 ดึง realtime
+    fetchRealtimeUnderlying(dr.symbol);
   };
+
 
   const handleSearchChange = (e) => {
     setSearchText(e.target.value.toUpperCase());
@@ -227,8 +293,19 @@ export default function DRCal() {
   };
 
   const onReset = () => {
-    setUnderlyingValue("");
-    setFxTHBPerUnderlying("");
+    if (!defaultDR) return;
+
+    setSelectedDR(defaultDR);
+    setSearchText(defaultDR.symbol);
+    setShowSuggest(false);
+    setHighlightIndex(-1);
+
+    setUnderlyingCurrency(
+      EXCHANGE_CURRENCY_MAP[defaultDR.underlyingExchange] || "USD"
+    );
+
+    // ดึง realtime ใหม่ของ default
+    fetchRealtimeUnderlying(defaultDR.symbol);
   };
 
   const SortIndicator = ({ colKey }) => {
@@ -480,14 +557,16 @@ export default function DRCal() {
                   <input
                     type="text"
                     autoComplete="off"
-                    placeholder="Underlying Price"
                     value={underlyingValue}
-                    onChange={(e) => setUnderlyingValue(e.target.value.replace(/[^0-9.]/g, ""))}
+                    readOnly
+                    disabled={loadingRealtime}
                     style={{ WebkitTextFillColor: "white" }}
-                    className="flex-1 h-full bg-transparent text-white placeholder-[#9A9A9A] px-4 focus:outline-none"
+                    className={`flex-1 h-full bg-transparent text-white placeholder-[#9A9A9A] px-4 focus:outline-none ${loadingRealtime ? "opacity-50 cursor-not-allowed" : ""}`}
                   />
                   <div className="w-[1px] h-[30px] bg-[#9A9A9A]"></div>
-                  <div className="w-[100px] flex justify-center text-white font-bold text-[13px]">{underlyingCurrency || "USD"}</div>
+                  <div className="w-[100px] flex justify-center text-white font-bold text-[13px]">
+                    {underlyingCurrency || "USD"}
+                  </div>
                 </div>
               </div>
 
@@ -497,16 +576,21 @@ export default function DRCal() {
                   <input
                     type="text"
                     autoComplete="off"
-                    placeholder="Exchange Rate"
                     value={fxTHBPerUnderlying}
-                    onChange={(e) => setFxTHBPerUnderlying(e.target.value.replace(/[^0-9.]/g, ""))}
+                    readOnly
+                    disabled={loadingRealtime}
                     style={{ WebkitTextFillColor: "white" }}
-                    className="flex-1 h-full bg-transparent text-white placeholder-[#9A9A9A] px-4 focus:outline-none"
+                    className={`flex-1 h-full bg-transparent text-white placeholder-[#9A9A9A] px-4 focus:outline-none ${loadingRealtime ? "opacity-50 cursor-not-allowed" : ""}`}
                   />
                   <div className="w-[1px] h-[30px] bg-[#9A9A9A]"></div>
-                  <div className="w-[100px] flex justify-center text-white font-bold text-[13px]">{underlyingCurrency || "USD"}/THB</div>
+                  <div className="w-[100px] flex justify-center text-white font-bold text-[13px]">{"THB/" + (underlyingCurrency || "USD")}</div>
                 </div>
               </div>
+
+              {loadingRealtime && (
+                <span className="text-xs text-blue-300 ml-2">Calculating fair value…</span>
+              )}
+
 
               <div className="flex justify-center gap-2 mt-4 w-full">
                 <button onClick={onReset} className="w-[139px] h-[38px] bg-white rounded-[8px] flex justify-center items-center gap-2 text-black font-bold text-[12px] hover:bg-gray-200 transition-colors">Clear</button>
