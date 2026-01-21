@@ -296,10 +296,10 @@ const clearSearch = () => {
 
 return (
   <div className="min-h-screen w-full bg-[#F5F5F5] flex justify-center">
-    <div className="w-full max-w-[1248px] px-4 md:px-8 flex flex-col h-full py-10">
+    <div className="w-full max-w-[1248px] flex flex-col h-full py-10">
       
       {/* Header Section */}
-      <div className="flex flex-col md:flex-row md:items-start justify-between gap-6 mb-8">
+      <div className="flex flex-col md:flex-row md:items-start justify-between gap-6 mb-8 px-4 md:px-0">
         <div>
           <h1 className="text-3xl font-bold mb-2 text-[#0B102A]">News</h1>
           <p className="text-[#6B6B6B] text-sm">Latest market updates, earnings reports, and insights for Underlying Assets</p>
@@ -328,7 +328,7 @@ return (
         </div>
 
         {/* Main Content */}
-        <div className="flex-1 pb-10">
+        <div className="flex-1 pb-10 px-4 md:px-0">
           
           {selected ? (
             /* Search Result View */
