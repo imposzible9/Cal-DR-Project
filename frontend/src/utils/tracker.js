@@ -69,7 +69,25 @@ const getSessionId = () => {
 
 // ==================== TRACKING FUNCTIONS ====================
 
-const sendTrackingEvent = async (eventType, eventData = {}, pagePath = window.location.pathname) => {
+// Normalize page path - extract the last meaningful path segment
+const normalizePagePath = (path) => {
+    if (!path || path === '/') return '/home';
+
+    // Remove trailing slash
+    path = path.replace(/\/$/, '');
+
+    // Split by / and get the last non-empty segment
+    const segments = path.split('/').filter(s => s);
+
+    if (segments.length === 0) return '/home';
+
+    // Get the last segment as the page name
+    const pageName = segments[segments.length - 1];
+
+    return '/' + pageName;
+};
+
+const sendTrackingEvent = async (eventType, eventData = {}, pagePath = normalizePagePath(window.location.pathname)) => {
     const payload = {
         session_id: getSessionId(),
         user_id: getUserId(),
@@ -215,42 +233,64 @@ export const trackSessionEnd = () => {
 
     const payload = {
         session_id: getSessionId(),
+        user_id: getUserId(),
         event_type: 'session_end',
         event_data: { duration_ms: duration },
-        page_path: window.location.pathname,
+        page_path: normalizePagePath(window.location.pathname),
         timestamp: new Date().toISOString(),
         user_agent: navigator.userAgent
     };
 
-    navigator.sendBeacon(`${API_BASE_URL}/api/track`, JSON.stringify(payload));
+    const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+    navigator.sendBeacon(`${API_BASE_URL}/api/track`, blob);
 };
 
+// ... existing code ...
 /**
  * Track การเลือก filter
  */
 export const trackFilter = (filterType, filterValue) => {
-    const stats = getStats();
-    const key = `${filterType}:${filterValue}`;
-    stats.filters[key] = (stats.filters[key] || 0) + 1;
-    saveStats(stats);
-
-    if (DEBUG_MODE) {
-        console.log(
-            `%c🎛️ FILTER`,
-            'background: #607D8B; color: white; padding: 2px 8px; border-radius: 4px; font-weight: bold;',
-            `${filterType} = ${filterValue} (${stats.filters[key]} ครั้ง)`
-        );
-    }
-
     sendTrackingEvent('filter', { filter_type: filterType, filter_value: filterValue });
 };
 
+
 /**
- * Track การคำนวณ DR
+ * Track การเลือก DR ในหน้า CalDR
  */
-export const trackCalculation = (calculationData) => {
-    sendTrackingEvent('calculation', calculationData);
+export const trackDRSelection = (drSymbol) => {
+    if (!drSymbol) return;
+
+    if (DEBUG_MODE) {
+        console.log(
+            `%c🎯 DR SELECTION`,
+            'background: #E91E63; color: white; padding: 2px 8px; border-radius: 4px; font-weight: bold;',
+            `${drSymbol}`
+        );
+    }
+    sendTrackingEvent('dr_selection', { dr_symbol: drSymbol });
 };
+
+/**
+ * Track ผลการคำนวณในหน้า CalDR
+ */
+export const trackCalculation = (drSymbol, underlyingPrice, fxRate, fairBid, fairAsk) => {
+    if (DEBUG_MODE) {
+        console.log(
+            `%c🧮 CALCULATION`,
+            'background: #673AB7; color: white; padding: 2px 8px; border-radius: 4px; font-weight: bold;',
+            `${drSymbol}: Bid=${fairBid}, Ask=${fairAsk}`
+        );
+    }
+
+    sendTrackingEvent('calculation', {
+        dr_symbol: drSymbol,
+        underlying_price: underlyingPrice,
+        fx_rate: fxRate,
+        fair_bid: fairBid,
+        fair_ask: fairAsk
+    });
+};
+
 
 // ==================== STATISTICS VIEWER ====================
 

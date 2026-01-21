@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, useTransition, useRef } from "react";
 import swipeImg from "../assets/swipe.png";
+import { trackFilter, trackSearch, trackStockView } from "../utils/tracker";
 
 // const API_URL = "http://172.17.1.85:8333/dr";
 const API_URL = "http://api.ideatrade1.com:8002/dr";
@@ -170,7 +171,14 @@ export default function DRList() {
 
   /* SEARCH DEBOUNCE */
   useEffect(() => {
-    const t = setTimeout(() => setSearch(searchTerm.trim()), 250);
+    const t = setTimeout(() => {
+      const trimmedSearch = searchTerm.trim();
+      setSearch(trimmedSearch);
+      // Track search only when there's meaningful input (at least 2 chars)
+      if (trimmedSearch.length >= 2) {
+        trackSearch(trimmedSearch);
+      }
+    }, 250);
     return () => clearTimeout(t);
   }, [searchTerm]);
 
@@ -357,6 +365,7 @@ export default function DRList() {
                     onClick={() => {
                       setCountryFilter(opt.code);
                       setShowCountryMenu(false);
+                      trackFilter("country", opt.label);
                     }}
                     className={`flex w-full items-center justify-between px-4 py-1.5 text-left text-sm transition-colors ${opt.code === countryFilter ? "bg-[#EEF2FF] text-[#0B102A] font-semibold" : "text-gray-700 hover:bg-gray-50"
                       }`}
@@ -594,7 +603,7 @@ export default function DRList() {
     const rowBg = index % 2 === 0 ? "bg-white" : "bg-[#F5F5F5]";
 
     return (
-      <tr key={row.dr} className={`${rowBg} cursor-pointer`} onClick={() => setDetailRow(row)} style={{ height: "52px" }}>
+      <tr key={row.dr} className={`${rowBg} cursor-pointer`} onClick={() => { setDetailRow(row); trackStockView(row.dr, row.underlying || row.underlyingName); }} style={{ height: "52px" }}>
         {visibleColumns.star && (
           <td className={`py-4 px-1 text-center sticky left-0 ${rowBg}`} style={{ width: "35px", minWidth: "35px", zIndex: 20 }} onClick={(e) => { e.stopPropagation(); toggleWatchlist(row.dr); }}>
             {isStarred(row.dr) ? <i className="bi bi-star-fill text-yellow-500 text-sm"></i> : <i className="bi bi-star text-gray-400 text-sm hover:text-yellow-500"></i>}
@@ -817,10 +826,10 @@ export default function DRList() {
     return (
       <div className="flex gap-4 mb-2 justify-between items-center">
         <div className="flex gap-4 relative">
-          <button className={`pb-1 ${tab === "all" ? "border-b-2 border-black" : ""}`} onClick={() => setTab("all")}>All</button>
+          <button className={`pb-1 ${tab === "all" ? "border-b-2 border-black" : ""}`} onClick={() => { setTab("all"); trackFilter("tab", "All"); }}>All</button>
           <button
             className={`pb-1 relative flex items-center gap-1.5 ${tab === "popular" ? "border-b-2 border-black" : ""}`}
-            onClick={() => setTab("popular")}
+            onClick={() => { setTab("popular"); trackFilter("tab", "Most Popular"); }}
             onMouseEnter={(e) => handleMouseEnter("popular", e)}
             onMouseLeave={handleMouseLeave}
           >
@@ -837,7 +846,7 @@ export default function DRList() {
           </button>
           <button
             className={`pb-1 relative flex items-center gap-1.5 ${tab === "sensitivity" ? "border-b-2 border-black" : ""}`}
-            onClick={() => setTab("sensitivity")}
+            onClick={() => { setTab("sensitivity"); trackFilter("tab", "High Sensitivity"); }}
             onMouseEnter={(e) => handleMouseEnter("sensitivity", e)}
             onMouseLeave={handleMouseLeave}
           >

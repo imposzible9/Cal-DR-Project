@@ -1,4 +1,5 @@
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Request
+from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import httpx
@@ -259,6 +260,79 @@ def init_database():
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_rating_accuracy_ticker_timestamp 
             ON rating_accuracy(ticker, timestamp DESC)
+        """)
+
+        # Check and migrate tracking tables - force recreate to use ip_address schema
+        try:
+            cur.execute("PRAGMA table_info(visitor_stats)")
+            visitor_cols = {row[1] for row in cur.fetchall()}
+            # Force recreate if using old schema (user_id instead of ip_address)
+            if "user_id" in visitor_cols or ("ip_address" not in visitor_cols and len(visitor_cols) > 0):
+                print("[WARN] Old tracking tables schema detected (using user_id). Recreating with ip_address...")
+                cur.execute("DROP TABLE IF EXISTS visitor_stats")
+                cur.execute("DROP TABLE IF EXISTS user_page_analytics")
+                cur.execute("DROP TABLE IF EXISTS user_behavior")
+                print("   -> Dropped old tracking tables")
+        except Exception as e:
+            print(f"[WARN] Error checking tracking tables schema: {e}")
+
+        # Create tracking tables using IP address as primary identifier
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS visitor_stats (
+                ip_address TEXT PRIMARY KEY,
+                visit_count INTEGER DEFAULT 0,
+                last_visit TEXT
+            )
+        """)
+
+        # Check if user_page_analytics has old schema (with total_pages, pages_visited, or last_viewed column)
+        try:
+            cur.execute("PRAGMA table_info(user_page_analytics)")
+            page_cols = {row[1] for row in cur.fetchall()}
+            if "total_pages" in page_cols or "pages_visited" in page_cols or "last_viewed" in page_cols:
+                print("[WARN] Old user_page_analytics schema detected. Recreating...")
+                cur.execute("DROP TABLE IF EXISTS user_page_analytics")
+                print("   -> Dropped old user_page_analytics table")
+        except Exception as e:
+            print(f"[WARN] Error checking user_page_analytics schema: {e}")
+
+        # Page analytics - one row per IP + page combination
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS user_page_analytics (
+                ip_address TEXT,
+                page_path TEXT,
+                view_count INTEGER DEFAULT 0,
+                PRIMARY KEY (ip_address, page_path)
+            )
+        """)
+
+        # User behavior table - stores all tracking events with full details
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS user_behavior (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ip_address TEXT NOT NULL,
+                session_id TEXT,
+                event_type TEXT NOT NULL,
+                event_data TEXT,
+                page_path TEXT,
+                timestamp TEXT NOT NULL,
+                user_agent TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Create indexes for faster queries on user_behavior
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_user_behavior_ip_address 
+            ON user_behavior(ip_address)
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_user_behavior_event_type 
+            ON user_behavior(event_type)
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_user_behavior_timestamp 
+            ON user_behavior(timestamp DESC)
         """)
 
         con.commit()
@@ -3135,5 +3209,251 @@ def ratings_from_dr_api():
             con.close()
         return {"updated_at": updated_at_str, "count": 0, "rows": []}
 
+# --- Tracking API ---
+
+class TrackingEvent(BaseModel):
+    session_id: str
+    user_id: str
+    event_type: str
+    event_data: dict
+    page_path: str
+    timestamp: str
+    user_agent: str
+
+@app.post("/api/track")
+async def track_event(event: TrackingEvent, request: Request):
+    max_retries = 3
+    retry_delay = 0.1  # Start with 100ms
+    
+    for attempt in range(max_retries):
+        con = None
+        try:
+            # Use timeout and WAL mode for better concurrency
+            con = sqlite3.connect(DB_FILE, timeout=10.0)
+            cur = con.cursor()
+            cur.execute("PRAGMA journal_mode=WAL")
+            cur.execute("PRAGMA busy_timeout=10000")  # 10 seconds
+            cur.execute("PRAGMA synchronous=NORMAL")  # Faster writes
+            
+            # Use client IP as the primary identifier
+            client_ip = request.client.host if request.client else "unknown"
+
+            # 1. Insert into user_behavior (detailed event log)
+            cur.execute("""
+                INSERT INTO user_behavior (ip_address, session_id, event_type, event_data, page_path, timestamp, user_agent)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                client_ip,
+                event.session_id,
+                event.event_type,
+                json.dumps(event.event_data),  # Store event_data as JSON string
+                event.page_path,
+                event.timestamp,
+                event.user_agent
+            ))
+
+            # 2. Update visitor_stats (Upsert by IP address)
+            cur.execute("""
+                INSERT INTO visitor_stats (ip_address, visit_count, last_visit)
+                VALUES (?, 1, ?)
+                ON CONFLICT(ip_address) DO UPDATE SET
+                visit_count = visit_count + 1,
+                last_visit = excluded.last_visit
+            """, (client_ip, event.timestamp))
+
+            # 3. If page_view, update user_page_analytics (IP, total_pages, pages_visited with counts)
+            if event.event_type == 'page_view':
+                # Upsert: insert new row or increment view_count
+                cur.execute("""
+                    INSERT INTO user_page_analytics (ip_address, page_path, view_count)
+                    VALUES (?, ?, 1)
+                    ON CONFLICT(ip_address, page_path) DO UPDATE SET
+                    view_count = view_count + 1
+                """, (client_ip, event.page_path))
+
+            con.commit()
+            con.close()
+            
+            print(f"[TRACK] {event.event_type} from {client_ip} at {event.page_path}")
+            return {"status": "success"}
+            
+        except sqlite3.OperationalError as e:
+            if con:
+                con.close()
+            if "locked" in str(e).lower() and attempt < max_retries - 1:
+                # Retry with exponential backoff
+                import asyncio
+                await asyncio.sleep(retry_delay)
+                retry_delay *= 2  # Double the delay each retry
+                print(f"[TRACK] Database locked, retrying... (attempt {attempt + 2}/{max_retries})")
+                continue
+            else:
+                print(f"[ERROR] Track event failed after {attempt + 1} attempts: {e}")
+                return {"status": "error", "message": str(e)}
+                
+        except Exception as e:
+            if con:
+                con.close()
+            print(f"[ERROR] Track event failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return {"status": "error", "message": str(e)}
+    
+    return {"status": "error", "message": "Max retries exceeded"}
+
+@app.get("/api/analytics/summary")
+def get_analytics_summary():
+    try:
+        con = sqlite3.connect(DB_FILE)
+        con.row_factory = sqlite3.Row
+        cur = con.cursor()
+        
+        # Count total events from user_behavior
+        cur.execute("SELECT COUNT(*) FROM user_behavior")
+        total_events = cur.fetchone()[0]
+        
+        # Count unique visitors (from visitor_stats)
+        cur.execute("SELECT COUNT(*) FROM visitor_stats")
+        total_visitors = cur.fetchone()[0]
+        
+        # Top pages (from user_page_analytics aggregation)
+        cur.execute("""
+            SELECT page_path, SUM(view_count) as total_views 
+            FROM user_page_analytics
+            GROUP BY page_path 
+            ORDER BY total_views DESC 
+            LIMIT 5
+        """)
+        top_pages = [dict(row) for row in cur.fetchall()]
+        
+        # Event type breakdown
+        cur.execute("""
+            SELECT event_type, COUNT(*) as count 
+            FROM user_behavior 
+            GROUP BY event_type 
+            ORDER BY count DESC
+        """)
+        event_types = [dict(row) for row in cur.fetchall()]
+        
+        con.close()
+        return {
+            "total_events": total_events,
+            "unique_visitors": total_visitors,
+            "top_pages": top_pages,
+            "event_types": event_types
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.get("/api/analytics/events")
+def get_analytics_events(limit: int = 100, event_type: str = None):
+    """Get recent tracking events from user_behavior table"""
+    try:
+        con = sqlite3.connect(DB_FILE)
+        con.row_factory = sqlite3.Row
+        cur = con.cursor()
+        
+        if event_type:
+            cur.execute("""
+                SELECT id, session_id, user_id, event_type, event_data, page_path, timestamp, client_ip
+                FROM user_behavior 
+                WHERE event_type = ?
+                ORDER BY timestamp DESC 
+                LIMIT ?
+            """, (event_type, limit))
+        else:
+            cur.execute("""
+                SELECT id, session_id, user_id, event_type, event_data, page_path, timestamp, client_ip
+                FROM user_behavior 
+                ORDER BY timestamp DESC 
+                LIMIT ?
+            """, (limit,))
+        
+        events = []
+        for row in cur.fetchall():
+            event = dict(row)
+            # Parse event_data back from JSON
+            if event.get("event_data"):
+                try:
+                    event["event_data"] = json.loads(event["event_data"])
+                except:
+                    pass
+            events.append(event)
+        
+        con.close()
+        return {"count": len(events), "events": events}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.get("/api/analytics/event-stats")
+def get_event_stats():
+    """Get statistics breakdown by event type"""
+    try:
+        con = sqlite3.connect(DB_FILE)
+        con.row_factory = sqlite3.Row
+        cur = con.cursor()
+        
+        # Event counts by type
+        cur.execute("""
+            SELECT event_type, COUNT(*) as count 
+            FROM user_behavior 
+            GROUP BY event_type 
+            ORDER BY count DESC
+        """)
+        event_types = [dict(row) for row in cur.fetchall()]
+        
+        # Top stock views
+        cur.execute("""
+            SELECT event_data, COUNT(*) as count 
+            FROM user_behavior 
+            WHERE event_type = 'stock_view'
+            GROUP BY event_data 
+            ORDER BY count DESC 
+            LIMIT 10
+        """)
+        top_stocks_raw = cur.fetchall()
+        top_stocks = []
+        for row in top_stocks_raw:
+            try:
+                data = json.loads(row["event_data"])
+                top_stocks.append({
+                    "ticker": data.get("ticker", "Unknown"),
+                    "stock_name": data.get("stock_name", ""),
+                    "count": row["count"]
+                })
+            except:
+                pass
+        
+        # Top searches
+        cur.execute("""
+            SELECT event_data, COUNT(*) as count 
+            FROM user_behavior 
+            WHERE event_type = 'search'
+            GROUP BY event_data 
+            ORDER BY count DESC 
+            LIMIT 10
+        """)
+        top_searches_raw = cur.fetchall()
+        top_searches = []
+        for row in top_searches_raw:
+            try:
+                data = json.loads(row["event_data"])
+                top_searches.append({
+                    "query": data.get("query", "Unknown"),
+                    "count": row["count"]
+                })
+            except:
+                pass
+        
+        con.close()
+        return {
+            "event_types": event_types,
+            "top_stocks": top_stocks,
+            "top_searches": top_searches
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8335)
+

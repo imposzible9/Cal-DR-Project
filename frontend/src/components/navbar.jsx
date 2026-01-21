@@ -8,15 +8,15 @@ const Navbar = () => {
   const [calendarNotifications, setCalendarNotifications] = useState(0);
 
   const isActive = (path) => location.pathname === path;
-  
+
   // Listen for calendar notification updates
   useEffect(() => {
     const handleNotificationUpdate = (event) => {
       setCalendarNotifications(event.detail.count);
     };
-    
+
     window.addEventListener('calendarNotificationUpdate', handleNotificationUpdate);
-    
+
     return () => {
       window.removeEventListener('calendarNotificationUpdate', handleNotificationUpdate);
     };
@@ -32,10 +32,10 @@ const Navbar = () => {
           className="cursor-pointer shrink-0"
           onClick={() => navigate('/')}
         >
-          <img 
-            className="h-10" 
-            src={img} 
-            alt="Logo" 
+          <img
+            className="h-10"
+            src={img}
+            alt="Logo"
           />
         </div>
 
@@ -43,13 +43,12 @@ const Navbar = () => {
         <nav className="flex items-center gap-8">
           <Link
             to="/drlist"
-            className={`text-sm font-medium transition-colors ${
-              location.pathname === '/' || isActive('/drlist')
-                ? 'text-blue-500'
-                : 'text-gray-700 hover:text-gray-900'
-            }`}
+            className={`text-sm font-medium transition-colors ${location.pathname === '/' || isActive('/drlist')
+              ? 'text-blue-500'
+              : 'text-gray-700 hover:text-gray-900'
+              }`}
           >
-            Underlying List
+            DR List
           </Link>
 
           <Link
@@ -80,8 +79,8 @@ const Navbar = () => {
             News
           </Link>
 
-          <div 
-            className="relative cursor-pointer ml-2" 
+          <div
+            className="relative cursor-pointer ml-2"
             onClick={() => navigate('/calendar')}
           >
             <i className="bi bi-bell text-xl text-gray-700 hover:text-gray-900 transition-colors"></i>
