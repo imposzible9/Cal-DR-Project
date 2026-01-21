@@ -1,6 +1,6 @@
 import { Routes, Route, useLocation } from "react-router-dom";
 import { useEffect } from "react";
-import { Navbar, SuggestionPage, DRCal, DRList, CalendarPage } from "./components";
+import { Navbar, SuggestionPage, DRCal, DRList, CalendarPage, News } from "./components";
 import { initTracker, trackPageView } from "./utils/tracker";
 
 // Page name mapping
