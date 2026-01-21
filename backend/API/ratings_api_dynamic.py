@@ -118,7 +118,7 @@ def init_database():
                not check_table_schema(cur, "rating_main") or \
                not check_table_schema(cur, "rating_history"):
                 needs_recreate = True
-                print("⚠️ Old database schema detected. Recreating tables with new schema...")
+                print("[WARN] Old database schema detected. Recreating tables with new schema...")
         
         if needs_recreate:
             # Drop old tables
@@ -211,7 +211,7 @@ def init_database():
                 if col_name not in existing_cols:
                     cur.execute(f"ALTER TABLE rating_history ADD COLUMN {col_name} {col_type}")
         except Exception as e:
-            print(f"⚠️ Failed to ensure rating_history market-data columns: {e}")
+            print(f"[WARN] Failed to ensure rating_history market-data columns: {e}")
 
         try:
             cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", ("rating_accuracy",))
@@ -219,11 +219,11 @@ def init_database():
                 cur.execute("PRAGMA table_info(rating_accuracy)")
                 columns = [row[1] for row in cur.fetchall()]
                 if "timeframe" in columns or "currency" not in columns or "high" not in columns or "low" not in columns or "price_prev" not in columns:
-                    print("⚠️ Old rating_accuracy schema detected. Dropping and recreating table...")
+                    print("[WARN] Old rating_accuracy schema detected. Dropping and recreating table...")
                     cur.execute("DROP TABLE IF EXISTS rating_accuracy")
                     print("   -> Dropped old rating_accuracy table")
         except Exception as e:
-            print(f"⚠️ Error checking rating_accuracy schema: {e}")
+            print(f"[WARN] Error checking rating_accuracy schema: {e}")
         
         cur.execute("""
             CREATE TABLE IF NOT EXISTS rating_accuracy (
@@ -264,18 +264,18 @@ def init_database():
         con.commit()
         con.close()
         if needs_recreate:
-            print("✅ SQLite database recreated with new schema successfully.")
+            print("[OK] SQLite database recreated with new schema successfully.")
         else:
-            print("✅ SQLite database and tables initialized successfully.")
+            print("[OK] SQLite database and tables initialized successfully.")
     except Exception as e:
-        print(f"⚠️ Database initialization failed: {e}")
+        print(f"[ERROR] Database initialization failed: {e}")
         import traceback
         traceback.print_exc()
 
 def migrate_from_json_if_needed():
     """Reads data from old JSON files and loads it into the SQLite database."""
     if not os.path.exists(DB_FILE):
-        print("🤔 New database, migration not possible.")
+        print("[INFO] New database, migration not possible.")
         return
 
     try:
@@ -287,11 +287,11 @@ def migrate_from_json_if_needed():
 
         cur.execute("SELECT COUNT(*) FROM rating_stats")
         if cur.fetchone()[0] > 0:
-            print("✅ Database already contains data. Skipping migration.")
+            print("[OK] Database already contains data. Skipping migration.")
             con.close()
             return
         
-        print("🚚 Starting data migration from JSON to SQLite...")
+        print("[INFO] Starting data migration from JSON to SQLite...")
 
         if os.path.exists(OLD_STATS_FILE):
             print(f"  -> Migrating {OLD_STATS_FILE}...")
@@ -395,10 +395,10 @@ def migrate_from_json_if_needed():
             os.rename(OLD_HISTORY_FILE, f"{OLD_HISTORY_FILE}.migrated")
         
         con.commit()
-        print("🎉 Migration completed successfully!")
+        print("[OK] Migration completed successfully!")
 
     except Exception as e:
-        print(f"❌ Migration Error: {e}")
+        print(f"[ERROR] Migration Error: {e}")
         import traceback
         traceback.print_exc()
     finally:
@@ -2317,10 +2317,10 @@ def populate_accuracy_on_startup():
         con.commit()
         con.close()
         
-        print(f"[Accuracy Startup] ✅ Completed: {populated_count} records populated, {error_count} errors")
+        print(f"[Accuracy Startup] [OK] Completed: {populated_count} records populated, {error_count} errors")
         
     except Exception as e:
-        print(f"[Accuracy Startup] ❌ Fatal error: {e}")
+        print(f"[Accuracy Startup] [ERROR] Fatal error: {e}")
         import traceback
         traceback.print_exc()
         if 'con' in locals() and con:
@@ -2938,7 +2938,7 @@ def get_history_with_accuracy(
         
         # Print timing logs
         total_time = time.time() - start_time
-        print(f"⏱️ [History Accuracy] {ticker.upper()}: connect={connect_time:.3f}s, pragma={pragma_time:.3f}s, query2={query2_time:.3f}s, total={total_time:.3f}s")
+        print(f"[TIME] [History Accuracy] {ticker.upper()}: connect={connect_time:.3f}s, pragma={pragma_time:.3f}s, query2={query2_time:.3f}s, total={total_time:.3f}s")
         
         return {
             "ticker": ticker.upper(),
@@ -2957,7 +2957,7 @@ def get_history_with_accuracy(
     except sqlite3.OperationalError as e:
         error_msg = str(e)
         if "locked" in error_msg.lower():
-            print(f"⚠️ [History Accuracy] Database locked for {ticker.upper()}: {e}")
+            print(f"[LOCKED] [History Accuracy] Database locked for {ticker.upper()}: {e}")
             if 'con' in locals() and con:
                 con.close()
             return {
@@ -2967,7 +2967,7 @@ def get_history_with_accuracy(
                 "accuracy": {"accuracy": 0.0, "correct": 0, "incorrect": 0, "total": 0}
             }
         else:
-            print(f"❌ History with Accuracy API Error (OperationalError): {e}")
+            print(f"[ERROR] History with Accuracy API Error (OperationalError): {e}")
             import traceback
             traceback.print_exc()
             if 'con' in locals() and con:
@@ -2979,7 +2979,7 @@ def get_history_with_accuracy(
                 "accuracy": {"accuracy": 0.0, "correct": 0, "incorrect": 0, "total": 0}
             }
     except Exception as e:
-        print(f"❌ History with Accuracy API Error: {e}")
+        print(f"[ERROR] History with Accuracy API Error: {e}")
         import traceback
         traceback.print_exc()
         if 'con' in locals() and con:
@@ -3038,7 +3038,7 @@ def ratings_from_dr_api():
     # If mock data is enabled, return mock AAPL data
     if USE_MOCK_DATA:
         result = load_mock_aapl_data()
-        print(f"✅ Mock data loaded, returning: {result}")
+        print(f"[MOCK] Mock data loaded, returning: {result}")
         return result
     
     rows = []
@@ -3128,7 +3128,7 @@ def ratings_from_dr_api():
         return {"updated_at": updated_at_str, "count": len(rows), "rows": rows}
     
     except Exception as e:
-        print(f"❌ API Error fetching from DB: {e}")
+        print(f"[ERROR] API Error fetching from DB: {e}")
         import traceback
         traceback.print_exc()
         if 'con' in locals() and con:
