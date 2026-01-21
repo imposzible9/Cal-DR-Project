@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, useTransition, useRef } from "react";
 import swipeImg from "../assets/swipe.png";
+import { trackStockView, trackSearch, trackFilter, trackFavorite } from "../utils/tracker";
 
 // const API_URL = "";
 const API_URL = "https://api.ideatrade1.com/caldr";
@@ -134,6 +135,8 @@ export default function DRList() {
   const [loading, setLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isPending, startTransition] = useTransition();
+  const lastTrackedSearch = useRef(null);
+  const isFirstCountryMount = useRef(true);
 
   /* DR FILTER */
   const [drFilter, setDrFilter] = useState("all");
@@ -193,9 +196,38 @@ export default function DRList() {
 
   /* SEARCH DEBOUNCE */
   useEffect(() => {
-    const t = setTimeout(() => setSearch(searchTerm.trim()), 250);
+    const t = setTimeout(() => {
+      const trimmedSearch = searchTerm.trim();
+      setSearch(trimmedSearch);
+
+      if (!trimmedSearch) {
+        lastTrackedSearch.current = null;
+        return;
+      }
+
+      // Track search ONLY if it matches a valid stock symbol (DR or Underlying) exactly
+      // and hasn't been tracked recently
+      if (trimmedSearch !== lastTrackedSearch.current) {
+        const exactMatchItem = data.find(
+          (item) =>
+            (item.dr && item.dr.toLowerCase() === trimmedSearch.toLowerCase()) ||
+            (item.underlying && item.underlying.toLowerCase() === trimmedSearch.toLowerCase())
+        );
+
+        if (exactMatchItem) {
+          // Use the official symbol (DR or Underlying) for tracking to ensure consistency (e.g. "nvda" -> "NVDA")
+          // Prefer DR symbol if it matches, otherwise Underlying
+          const trackedSymbol = exactMatchItem.dr.toLowerCase() === trimmedSearch.toLowerCase()
+            ? exactMatchItem.dr
+            : exactMatchItem.underlying;
+
+          trackSearch(trackedSymbol);
+          lastTrackedSearch.current = trimmedSearch;
+        }
+      }
+    }, 250);
     return () => clearTimeout(t);
-  }, [searchTerm]);
+  }, [searchTerm, data]);
 
   /* LOAD WATCHLIST */
   useEffect(() => {
@@ -263,9 +295,45 @@ export default function DRList() {
 
   const isStarred = useCallback((s) => watchlist.includes(s), [watchlist]);
   const toggleWatchlist = useCallback(
-    (s) => setWatchlist((prev) => (prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s])),
+    (s) => {
+      setWatchlist((prev) => {
+        const isStarred = prev.includes(s);
+        trackFavorite(s, isStarred ? 'remove' : 'add');
+        return isStarred ? prev.filter((x) => x !== s) : [...prev, s];
+      });
+    },
     []
   );
+
+  // Track stock view when detailRow changes
+  useEffect(() => {
+    if (detailRow) {
+      trackStockView(detailRow.dr, detailRow.underlyingName || detailRow.underlying);
+    }
+  }, [detailRow]);
+
+  // Track filter changes (including 'all' if user switches back to it)
+  useEffect(() => {
+    if (isFirstCountryMount.current) {
+      isFirstCountryMount.current = false;
+      return;
+    }
+    trackFilter('country', countryFilter);
+  }, [countryFilter]);
+
+  useEffect(() => {
+    if (drFilter !== 'all') {
+      trackFilter('dr_filter', drFilter);
+    }
+  }, [drFilter]);
+
+  // Track tab changes (Most Popular, High Sensitivity)
+  useEffect(() => {
+    if (tab !== 'all') {
+      // tab values are "popular" and "sensitivity"
+      trackFilter('tab', tab);
+    }
+  }, [tab]);
 
   useEffect(() => {
     let mounted = true;
