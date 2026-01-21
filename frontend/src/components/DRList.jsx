@@ -1,8 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useTransition, useRef } from "react";
 import swipeImg from "../assets/swipe.png";
 
-// const API_URL = "";
-const API_URL = "https://api.ideatrade1.com/caldr";
+const API_URL = import.meta.env.VITE_DR_LIST_API;
 const CACHE_KEY = "dr_cache_v3";
 
 // 🔹 MAP TH → EN (Trading Session)

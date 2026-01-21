@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useState, useRef } from "react";
 
-// const API_BASE = "http://172.17.1.85:8333";
-const API_BASE = "https://api.ideatrade1.com";       // DR snapshot
-const CALC_API_BASE = "http://localhost:8000";      // DR real-time calc
+const API_BASE = import.meta.env.VITE_DR_LIST_BASE_API; // DR snapshot (use same as DRList)
+const CALC_API_BASE = import.meta.env.VITE_CAL_API; // DR real-time calc
 
 const EXCHANGE_CURRENCY_MAP = {
   "The Nasdaq Global Select Market": "USD",
@@ -458,8 +457,8 @@ const dynamicSpreadPct = useMemo(() => {
     if (filteredTableData.length === 0) return null;
 
     return (
-      <div ref={tableRef} className="w-full mt-2 mb-6 sm:mb-10 bg-white rounded-xl shadow-[0_4px_20px_rgba(0,0,0,0.05)] border border-gray-100 overflow-hidden font-['Sarabun']">
-        <div className="overflow-x-auto hide-scrollbar">
+      <div ref={tableRef} className="w-full mt-2 bg-white rounded-xl shadow-[0_4px_20px_rgba(0,0,0,0.05)] border border-gray-100 overflow-hidden font-['Sarabun']">
+        <div className="overflow-x-auto">
           <table className="w-full text-xs text-left border-separate border-spacing-0">
             <thead className="bg-[#0B102A] text-white font-bold">
               <tr>
@@ -553,7 +552,7 @@ const dynamicSpreadPct = useMemo(() => {
   return (
     <div className="min-h-screen w-full bg-[#f5f5f5] flex flex-col items-center pb-10">
       <div className="w-full max-w-[1040px] scale-[1.2] origin-top">
-        <h1 className="text-[34px] font-bold mb-2 text-black mt-6 sm:mt-6">Calculation DR</h1>
+        <h1 className="text-4xl font-bold mb-3 text-black mt-10">Calculation DR</h1>
         <p className="text-[#6B6B6B] mb-8 text-sm md:text-base">
           Calculate DR Fair Value based on Underlying Price, Exchange Rate, and Conversion Ratio.
         </p>

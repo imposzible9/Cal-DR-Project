@@ -36,14 +36,20 @@ def debug_log(session_id, run_id, hypothesis_id, location, message, data):
         pass  
 
 # ---------- CONFIG ----------
-DR_LIST_URL = os.getenv("DR_LIST_URL") or "http://172.17.1.85:8333/dr"
+DR_LIST_URL = os.getenv("DR_LIST_URL")
 TRADINGVIEW_BASE = os.getenv("TRADINGVIEW_BASE_URL") or "https://scanner.tradingview.com/symbol"
 TV_FIELDS = "Recommend.All,Recommend.All|1W,close,change,change_abs,high,low,volume,currency"
 
-MAX_CONCURRENCY = int(os.getenv("MAX_CONCURRENCY") or "4")
-REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT") or "15")
+
+# --- Performance tuning ---
+# เพิ่ม MAX_CONCURRENCY เพื่อให้ยิง request พร้อมกันได้มากขึ้น (เช่น 16)
+MAX_CONCURRENCY = int(os.getenv("MAX_CONCURRENCY") or "16")
+# ลด timeout ถ้า API ตอบเร็ว (เช่น 10 วินาที)
+REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT") or "10")
+# ลด interval ถ้าต้องการอัปเดตเร็วขึ้น (หรือปรับตามต้องการ)
 UPDATE_INTERVAL_SECONDS = int(os.getenv("UPDATE_INTERVAL_SECONDS") or "180")
-BATCH_SLEEP_SECONDS = float(os.getenv("BATCH_SLEEP_SECONDS") or "1.0")
+# ลด sleep หลัง batch (เช่น 0.2 วินาที)
+BATCH_SLEEP_SECONDS = float(os.getenv("BATCH_SLEEP_SECONDS") or "0.2")
 
 
 
@@ -654,9 +660,11 @@ async def fetch_single_ticker(client: httpx.AsyncClient, item_data):
         "label-product": "popup-technicals",
     }
     
-    await asyncio.sleep(random.uniform(0.1, 0.5))
+    # ลด sleep ให้สั้นลงเพื่อความเร็ว (หรือเอาออกถ้า API ต้นทางรับไหว)
+    await asyncio.sleep(random.uniform(0.01, 0.05))
 
-    for attempt in range(3):
+    # ลดจำนวน retry เหลือ 2 รอบ (หรือ 1 ถ้า API เสถียร)
+    for attempt in range(2):
         try:
             resp = await client.get(TRADINGVIEW_BASE, params=params, headers=FAKE_HEADERS, timeout=REQUEST_TIMEOUT)
             
@@ -746,9 +754,11 @@ async def fetch_single_ticker_for_history(client: httpx.AsyncClient, item_data):
         "label-product": "popup-technicals",
     }
 
-    await asyncio.sleep(random.uniform(0.05, 0.2))
+    # ลด sleep ให้สั้นลงเพื่อความเร็ว (หรือเอาออกถ้า API ต้นทางรับไหว)
+    await asyncio.sleep(random.uniform(0.005, 0.02))
 
-    for attempt in range(3):
+    # ลดจำนวน retry เหลือ 2 รอบ (หรือ 1 ถ้า API เสถียร)
+    for attempt in range(2):
         try:
             resp = await client.get(TRADINGVIEW_BASE, params=params, headers=FAKE_HEADERS, timeout=REQUEST_TIMEOUT)
 
@@ -901,6 +911,10 @@ def update_rating_stats(cur, ticker, timestamp_str, daily_val, daily_rating, wee
 
 def update_rating_main(cur, ticker, timestamp_str, daily_val, daily_rating, weekly_val, weekly_rating, market_data):
 
+    # DEBUG: log ทุกครั้งที่ฟังก์ชันนี้ถูกเรียก
+    new_price = market_data.get("price")
+    print(f"[DEBUG] update_rating_main: ticker={ticker}, timestamp={timestamp_str}, new_price={new_price}")
+
     cur.execute("""
         SELECT daily_val, daily_rating, daily_prev, daily_changed_at,
                weekly_val, weekly_rating, weekly_prev, weekly_changed_at,
@@ -922,6 +936,13 @@ def update_rating_main(cur, ticker, timestamp_str, daily_val, daily_rating, week
     current_weekly_prev = current_main[6] if current_main and current_main[6] else None
     current_weekly_changed_at = current_main[7] if current_main and current_main[7] else None
     current_timestamp = current_main[8] if current_main and current_main[8] else None
+
+    # DEBUG: log ค่าราคาเดิม
+    if current_main:
+        cur.execute("SELECT price FROM rating_main WHERE ticker=? ORDER BY timestamp DESC LIMIT 1", (ticker,))
+        row = cur.fetchone()
+        old_price = row[0] if row else None
+        print(f"[DEBUG] update_rating_main: ticker={ticker}, old_price={old_price}")
     
     # อัพเดตข้อมูลราคาที่ timestamp เดิมเสมอ (ถ้ามี record เดิม)
     if current_main is not None and current_timestamp:
@@ -2222,7 +2243,14 @@ def calculate_and_save_accuracy_for_ticker(cur, ticker, timestamp_str, price, ch
         """, (ticker.upper(), timestamp_str))
         prev_row = cur.fetchone()
         if prev_row:
-            price_prev = prev_row["price"] if "price" in prev_row.keys() else None
+            # Support both sqlite3.Row (mapping) and tuple results
+            try:
+                price_prev = prev_row["price"]
+            except Exception:
+                try:
+                    price_prev = prev_row[0]
+                except Exception:
+                    price_prev = None
         
         # ข้ามถ้าไม่มี price_prev (เป็นสัญญาณแรกของ ticker นี้)
         if price_prev is None:
@@ -2240,11 +2268,16 @@ def calculate_and_save_accuracy_for_ticker(cur, ticker, timestamp_str, price, ch
             ORDER BY timestamp DESC
         """.format(window_days), (ticker.upper(), timestamp_str))
         
-        history_rows = cur.fetchall()
-        
-        if not history_rows:
+        rows = cur.fetchall()
+
+        if not rows:
             return
-        
+
+        # Map SQL rows (tuples) to dicts using cursor description so the
+        # calculate_accuracy_from_rating_change function can access named keys
+        cols = [d[0] for d in cur.description]
+        history_rows = [dict(zip(cols, r)) for r in rows]
+
         # คำนวณ accuracy
         accuracy_result = calculate_accuracy_from_rating_change(history_rows, window_days)
         

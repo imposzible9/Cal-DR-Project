@@ -1,10 +1,8 @@
   import React, { useState, useEffect, useMemo, useRef } from "react";
 
-  // const API_URL = "http://172.17.1.85:8333/dr";
-  const API_URL = "https://api.ideatrade1.com/caldr";
 
-  // const RATINGS_API = "http://172.18.1.56:8335/ratings/from-dr-api";
-  const RATINGS_API = "https://api.ideatrade1.com/caldr?ratings=true";
+  const API_URL = import.meta.env.VITE_DR_LIST_API;
+  const RATINGS_API = import.meta.env.VITE_RATINGS_API;
 
   // 🔧 MOCK DATA FLAG - ตั้งเป็น true เพื่อใช้ mock data สำหรับทดสอบ winrate
   // เมื่อต้องการใช้ข้อมูลจริง ให้เปลี่ยนกลับเป็น false
@@ -172,19 +170,19 @@
 
     return (
       <div className="flex items-center justify-center h-full relative">
-        <div className={`flex items-center gap-1 sm:gap-2 transition-all duration-500 ease-[cubic-bezier(0.25,0.8,0.25,1)] ${shouldShowPrev ? "opacity-100" : "opacity-0 w-0 overflow-hidden"}`}>
-          <div className={`text-[11px] sm:text-[14.4px] font-bold text-center ${prevTextColor}`} style={{ minWidth: '60px', width: '60px' }}>
+        <div className={`flex items-center gap-1.5 sm:gap-2.5 transition-all duration-500 ease-[cubic-bezier(0.25,0.8,0.25,1)] ${shouldShowPrev ? "opacity-100" : "opacity-0 w-0 overflow-hidden"}`}>
+          <div className={`text-[11px] sm:text-[14.4px] font-bold text-center ${prevTextColor}`} style={{ minWidth: '80px', width: '80px' }}>
             <span className="whitespace-nowrap text-[10px] sm:text-sm">
               {prevDisplay}
             </span>
           </div>
-          <div className="flex items-center justify-center mx-0.5 sm:mx-1" style={{ minWidth: '15px', width: '15px' }}>
+          <div className="flex items-center justify-center mx-1 sm:mx-1.5" style={{ minWidth: '20px', width: '20px' }}>
             <svg className="w-3 h-3 sm:w-4 sm:h-4 text-[#9CA3AF]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
             </svg>
           </div>
         </div>
-        <div className="flex justify-center ml-1 sm:ml-2" style={{ minWidth: '60px', width: '60px' }}>
+        <div className="flex justify-center ml-1.5 sm:ml-2.5" style={{ minWidth: '80px', width: '80px' }}>
           <span className={`px-1.5 sm:px-2 py-0.5 sm:py-1 rounded text-[10px] sm:text-[14.4px] font-bold whitespace-nowrap text-center transition-all duration-500 ${getRatingStyle(current)}`}>
             {current}
           </span>
@@ -1080,7 +1078,7 @@
               <table className="hidden lg:table w-full text-left border-collapse text-[14.4px]">
                 <thead className="bg-[#0B102A] text-white font-semibold sticky top-0" style={{ zIndex: 50 }}>
                   <tr className="h-[50px]">
-                    {[{ key: 'symbol', label: 'Symbol', align: 'left' }, { key: 'rating', label: 'Technical Rating', align: 'center', width: '190px' }, { key: 'time', label: 'Last Update', align: 'center' }, { key: 'popularDR', label: 'Most Popular DR', align: 'center' }, { key: 'sensitivityDR', label: 'High Sensitivity DR', align: 'center' }, { key: 'price', label: 'Price', align: 'right' }, { key: 'pct', label: '%Change', align: 'right' }, { key: 'chg', label: 'Change', align: 'right' }, { key: 'high', label: 'High', align: 'right' }, { key: 'low', label: 'Low', align: 'right' }].map(h => (
+                    {[{ key: 'symbol', label: 'Symbol', align: 'left' }, { key: 'rating', label: 'Technical Rating', align: 'center', width: '240px' }, { key: 'time', label: 'Last Update', align: 'center' }, { key: 'popularDR', label: 'Most Popular DR', align: 'center' }, { key: 'sensitivityDR', label: 'High Sensitivity DR', align: 'center' }, { key: 'price', label: 'Price', align: 'right' }, { key: 'pct', label: '%Change', align: 'right' }, { key: 'chg', label: 'Change', align: 'right' }, { key: 'high', label: 'High', align: 'right' }, { key: 'low', label: 'Low', align: 'right' }].map(h => (
                       <th
                         key={h.key}
                         className={`px-4 cursor-pointer text-${h.align} whitespace-nowrap relative`}

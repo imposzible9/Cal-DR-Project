@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
 
-const API_BASE = "http://localhost:8003";
+const API_BASE = import.meta.env.VITE_NEWS_API;
 const TH_QUERY = "ตลาดหุ้น OR หุ้น OR ดัชนี";
 const EN_QUERY = "stock market";
 const DEFAULT_SYMBOLS = ["NVDA", "TSLA", "GOOG", "AAPL", "MSFT", "AMZN", "META", "BABA"];

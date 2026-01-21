@@ -1,3 +1,4 @@
+import os
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
@@ -6,22 +7,18 @@ import time
 import httpx
 import re
 import uvicorn
-import os
-from dotenv import load_dotenv
-
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env'))
 
 app = FastAPI(title="DR Calculation API (Cache + Background Refresh + Symbol Map)")
 
-IDEATRADE_BASE = os.getenv("IDEATRADE_BASE_URL") or "https://api.ideatrade1.com"
-TV_SCAN_URL = os.getenv("TRADINGVIEW_SCAN_URL") or "https://scanner.tradingview.com/global/scan"
+DR_API_URL = os.getenv("DR_API_URL")
+TV_SCAN_URL = "https://scanner.tradingview.com/global/scan"
 
 # -----------------------------
 # CONFIG (ปรับได้)
 # -----------------------------
-CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS") or "5")
-REFRESH_INTERVAL_SECONDS = int(os.getenv("REFRESH_INTERVAL_SECONDS") or "2")
-WARM_KEYS_LIMIT = int(os.getenv("WARM_KEYS_LIMIT") or "120")
+CACHE_TTL_SECONDS = 5            # อายุ cache (วินาที) เช่น 3-10
+REFRESH_INTERVAL_SECONDS = 2     # background รีทุกกี่วินาที
+WARM_KEYS_LIMIT = 120            # จะอุ่นกี่ตัวล่าสุด (กันหนัก)
 
 # ถ้าอยากให้ FX รีถี่กว่า underlying:
 FX_REFRESH_MULT = 1              # 1 = เท่ากัน, 2 = underlying ช้ากว่า FX 2 เท่า ฯลฯ
@@ -563,7 +560,7 @@ async def calculate_dr(dr_symbol: str):
     try:
         assert _idea_client is not None
 
-        r = await _idea_client.get(f"{IDEATRADE_BASE}/caldr")
+        r = await _idea_client.get(f"{DR_API_URL}/caldr")
         r.raise_for_status()
         rows = r.json().get("rows", [])
         if not rows:
@@ -634,4 +631,4 @@ async def calculate_dr(dr_symbol: str):
         raise HTTPException(500, f"Unhandled error: {type(e).__name__}")
 
 if __name__ == "__main__":
-    uvicorn.run("dr_calculation_api:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("dr_calculation_api:app", host="0.0.0.0", port=8002, reload=True)

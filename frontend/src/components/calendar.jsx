@@ -255,7 +255,7 @@ const formatColoredValue = (val, suffix = "", currency = "") => {
 };
 
 export default function Calendar() {
-  const [country, setCountry] = useState("All");
+  const [country, setCountry] = useState("US");
   const [earnings, setEarnings] = useState([]);
   const [loading, setLoading] = useState(false);
   const [lastUpdateTime, setLastUpdateTime] = useState(null);
@@ -326,72 +326,38 @@ export default function Calendar() {
   useEffect(() => {
     const controller = new AbortController();
     
+
     const loadData = async (showLoading = true) => {
       if (showLoading) setLoading(true);
-
       try {
         let finalData = [];
         let apiUpdateTime = null;
-        
-        if (country === "All") {
-          const promises = countryOptions
-            .filter(c => c.code !== "All")
-            .map(c => axios.get(`http://localhost:3001/api/earnings?country=${c.code}`, { signal: controller.signal }));
-          
-          const responses = await Promise.allSettled(promises);
-          responses.forEach(r => {
-            if (r.status === "fulfilled") {
-              const responseData = r.value.data;
-              finalData.push(...flattenData(responseData));
-              
-              // Get updated_at from first successful response
-              if (!apiUpdateTime && responseData.updated_at) {
-                const apiDate = new Date(responseData.updated_at);
-                if (!isNaN(apiDate.getTime())) {
-                  apiUpdateTime = apiDate;
-                }
-              }
-            }
-          });
-        } else {
-          const res = await axios.get(`http://localhost:3001/api/earnings?country=${country}`, { signal: controller.signal });
-          const responseData = res.data;
-          finalData = flattenData(responseData);
-          
-          // Get updated_at from API response
-          if (responseData.updated_at) {
-            const apiDate = new Date(responseData.updated_at);
-            if (!isNaN(apiDate.getTime())) {
-              apiUpdateTime = apiDate;
-            }
+        // ดึงข้อมูลจาก backend ตาม country ที่เลือก (หรือ All)
+        const res = await axios.get(`${import.meta.env.VITE_EARNINGS_API}?country=${country}`, { signal: controller.signal });
+        const responseData = res.data;
+        finalData = flattenData(responseData);
+        if (responseData.updated_at) {
+          const apiDate = new Date(responseData.updated_at);
+          if (!isNaN(apiDate.getTime())) {
+            apiUpdateTime = apiDate;
           }
         }
-        
         if (!controller.signal.aborted) {
           setEarnings(finalData);
-          // Use API time if available, otherwise fallback to current time
           setLastUpdateTime(apiUpdateTime || new Date());
-          
-          // Check for new earnings
           const currentIds = new Set(finalData.map(e => `${e.ticker}-${e.date}`));
-
           const unseenIds = [...currentIds].filter(id => !seenEarningsIds.has(id));
           setNewEarningsCount(unseenIds.length);
-          
           if (isFirstLoad) {
-            
             if (seenEarningsIds.size === 0) {
-              
               setSeenEarningsIds(currentIds);
-              setNewEarningsCount(0); 
+              setNewEarningsCount(0);
             } else {
-              
               const updatedSeenIds = new Set([...seenEarningsIds, ...currentIds]);
               setSeenEarningsIds(updatedSeenIds);
             }
             setIsFirstLoad(false);
           } else {
-            // Not first load - update seenEarningsIds with new ones
             const updatedSeenIds = new Set([...seenEarningsIds, ...currentIds]);
             setSeenEarningsIds(updatedSeenIds);
           }
@@ -417,7 +383,7 @@ export default function Calendar() {
 
     const connectSSE = () => {
       try {
-        eventSource = new EventSource('http://localhost:3001/api/earnings/stream');
+        eventSource = new EventSource(import.meta.env.VITE_EARNINGS_STREAM_API);
         
         eventSource.onopen = () => {
           reconnectAttempts = 0; 
