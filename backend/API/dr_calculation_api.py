@@ -6,19 +6,22 @@ import time
 import httpx
 import re
 import uvicorn
+import os
+from dotenv import load_dotenv
 
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env'))
 
 app = FastAPI(title="DR Calculation API (Cache + Background Refresh + Symbol Map)")
 
-IDEATRADE_BASE = "https://api.ideatrade1.com"
-TV_SCAN_URL = "https://scanner.tradingview.com/global/scan"
+IDEATRADE_BASE = os.getenv("IDEATRADE_BASE_URL") or "https://api.ideatrade1.com"
+TV_SCAN_URL = os.getenv("TRADINGVIEW_SCAN_URL") or "https://scanner.tradingview.com/global/scan"
 
 # -----------------------------
 # CONFIG (ปรับได้)
 # -----------------------------
-CACHE_TTL_SECONDS = 5            # อายุ cache (วินาที) เช่น 3-10
-REFRESH_INTERVAL_SECONDS = 2     # background รีทุกกี่วินาที
-WARM_KEYS_LIMIT = 120            # จะอุ่นกี่ตัวล่าสุด (กันหนัก)
+CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS") or "5")
+REFRESH_INTERVAL_SECONDS = int(os.getenv("REFRESH_INTERVAL_SECONDS") or "2")
+WARM_KEYS_LIMIT = int(os.getenv("WARM_KEYS_LIMIT") or "120")
 
 # ถ้าอยากให้ FX รีถี่กว่า underlying:
 FX_REFRESH_MULT = 1              # 1 = เท่ากัน, 2 = underlying ช้ากว่า FX 2 เท่า ฯลฯ

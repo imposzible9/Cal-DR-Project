@@ -10,15 +10,18 @@ import os
 import re
 import time as time_module
 from datetime import datetime, timedelta, time, timezone
+from dotenv import load_dotenv
+
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env'))
 
 # ================= CONFIG =================
-TRADINGVIEW_SCAN_URL = "https://scanner.tradingview.com/{market}/scan?label-product=screener-stock-old"
+TRADINGVIEW_SCAN_URL = os.getenv("TRADINGVIEW_SCAN_URL") or "https://scanner.tradingview.com/{market}/scan?label-product=screener-stock-old"
 # ✅ เพิ่ม DR_LIST_URL เพื่อใช้ดึงรายชื่อหุ้นที่มี DR
-DR_LIST_URL = "http://172.17.1.85:8333/dr"
+DR_LIST_URL = os.getenv("DR_LIST_URL") or "http://172.17.1.85:8333/dr"
 # ✅ เพิ่มการตั้งค่าเปิด-ปิดฟิลเตอร์ DR (True = กรองเฉพาะหุ้นที่มี DR, False = เอาหุ้นทั้งหมด)
-ENABLE_DR_FILTER = True
+ENABLE_DR_FILTER = os.getenv("ENABLE_DR_FILTER", "True").lower() == "true"
 CACHE_FILE = "earnings_cache.json"
-UPDATE_INTERVAL_SECONDS = 3600  # อัปเดตทุก 1 ชั่วโมง
+UPDATE_INTERVAL_SECONDS = int(os.getenv("UPDATE_INTERVAL_SECONDS") or "3600")
 
 FAKE_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",

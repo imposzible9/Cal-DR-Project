@@ -11,9 +11,12 @@ import random
 import sqlite3
 from datetime import datetime, timedelta, time
 from zoneinfo import ZoneInfo
+from dotenv import load_dotenv
+
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env'))
 
 # Debug logging setup
-DEBUG_LOG_PATH = r"c:\Users\Thoz\Desktop\New-Cal-DR-Project-main\.cursor\debug.log"
+DEBUG_LOG_PATH = os.getenv("DEBUG_LOG_PATH") or r"c:\Users\Thoz\Desktop\New-Cal-DR-Project-main\.cursor\debug.log"
 
 def debug_log(session_id, run_id, hypothesis_id, location, message, data):
     """Write debug log to NDJSON file"""
@@ -33,14 +36,14 @@ def debug_log(session_id, run_id, hypothesis_id, location, message, data):
         pass  
 
 # ---------- CONFIG ----------
-DR_LIST_URL = "http://172.17.1.85:8333/dr"
-TRADINGVIEW_BASE = "https://scanner.tradingview.com/symbol"
+DR_LIST_URL = os.getenv("DR_LIST_URL") or "http://172.17.1.85:8333/dr"
+TRADINGVIEW_BASE = os.getenv("TRADINGVIEW_BASE_URL") or "https://scanner.tradingview.com/symbol"
 TV_FIELDS = "Recommend.All,Recommend.All|1W,close,change,change_abs,high,low,volume,currency"
 
-MAX_CONCURRENCY = 4       
-REQUEST_TIMEOUT = 15      
-UPDATE_INTERVAL_SECONDS = 180 
-BATCH_SLEEP_SECONDS = 1.0
+MAX_CONCURRENCY = int(os.getenv("MAX_CONCURRENCY") or "4")
+REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT") or "15")
+UPDATE_INTERVAL_SECONDS = int(os.getenv("UPDATE_INTERVAL_SECONDS") or "180")
+BATCH_SLEEP_SECONDS = float(os.getenv("BATCH_SLEEP_SECONDS") or "1.0")
 
 
 

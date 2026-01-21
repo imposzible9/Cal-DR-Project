@@ -16,6 +16,10 @@ NEWS_API_KEY = os.getenv("NEWS_API_KEY") or None
 NEWS_TTL_SECONDS = int(os.getenv("NEWS_TTL_SECONDS") or "300")
 FINNHUB_BASE_URL = "https://finnhub.io/api/v1"
 FINNHUB_TOKEN = os.getenv("FINNHUB_TOKEN") or None
+DR_API_URL = os.getenv("DR_API_URL") or "http://172.17.1.85:8333"
+TRADINGVIEW_SCANNER_URL = os.getenv("TRADINGVIEW_SCANNER_URL") or "https://scanner.tradingview.com/america/scan"
+AMERICA_EXCHANGES = os.getenv("AMERICA_EXCHANGES", "AMEX,NASDAQ,NYSE").split(",")
+THAILAND_EXCHANGES = os.getenv("THAILAND_EXCHANGES", "SET,mai").split(",")
 
 app = FastAPI(title="News API")
 
@@ -426,8 +430,6 @@ async def get_stock_overview(
         },
     }
 
-TRADINGVIEW_SCANNER_URL = "https://scanner.tradingview.com/america/scan"
-
 @app.get("/api/symbols")
 async def get_symbols():
     """
@@ -448,7 +450,7 @@ async def get_symbols():
         # 1. Fetch DR Symbols (keep existing logic)
         dr_symbols = []
         try:
-            r = await client_to_use.get("http://172.17.1.85:8333/dr", timeout=2)
+            r = await client_to_use.get(f"{DR_API_URL}/dr", timeout=2)
             if r.status_code == 200:
                 data = r.json()
                 rows = data.get("rows", [])
@@ -513,7 +515,7 @@ async def _fetch_tradingview_stocks(client, region="america"):
     try:
         # Adjust filters based on region if needed, but standard stock filter usually works
         # For Thailand, exchange might be SET or mai
-        exchange_filter = ["AMEX", "NASDAQ", "NYSE"] if region == "america" else ["SET", "mai"]
+        exchange_filter = AMERICA_EXCHANGES if region == "america" else THAILAND_EXCHANGES
         
         # Filter logic to reduce noise (remove derivatives, low volume, etc.)
         # We restrict subtypes to common/etf/reit to avoid warrants/structured products that rarely have news.
