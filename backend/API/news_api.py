@@ -524,8 +524,8 @@ async def _fetch_tradingview_stocks(client, region="america"):
                 {"left": "type", "operation": "in_range", "right": ["stock", "dr", "fund"]},
                 {"left": "subtype", "operation": "in_range", "right": subtypes},
                 {"left": "exchange", "operation": "in_range", "right": exchange_filter},
-                # Filter out inactive stocks (avg volume < 5000) which likely have no news
-                {"left": "average_volume_10d_calc", "operation": "greater", "right": 5000}
+                # Filter out inactive stocks (avg volume < 50000) which likely have no news
+                {"left": "average_volume_10d_calc", "operation": "greater", "right": 50000}
             ],
             "options": {"lang": "en"},
             "symbols": {"query": {"types": []}, "tickers": []},
