@@ -41,74 +41,6 @@ const formatPrice = (n) => {
   return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 
-// Function to convert company name to TradingView logo format
-const getLogoSlug = (name) => {
-  if (!name) {
-    return '';
-  }
-  
-  let cleanName = name;
-  
-  // Remove Thai text (บริษัท or หุ้นสามัญของบริษัท)
-  cleanName = cleanName.replace(/^(บริษัท|หุ้นสามัญของบริษัท)\s*/i, '');
-  
-  // Extract company name before parentheses (AMZN) or other markers
-  // "AMAZON.COM, INC. (AMZN)" -> "AMAZON.COM, INC."
-  cleanName = cleanName.replace(/\s*\([^)]+\)\s*$/g, '');
-  
-  // Special handling for company names with multiple parts separated by comma
-  // "BECTON, DICKINSON AND COMPANY" -> keep "BECTON, DICKINSON"
-  // "AMAZON.COM, INC." -> "AMAZON"
-  
-  // First, check if it has .COM or .INC before comma
-  const comMatch = cleanName.match(/^([A-Z][A-Z0-9&]*?)\.(?:COM|INC)/i);
-  if (comMatch) {
-    // For "AMAZON.COM, INC." -> "AMAZON" (remove .COM/.INC)
-    cleanName = comMatch[1];
-  } else {
-    // For other cases, check for comma pattern
-    const commaMatch = cleanName.match(/^([A-Z][A-Z0-9&\s]*?),\s*([A-Z][A-Z0-9&\s]*?)(?:,|\s+(?:AND|&)\s+)/i);
-    if (commaMatch) {
-      // For "BECTON, DICKINSON AND COMPANY" -> "BECTON, DICKINSON"
-      cleanName = commaMatch[1] + ', ' + commaMatch[2];
-    } else {
-      // For simple cases, extract first word before comma or space
-      const simpleMatch = cleanName.match(/^([A-Z][A-Z0-9&]*?)(?:\s*,|\s+)/i);
-      if (simpleMatch) {
-        cleanName = simpleMatch[1];
-      }
-    }
-  }
-  
-  // Convert to lowercase
-  let slug = cleanName.toLowerCase();
-  
-  // Remove common suffixes (iterative removal for nested cases)
-  const suffixes = [
-    'incorporated', 'incorporation', 'corporation', 'corp',
-    'company', 'limited', 'ltd', 'plc', 'group', 'holdings', 'holding',
-    'international', 'technologies', 'technology', 'tech',
-    'systems', 'solutions', 'software', 'inc', 'co'
-  ];
-  
-  for (let i = 0; i < 3; i++) {
-    suffixes.forEach(suffix => {
-      const regex = new RegExp(`\\b${suffix}\\.?\\b`, 'gi');
-      slug = slug.replace(regex, ' ');
-    });
-    slug = slug.replace(/\s+/g, ' ').trim();
-  }
-  
-  // Clean up: replace spaces with hyphens, remove special characters
-  slug = slug
-    .replace(/\s+/g, '-')
-    .replace(/[^a-z0-9-]/g, '')
-    .replace(/-+/g, '-')
-    .replace(/^-+|-+$/g, '');
-  
-  return slug;
-};
-
 const extractSymbol = (str) => {
   if (!str) return "";
   const strUpper = String(str).toUpperCase().trim();
@@ -129,11 +61,116 @@ const extractSymbol = (str) => {
   return strUpper;
 };
 
+const calculateDRMetrics = (ticker, drList) => {
+  if (!ticker || !drList || drList.length === 0) {
+    return { mostPopularDR: null, highSensitivityDR: null };
+  }
+
+  const tickerUpper = String(ticker).toUpperCase().trim();
+
+  const matchingDRs = drList.filter((dr) => {
+    // Strategy 1: Extract from underlying field
+    const underlying1 = extractSymbol(dr.underlying || "");
+    if (underlying1 && underlying1 === tickerUpper) {
+      return true;
+    }
+    
+    // Strategy 2: Extract from underlyingName field
+    const underlying2 = extractSymbol(dr.underlyingName || "");
+    if (underlying2 && underlying2 === tickerUpper) {
+      return true;
+    }
+    
+    // Strategy 3: Direct match if underlying/underlyingName is already the ticker
+    const underlyingDirect = String(dr.underlying || dr.underlyingName || "").toUpperCase().trim();
+    if (underlyingDirect === tickerUpper) {
+      return true;
+    }
+    
+    return false;
+  });
+
+  if (matchingDRs.length === 0) {
+    // Debug: log when no match found (only for first few tickers to avoid spam)
+    if (tickerUpper === "JPM" || tickerUpper === "GS" || tickerUpper === "BAC" || tickerUpper === "MS") {
+      console.log(`[DR Metrics] No matching DRs found for ${tickerUpper}. Available DRs:`, 
+        drList.slice(0, 5).map(dr => ({
+          symbol: dr.symbol,
+          underlying: dr.underlying,
+          underlyingName: dr.underlyingName
+        }))
+      );
+    }
+    return { mostPopularDR: null, highSensitivityDR: null };
+  }
+
+  // Calculate Most Popular DR (highest volume)
+  let mostPopularDR = null;
+  let maxVolume = -1; 
+  matchingDRs.forEach((dr) => {
+    const vol = Number(dr.totalVolume) || 0;
+    if (vol > maxVolume) {
+      maxVolume = vol;
+      mostPopularDR = {
+        symbol: dr.symbol || "",
+        volume: vol
+      };
+    }
+  });
+  
+  // If no DR with volume found, use first matching DR
+  if (!mostPopularDR && matchingDRs.length > 0) {
+    mostPopularDR = {
+      symbol: matchingDRs[0].symbol || "",
+      volume: 0
+    };
+  }
+
+  // Calculate High Sensitivity DR (lowest bid > 0)
+  let highSensitivityDR = null;
+  let minBid = Infinity;
+  matchingDRs.forEach((dr) => {
+    const bid = Number(dr.bidPrice) || 0;
+    if (bid > 0 && bid < minBid) {
+      minBid = bid;
+      highSensitivityDR = {
+        symbol: dr.symbol || "",
+        bid: bid
+      };
+    }
+  });
+  
+  // If no DR with bid > 0 found, try to find one with any bid
+  if (!highSensitivityDR) {
+    let anyBid = Infinity;
+    matchingDRs.forEach((dr) => {
+      const bid = Number(dr.bidPrice) || 0;
+      if (bid > 0 && bid < anyBid) {
+        anyBid = bid;
+        highSensitivityDR = {
+          symbol: dr.symbol || "",
+          bid: bid
+        };
+      }
+    });
+  }
+  
+  // If still no DR with bid, use first matching DR
+  if (!highSensitivityDR && matchingDRs.length > 0) {
+    highSensitivityDR = {
+      symbol: matchingDRs[0].symbol || "",
+      bid: 0
+    };
+  }
+
+  return { mostPopularDR, highSensitivityDR };
+};
+
 const formatMarketCapValue = (val, currency = "", isLargeNumber = false) => {
-  if (val === null || val === undefined || val === "" || val === "-") return <span className="text-gray-300 text-xs sm:text-sm">-</span>;
+  if (val === null || val === undefined || val === "" || val === "-") return <span className="text-gray-300">-</span>;
   
   const num = Number(val);
-  if (isNaN(num)) return <span className="text-gray-300 text-xs sm:text-sm">-</span>;
+  if (isNaN(num)) return <span className="text-gray-300">-</span>;
 
   let displayNum = num;
   let suffix = "";
@@ -189,22 +226,22 @@ const formatMarketCapValue = (val, currency = "", isLargeNumber = false) => {
   return (
     <div className="flex items-center justify-center">
       <span 
-        className="font-medium tracking-tight text-xs sm:text-[14.4px] px-2 sm:px-3 py-0.5 sm:py-1 rounded-lg inline-flex items-center justify-center gap-0.5 min-w-[90px] sm:min-w-[110px] font-mono" 
+        className="font-medium tracking-tight text-[14.4px] px-3 py-1 rounded-lg inline-flex items-center justify-center gap-0.5 min-w-[110px] font-mono" 
         style={{ color, backgroundColor: bgColor }}
       >
         {formattedNum}
         {suffix && <span className="ml-0.5">{suffix}</span>}
-        {currency && <span className="text-xs sm:text-[14.4px] font-normal uppercase ml-0.5">{currency}</span>}
+        {currency && <span className="text-[14.4px] font-normal uppercase ml-0.5">{currency}</span>}
       </span>
     </div>
   );
 };
 
 const formatValue = (val, currency = "", isLargeNumber = false) => {
-  if (val === null || val === undefined || val === "" || val === "-") return <span className="text-gray-300 text-xs sm:text-sm">-</span>;
+  if (val === null || val === undefined || val === "" || val === "-") return <span className="text-gray-300">-</span>;
   
   const num = Number(val);
-  if (isNaN(num)) return <span className="text-gray-300 text-xs sm:text-sm">-</span>;
+  if (isNaN(num)) return <span className="text-gray-300">-</span>;
 
   let displayNum = num;
   let suffix = "";
@@ -229,27 +266,27 @@ const formatValue = (val, currency = "", isLargeNumber = false) => {
 
   return (
     <div className="flex items-baseline justify-end gap-0.5">
-      <span className="font-medium tracking-tight text-xs sm:text-[14.4px] font-mono">
+      <span className="font-medium tracking-tight text-[14.4px] font-mono">
         {formattedNum}
         {suffix && <span className="ml-0.5">{suffix}</span>}
       </span>
-      {currency && <span className="text-xs sm:text-[14.4px] text-gray-600 font-normal uppercase">{currency}</span>}
+      {currency && <span className="text-[14.4px] text-gray-600 font-normal uppercase">{currency}</span>}
     </div>
   );
 };
 
 const formatColoredValue = (val, suffix = "", currency = "") => {
-  if (val === null || val === undefined || val === "" || val === "-") return <span className="text-gray-300 text-xs sm:text-sm">-</span>;
+  if (val === null || val === undefined || val === "" || val === "-") return <span className="text-gray-300">-</span>;
   const num = Number(val);
   const colorClass = num > 0 ? "text-[#27AE60]" : num < 0 ? "text-[#EB5757]" : "text-gray-500";
   
   return (
     <div className="flex items-baseline justify-end gap-0.5">
-      <span className={`font-medium ${colorClass} text-xs sm:text-[14.4px] font-mono`}>
+      <span className={`font-medium ${colorClass} text-[14.4px] font-mono`}>
         {num > 0 ? "+" : ""}{num.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-        {suffix && <span className="ml-0.5 text-xs sm:text-[14.4px] font-normal opacity-80">{suffix}</span>}
+        {suffix && <span className="ml-0.5 text-[14.4px] font-normal opacity-80">{suffix}</span>}
       </span>
-      {currency && <span className={`text-xs sm:text-[14.4px] font-normal uppercase ${colorClass} opacity-70`}>{currency}</span>}
+      {currency && <span className={`text-[14.4px] font-normal uppercase ${colorClass} opacity-70`}>{currency}</span>}
     </div>
   );
 };
@@ -265,13 +302,14 @@ export default function Calendar() {
   const [search, setSearch] = useState("");
   const [selectedDay, setSelectedDay] = useState("All");
 
+  const [drLookup, setDrLookup] = useState({});
+  const [drData, setDrData] = useState([]);
+  const [showCountryMenu, setShowCountryMenu] = useState(false);
+  const countryDropdownRef = useRef(null);
+  
   const [seenEarningsIds, setSeenEarningsIds] = useState(new Set());
   const [newEarningsCount, setNewEarningsCount] = useState(0);
   const [isFirstLoad, setIsFirstLoad] = useState(true);
-  const [logoErrors, setLogoErrors] = useState({});
-  const [showCountryMenu, setShowCountryMenu] = useState(false);
-  
-  const countryDropdownRef = useRef(null);
 
   const selectedLabel = useMemo(() => countryOptions.find((c) => c.code === country)?.label || "All Markets", [country]);
 
@@ -322,7 +360,32 @@ export default function Calendar() {
     return allRows;
   };
 
-  // Close menu when route changes
+  useEffect(() => {
+    const handler = (e) => {
+      if (countryDropdownRef.current && !countryDropdownRef.current.contains(e.target)) setShowCountryMenu(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  useEffect(() => {
+    axios.get("https://api.ideatrade1.com/caldr").then(res => {
+      const rows = res.data?.rows || [];
+      setDrData(rows); 
+      const drToUnderlying = {}, underlyingToDr = {}, underlyingNames = {};
+      rows.forEach((r) => {
+        const dr = r.symbol?.toUpperCase();
+        const und = r.underlying?.toUpperCase();
+        if (!dr || !und) return;
+        drToUnderlying[dr] = und;
+        if (!underlyingToDr[und]) underlyingToDr[und] = [];
+        underlyingToDr[und].push(dr);
+        if (r.underlyingName) underlyingNames[und] = r.underlyingName.toUpperCase();
+      });
+      setDrLookup({ drToUnderlying, underlyingToDr, underlyingNames });
+    }).catch(e => console.error(e));
+  }, []);
+
   useEffect(() => {
     const controller = new AbortController();
     
@@ -417,9 +480,11 @@ export default function Calendar() {
 
     const connectSSE = () => {
       try {
+        console.log('🔌 [SSE] Attempting to connect...');
         eventSource = new EventSource('http://localhost:3001/api/earnings/stream');
         
         eventSource.onopen = () => {
+          console.log('✅ [SSE] Connection established successfully');
           reconnectAttempts = 0; 
         };
 
@@ -449,6 +514,8 @@ export default function Calendar() {
                     setLastUpdateTime(new Date(data.updated_at));
                   }
                   
+                  console.log(`📢 Received ${unseenIds.length} new earnings via SSE`);
+                  
                   return new Set([...currentSeenIds, ...newIds]);
                 }
                 
@@ -457,24 +524,31 @@ export default function Calendar() {
             } else if (data.type === 'heartbeat') {
 
             } else if (data.type === 'connected') {
+              console.log('✅ [SSE]', data.message);
             }
           } catch (err) {
-            // Silent error handling
+            console.error('Error parsing SSE message:', err);
           }
         };
 
         eventSource.onerror = (error) => {
+          console.error('❌ [SSE] Connection error:', error);
+          if (eventSource.readyState === EventSource.CLOSED) {
+            console.log('🔌 [SSE] Connection closed');
+          }
           eventSource.close();
           
           // Attempt to reconnect with exponential backoff
           if (reconnectAttempts < maxReconnectAttempts) {
             const delay = baseReconnectDelay * Math.pow(2, reconnectAttempts);
             reconnectAttempts++;
+            console.log(`🔄 [SSE] Reconnecting in ${delay}ms (attempt ${reconnectAttempts}/${maxReconnectAttempts})`);
             
             reconnectTimeout = setTimeout(() => {
               connectSSE();
             }, delay);
           } else {
+            console.error('❌ Max SSE reconnection attempts reached. Falling back to polling.');
             // Fallback to polling if SSE fails completely
             const fallbackInterval = setInterval(() => {
               loadData(false);
@@ -486,7 +560,7 @@ export default function Calendar() {
           }
         };
       } catch (err) {
-        // Silent error handling
+        console.error('Error creating SSE connection:', err);
       }
     };
 
@@ -520,7 +594,8 @@ export default function Calendar() {
         const q = search.toUpperCase();
         const ticker = (e.ticker || "").toUpperCase();
         const company = (e.company || "").toUpperCase();
-        const matchesSearch = ticker.includes(q) || company.includes(q);
+        const { drToUnderlying, underlyingToDr, underlyingNames } = drLookup;
+        const matchesSearch = ticker.includes(q) || company.includes(q) || drToUnderlying[q] === ticker || (ticker.includes(q) && underlyingToDr[ticker]) || underlyingNames[ticker]?.includes(q);
         if (!matchesSearch) return false;
       }
       
@@ -536,16 +611,17 @@ export default function Calendar() {
       
       return true;
     });
-  }, [earnings, search, selectedDay]);
+  }, [earnings, search, drLookup, selectedDay]);
 
 const sortedEarnings = useMemo(() => {
-  // Backend already calculated DR metrics, just add isNew flag
-  const withIsNew = filtered.map(e => {
+  // Add DR metrics to each earning
+  const withDRMetrics = filtered.map(e => {
     const earningId = `${e.ticker}-${e.date}`;
     const isNew = !seenEarningsIds.has(earningId);
     
     return {
       ...e,
+      ...calculateDRMetrics(e.ticker, drData),
       earningId,
       isNew
     };
@@ -554,7 +630,7 @@ const sortedEarnings = useMemo(() => {
   let sorted;
   
   if (!sortKey) {
-    sorted = withIsNew.sort((a, b) => {
+    sorted = withDRMetrics.sort((a, b) => {
       const dateA = new Date((a.date ?? 0) * 1000);
       const dateB = new Date((b.date ?? 0) * 1000);
 
@@ -565,7 +641,7 @@ const sortedEarnings = useMemo(() => {
       return String(a.ticker ?? "").localeCompare(String(b.ticker ?? ""));
     });
   } else {
-    sorted = withIsNew.sort((a, b) => {
+    sorted = withDRMetrics.sort((a, b) => {
       const A = a[sortKey] ?? "";
       const B = b[sortKey] ?? "";
 
@@ -605,7 +681,7 @@ const sortedEarnings = useMemo(() => {
   const oldEarnings = sorted.filter(e => !e.isNew);
   
   return [...newEarnings, ...oldEarnings];
-}, [filtered, sortKey, sortOrder, seenEarningsIds]);
+}, [filtered, sortKey, sortOrder, drData, seenEarningsIds]);
 
 // Function to mark earnings as seen
 const markAsSeen = (earningId) => {
@@ -633,7 +709,7 @@ const markAsSeen = (earningId) => {
 
     return (
       <div className="flex items-center ml-[0px] flex-shrink-0">
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" className="w-[10px] sm:w-[12px] h-[10px] sm:h-[12px] transition-all duration-200">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" className="w-[12px] h-[12px] transition-all duration-200">
           <path d="M14 2.256V30c-2.209 0-4-1.791-4-4V13H4.714c-.633 0-.949-.765-.502-1.212l9.607-9.607C13.886 2.114 14 2.162 14 2.256z" fill={upColor} />
           <path d="M27.788 20.212l-9.6 9.6C18.118 29.882 18 29.832 18 29.734V2c2.209 0 4 1.791 4 4v13h5.286C27.918 19 28.235 19.765 27.788 20.212z" fill={downColor} />
         </svg>
@@ -644,73 +720,71 @@ const markAsSeen = (earningId) => {
   return (
     <div className="h-screen w-full bg-[#f5f5f5] overflow-hidden flex justify-center">
       <div className="w-full max-w-[1248px] flex flex-col h-full">
-        <div className="pt-6 sm:pt-10 pb-0 px-4 sm:px-0 flex-shrink-0" style={{ overflow: 'visible', zIndex: 100 }}>
-          <div className="w-full lg:w-[1040px] max-w-full mx-auto lg:scale-[1.2] lg:origin-top" style={{ overflow: 'visible' }}>
-            <h1 className="text-2xl sm:text-3xl font-bold mb-2 sm:mb-3 text-black">Earnings Calendar</h1>
-            <p className="text-[#6B6B6B] mb-6 sm:mb-8 text-sm md:text-base">Earnings Schedule for Companies with DRs Traded in Thailand.</p>
+        <div className="pt-10 pb-0 px-0 flex-shrink-0" style={{ overflow: 'visible', zIndex: 100 }}>
+          <div className="w-[1040px] max-w-full mx-auto scale-[1.2] origin-top" style={{ overflow: 'visible' }}>
+            <h1 className="text-3xl font-bold mb-3 text-black">Earnings Calendar</h1>
+            <p className="text-[#6B6B6B] mb-8 text-sm md:text-base">Earnings Schedule for Companies with DRs Traded in Thailand.</p>
             
-            <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-3 md:gap-4 mb-2">
-              <div className="relative z-[200] w-full md:w-auto" ref={countryDropdownRef} style={{ isolation: 'isolate', overflow: 'visible' }}>
-                <button type="button" onClick={() => setShowCountryMenu((prev) => !prev)} className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 bg-white px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#0B102A] w-full md:min-w-[180px] h-[37.33px]">
-                  <span className="truncate">{selectedLabel}</span>
-                  <svg className={`h-4 w-4 flex-shrink-0 transition-transform text-gray-500 ${showCountryMenu ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
-                </button>
-                {showCountryMenu && (
-                  <div className="absolute left-0 top-full z-[9999] mt-2 w-full sm:w-56 max-h-72 overflow-auto rounded-2xl border border-gray-200 bg-white shadow-[0_10px_30px_rgba(15,23,42,0.15)] py-1" style={{ transform: 'translateZ(0)' }}>
-                    {countryOptions.map((opt) => (
-                      <button 
-                        key={opt.code} 
-                        onClick={() => { setCountry(opt.code); setShowCountryMenu(false); }} 
-                        className={`flex w-full items-center justify-between px-4 py-1.5 text-left text-xs sm:text-sm transition-colors ${country === opt.code ? "bg-[#EEF2FF] text-[#0B102A] font-semibold" : "text-gray-700 hover:bg-gray-50"}`}
-                      >
-                        <span>{opt.label}</span>
-                        {country === opt.code && <i className="bi bi-check-lg text-[#0B102A] text-base"></i>}
-                      </button>
-                    ))}
-                  </div>
-                )}
+            <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4 mb-2">
+          <div className="relative z-[200]" ref={countryDropdownRef} style={{ isolation: 'isolate', overflow: 'visible' }}>
+            <button type="button" onClick={() => setShowCountryMenu((prev) => !prev)} className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#0B102A] min-w-[180px] h-[37.33px]">
+              <span>{selectedLabel}</span>
+              <svg className={`h-4 w-4 transition-transform text-gray-500 ${showCountryMenu ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+            </button>
+            {showCountryMenu && (
+              <div className="absolute left-0 top-full z-[9999] mt-2 w-56 max-h-72 overflow-auto rounded-2xl border border-gray-200 bg-white shadow-[0_10px_30px_rgba(15,23,42,0.15)] py-1" style={{ transform: 'translateZ(0)' }}>
+                {countryOptions.map((opt) => (
+                  <button 
+                    key={opt.code} 
+                    onClick={() => { setCountry(opt.code); setShowCountryMenu(false); }} 
+                    className={`flex w-full items-center justify-between px-4 py-1.5 text-left text-sm transition-colors ${country === opt.code ? "bg-[#EEF2FF] text-[#0B102A] font-semibold" : "text-gray-700 hover:bg-gray-50"}`}
+                  >
+                    <span>{opt.label}</span>
+                    {country === opt.code && <i className="bi bi-check-lg text-[#0B102A] text-base"></i>}
+                  </button>
+                ))}
               </div>
-              <div className="relative w-full md:w-auto">
-                <input type="text" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search DR..." className="bg-white pl-3 sm:pl-4 pr-10 py-2 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#0B102A] focus:border-transparent w-full md:w-64 text-xs sm:text-sm shadow-sm h-[37.33px]" />
-                <i className="bi bi-search absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400" style={{ fontSize: 14 }} />
-              </div>
+            )}
+          </div>
+          <div className="relative w-full md:w-auto">
+            <input type="text" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search DR..." className="bg-white pl-4 pr-10 py-2 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#0B102A] focus:border-transparent w-full md:w-64 text-sm shadow-sm h-[37.33px]" />
+            <i className="bi bi-search absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400" style={{ fontSize: 14 }} />
+          </div>
             </div>
             
             <div className="flex flex-col md:flex-row md:items-end md:justify-between mb-2 gap-2">
               <div className="overflow-x-auto pb-1">
-                <div className="inline-flex items-center gap-2 sm:gap-3 bg-white rounded-xl px-2 py-1.5 shadow-sm border border-gray-100 min-w-full sm:min-w-0">
-                  <span className="text-xs sm:text-sm font-semibold text-gray-700 whitespace-nowrap">Days</span>
-                  <div className="flex justify-between flex-1 sm:gap-2">
+                <div className="inline-flex items-center gap-3 bg-white rounded-xl px-2 py-1.5 shadow-sm border border-gray-100">
+                  <span className="text-sm font-semibold text-gray-700 whitespace-nowrap">Days</span>
+                  <div className="flex gap-2">
                     {["All", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].map((day) => {
                       const isSelected = selectedDay === day;
-                      const shortDay = day === "All" ? "All" : day.substring(0, 3);
                       return (
                         <button
                           key={day}
                           onClick={() => setSelectedDay(day)}
-                          className={`px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-lg text-[10px] sm:text-xs font-bold transition-all whitespace-nowrap ${
+                          className={`px-2 py-1 rounded-lg text-xs font-bold transition-all ${
                             isSelected
                               ? "bg-[#0B102A] text-white ring-2 ring-offset-1 ring-black/10 shadow-md scale-105"
                               : "text-gray-600 opacity-60 hover:opacity-100"
                           }`}
                         >
-                          <span className="hidden sm:inline">{day}</span>
-                          <span className="sm:hidden">{shortDay}</span>
+                          {day}
                         </button>
                       );
                     })}
                   </div>
                 </div>
               </div>
-              <div className="flex flex-col items-end gap-0.5 text-[10px] sm:text-xs text-gray-500 pr-1 mt-0 md:mt-1">
+              <div className="flex flex-col items-end gap-0.5 text-xs text-gray-500 pr-1 mt-1">
                 <div>Found {sortedEarnings.length.toLocaleString()} results</div>
                 {lastUpdateTime && (
-                  <div className="text-right">Last Updated: {lastUpdateTime.toLocaleString("en-US", { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" })}</div>
+                  <div>Last Updated: {lastUpdateTime.toLocaleString("en-US", { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" })}</div>
                 )}
               </div>
             </div>
             
-            <div className="flex flex-col items-end gap-0.5 text-[10px] sm:text-xs text-gray-500 pr-1 mb-1.5">
+            <div className="flex flex-col items-end gap-0.5 text-xs text-gray-500 pr-1 mb-1.5">
               {newEarningsCount > 0 && (
                 <button
                   onClick={markAllAsSeen}
@@ -724,138 +798,10 @@ const markAsSeen = (earningId) => {
           </div>
         </div>
         
-        {/* Main Content - Scrollable */}
-        <div className="flex-1 overflow-hidden pb-6 sm:pb-10 -mt-2 md:mt-9 px-4 sm:px-0">
+        {/* Main Table - Scrollable (ไม่ถูก scale แต่ขยายฟอนต์ให้ใหญ่ขึ้นแทน) */}
+        <div className="flex-1 overflow-hidden pb-10 mt-9">
           <div className="h-full bg-white rounded-xl shadow-[0_2px_10px_rgba(0,0,0,0.03)] border border-gray-100 overflow-auto">
-            
-            {/* Mobile Card View */}
-            <div className="block lg:hidden p-3">
-              <div className="space-y-3">
-                {loading ? (
-                  <div className="py-12 text-center text-gray-500 text-sm">Loading data...</div>
-                ) : sortedEarnings.length === 0 ? (
-                  <div className="py-12 text-center text-gray-500 italic text-sm">No upcoming earnings scheduled.</div>
-                ) : (
-                  sortedEarnings.map((e, i) => {
-                    const isFuture = (e.date * 1000) > Date.now();
-                    const displayEpsRep = isFuture ? "-" : e.epsReported;
-                    const displaySurprise = isFuture ? "-" : e.surprise;
-                    const displayPctSurprise = isFuture ? "-" : e.pctSurprise;
-                    const displayRevAct = isFuture ? "-" : e.revenueActual;
-                    
-                    const bgColor = e.isNew 
-                      ? "bg-blue-50 border-l-4 border-l-blue-600" 
-                      : "bg-white";
-
-                    return (
-                      <div
-                        key={i}
-                        onClick={() => e.isNew && markAsSeen(e.earningId)}
-                        className={`rounded-xl shadow-sm border border-gray-200 p-3 cursor-pointer hover:shadow-md transition-shadow ${bgColor}`}
-                      >
-                        {/* Header */}
-                        <div className="flex items-start justify-between mb-2">
-                          <div className="flex items-center gap-2 flex-1 min-w-0 mr-2">
-                            <div className="w-8 h-8 flex items-center justify-center flex-shrink-0 overflow-hidden">
-                              {!logoErrors[e.ticker] ? (
-                                <img 
-                                  src={(() => {
-                                    const companyName = e.company || '';
-                                    const slug = getLogoSlug(companyName);
-                                    return `https://s3-symbol-logo.tradingview.com/${slug}.svg`;
-                                  })()}
-                                  alt={e.ticker}
-                                  className="w-full h-full object-contain rounded-lg"
-                                  onError={() => setLogoErrors(prev => ({ ...prev, [e.ticker]: true }))}
-                                />
-                              ) : (
-                                <span className="w-8 h-8 rounded-lg bg-slate-600/50 flex items-center justify-center text-xs font-bold text-white">
-                                  {e.ticker?.[0] || "?"}
-                                </span>
-                              )}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="font-bold text-[#2F80ED] text-sm truncate">{e.ticker}</div>
-                              <div className="text-xs text-gray-600 truncate">{e.company}</div>
-                            </div>
-                          </div>
-                          <div className="flex-shrink-0">
-                            {formatMarketCapValue(e.marketCap, e.currency, true)}
-                          </div>
-                        </div>
-
-                        {/* Dates */}
-                        <div className="grid grid-cols-2 gap-2 mb-2 pb-2 border-b border-gray-100">
-                          <div className="text-left">
-                            <div className="text-[10px] text-gray-500">Earnings Date</div>
-                            <div className="text-xs text-gray-800 font-medium">{formatDate(e.date)}</div>
-                          </div>
-                          <div className="text-right">
-                            <div className="text-[10px] text-gray-500">Period End</div>
-                            <div className="text-xs text-gray-800 font-medium">{formatDate(e.period)}</div>
-                          </div>
-                        </div>
-
-                        {/* DR Info */}
-                        {(e.mostPopularDR || e.highSensitivityDR) && (
-                          <div className="grid grid-cols-2 gap-2 mb-2 pb-2 border-b border-gray-100">
-                            {e.mostPopularDR && (
-                              <div className="text-left">
-                                <div className="text-[10px] text-gray-500">Popular DR</div>
-                                <div className="font-bold text-[#50B728] text-xs truncate">{e.mostPopularDR.symbol}</div>
-                                {e.mostPopularDR.volume > 0 && (
-                                  <div className="text-[10px] text-gray-600">Vol: {formatInt(e.mostPopularDR.volume)}</div>
-                                )}
-                              </div>
-                            )}
-                            {e.highSensitivityDR && (
-                              <div className="text-right">
-                                <div className="text-[10px] text-gray-500">Sensitivity DR</div>
-                                <div className="font-bold text-[#0007DE] text-xs truncate">{e.highSensitivityDR.symbol}</div>
-                                {e.highSensitivityDR.bid > 0 && (
-                                  <div className="text-[10px] text-gray-600">Bid: {formatPrice(e.highSensitivityDR.bid)}</div>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        )}
-
-                        {/* EPS & Revenue */}
-                        <div className="grid grid-cols-2 gap-2 text-xs">
-                          <div className="text-left">
-                            <div className="text-[10px] text-gray-500">EPS Est.</div>
-                            <div className="flex justify-start">{formatColoredValue(e.epsEstimate, e.currency)}</div>
-                          </div>
-                          <div className="text-right">
-                            <div className="text-[10px] text-gray-500">EPS Rep.</div>
-                            <div>{formatColoredValue(displayEpsRep, e.currency)}</div>
-                          </div>
-                          <div className="text-left">
-                            <div className="text-[10px] text-gray-500">Surprise</div>
-                            <div className="flex justify-start">{formatColoredValue(displaySurprise, "", e.currency)}</div>
-                          </div>
-                          <div className="text-right">
-                            <div className="text-[10px] text-gray-500">%Surprise</div>
-                            <div>{formatColoredValue(displayPctSurprise, "%")}</div>
-                          </div>
-                          <div className="text-left">
-                            <div className="text-[10px] text-gray-500">Rev Forecast</div>
-                            <div className="flex justify-start">{formatValue(e.revenueForecast, e.currency, true)}</div>
-                          </div>
-                          <div className="text-right">
-                            <div className="text-[10px] text-gray-500">Rev Actual</div>
-                            <div>{formatValue(displayRevAct, e.currency, true)}</div>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-            </div>
-
-            {/* Desktop Table View */}
-            <table className="hidden lg:table min-w-[1300px] w-full text-left border-collapse text-[14.4px]">
+            <table className="min-w-[1300px] w-full text-left border-collapse text-[14.4px]">
               <colgroup>
                 <col style={{ width: '250px', maxWidth: '250px' }} />
                 <col style={{ minWidth: '150px' }} />
@@ -924,29 +870,9 @@ const markAsSeen = (earningId) => {
                       onClick={() => e.isNew && markAsSeen(e.earningId)}
                     >
                       <td className="px-4 align-middle overflow-hidden" style={{ width: '250px', maxWidth: '250px' }}>
-                        <div className="flex items-center gap-2 overflow-hidden w-full min-w-0">
-                          <div className="w-10 h-10 flex items-center justify-center flex-shrink-0 overflow-hidden">
-                            {!logoErrors[e.ticker] ? (
-                              <img 
-                                src={(() => {
-                                  const companyName = e.company || '';
-                                  const slug = getLogoSlug(companyName);
-                                  return `https://s3-symbol-logo.tradingview.com/${slug}.svg`;
-                                })()}
-                                alt={e.ticker}
-                                className="w-full h-full object-contain rounded-xl"
-                                onError={() => setLogoErrors(prev => ({ ...prev, [e.ticker]: true }))}
-                              />
-                            ) : (
-                              <span className="w-10 h-10 rounded-xl bg-slate-600/50 flex items-center justify-center text-sm font-bold text-white">
-                                {e.ticker?.[0] || "?"}
-                              </span>
-                            )}
-                          </div>
-                          <div className="flex flex-col overflow-hidden w-full min-w-0">
-                            <span className="font-bold text-[#2F80ED] text-[14.4px] leading-tight truncate" title={e.ticker}>{e.ticker}</span>
-                            <span className="text-[12.4px] text-gray-600 truncate w-full mt-0.5" title={e.company}>{e.company}</span>
-                          </div>
+                        <div className="flex flex-col overflow-hidden w-full min-w-0">
+                          <span className="font-bold text-[#2F80ED] text-[14.4px] leading-tight truncate" title={e.ticker}>{e.ticker}</span>
+                          <span className="text-[12.4px] text-gray-600 truncate w-full mt-0.5" title={e.company}>{e.company}</span>
                         </div>
                       </td>
                       <td className="px-4 align-middle text-center text-gray-800 font-medium">{formatMarketCapValue(e.marketCap, e.currency, true)}</td>

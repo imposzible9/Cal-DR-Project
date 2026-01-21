@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
 
-const API_BASE = "http://localhost:8003";
+const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8003";
 const TH_QUERY = "ตลาดหุ้น OR หุ้น OR ดัชนี";
 const EN_QUERY = "stock market";
 const DEFAULT_SYMBOLS = ["NVDA", "TSLA", "GOOG", "AAPL", "MSFT", "AMZN", "META", "BABA"];
@@ -175,10 +175,18 @@ const News = () => {
     async function loadSymbol() {
       setLoadingSearch(true);
       setErrorSearch("");
+      
+      // Determine query symbol (append .BK for Thai stocks)
+      let querySymbol = selected;
+      const match = allSymbols.find(s => s.symbol === selected);
+      if (match && (match.exchange === 'SET' || match.exchange === 'mai')) {
+        querySymbol = selected + ".BK";
+      }
+
       try {
         const [qRes, nRes] = await Promise.all([
-          axios.get(`${API_BASE}/api/finnhub/quote/${encodeURIComponent(selected)}`),
-          axios.get(`${API_BASE}/api/finnhub/company-news/${encodeURIComponent(selected)}`, { params: { hours: 168, limit: 30 } }),
+          axios.get(`${API_BASE}/api/finnhub/quote/${encodeURIComponent(querySymbol)}`),
+          axios.get(`${API_BASE}/api/finnhub/company-news/${encodeURIComponent(querySymbol)}`, { params: { hours: 168, limit: 30 } }),
         ]);
         if (!mounted) return;
         setQuote(qRes.data || null);
@@ -225,33 +233,54 @@ const News = () => {
     }
   };
 
+  const updateSuggestions = (value) => {
+    if (value.length > 0) {
+      const filtered = allSymbols.filter(s => s.symbol.startsWith(value));
+      setSuggestions(filtered.slice(0, 100));
+    } else {
+      setSuggestions(allSymbols.slice(0, 100));
+    }
+    setShowSuggestions(true);
+  };
+
   const handleSearchChange = (e) => {
     const newSearch = e.target.value.toUpperCase();
     setSearch(newSearch);
-
-    if (newSearch.length > 0) {
-      const filtered = allSymbols.filter(s => s.symbol.startsWith(newSearch));
-      setSuggestions(filtered.slice(0, 10));
-      setShowSuggestions(true);
-    } else {
-      setSuggestions([]);
-      setShowSuggestions(false);
-    }
+    updateSuggestions(newSearch);
   };
 
-const selectSuggestion = (s) => {
-  setSearch(s.symbol);
-  setSelected(s.symbol);
-  setShowSuggestions(false);
-  setErrorSearch("");
-};
+  const handleSearchFocus = () => {
+    updateSuggestions(search);
+  };
 
-const clearSearch = () => {
-  setSearch("");
-  setSelected("");
-  setSuggestions([]);
-  setShowSuggestions(false);
-};
+  // Close suggestions when clicking outside would be ideal, 
+  // but for now we'll rely on selection or blur (careful with blur vs click)
+  // A simple way is to delay hiding on blur to allow click to register
+  const handleSearchBlur = () => {
+    // Delay hiding to allow item click to register
+    setTimeout(() => {
+      setShowSuggestions(false);
+    }, 200);
+  };
+
+  const selectSuggestion = (s) => {
+    setSearch(s.symbol);
+    setSelected(s.symbol);
+    setShowSuggestions(false);
+    setErrorSearch("");
+  };
+
+  const clearSearch = () => {
+    setSearch("");
+    setSelected("");
+    setSuggestions(allSymbols.slice(0, 100)); // Reset to default suggestions
+    setShowSuggestions(true); // Keep open or close? Usually close if cleared via X, but maybe user wants to search again.
+    // Let's close it if they click X, or maybe keep it open if they want to pick another?
+    // User said "Search" button clears it. 
+    // If I click clear, I probably want to reset.
+    // Let's keep it closed for now unless they focus again.
+    setShowSuggestions(false); 
+  };
 
   let suggestionsContent = null;
   if (showSuggestions && suggestions.length > 0) {
@@ -284,6 +313,11 @@ const clearSearch = () => {
                 </span>
               </div>
               <span className="font-bold text-[#0B102A]">{s.symbol}</span>
+              {s.exchange && (
+                <span className="text-xs font-medium text-gray-400 border border-gray-200 rounded px-1.5 py-0.5 bg-gray-50">
+                  {s.exchange}
+                </span>
+              )}
             </div>
             <span className="text-xs text-gray-500 truncate max-w-[150px]">{s.name}</span>
           </div>
@@ -296,10 +330,10 @@ const clearSearch = () => {
 
 return (
   <div className="min-h-screen w-full bg-[#F5F5F5] flex justify-center">
-    <div className="w-full max-w-[1248px] flex flex-col h-full py-10">
+    <div className="w-full max-w-[1248px] px-4 md:px-8 flex flex-col h-full py-10">
       
       {/* Header Section */}
-      <div className="flex flex-col md:flex-row md:items-start justify-between gap-6 mb-8 px-4 md:px-0">
+      <div className="flex flex-col md:flex-row md:items-start justify-between gap-6 mb-8">
         <div>
           <h1 className="text-3xl font-bold mb-2 text-[#0B102A]">News</h1>
           <p className="text-[#6B6B6B] text-sm">Latest market updates, earnings reports, and insights for Underlying Assets</p>
@@ -310,7 +344,9 @@ return (
               value={search}
               onChange={handleSearchChange}
               onKeyDown={onSearchKey}
-              placeholder="Search Underlying"
+              onFocus={handleSearchFocus}
+              onBlur={handleSearchBlur}
+              placeholder="Search"
               className="w-full bg-white pl-4 pr-10 py-2.5 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#0B102A] text-sm shadow-sm"
             />
             {selected ? (
@@ -328,7 +364,7 @@ return (
         </div>
 
         {/* Main Content */}
-        <div className="flex-1 pb-10 px-4 md:px-0">
+        <div className="flex-1 pb-10">
           
           {selected ? (
             /* Search Result View */
@@ -352,7 +388,6 @@ return (
                         </div>
                         <div>
                           <div className="text-2xl font-bold">{selected}</div>
-                          <div className="text-blue-200 text-sm">Underlying Asset</div>
                         </div>
                       </div>
                       <div className="relative z-10 text-right">
@@ -405,7 +440,6 @@ return (
                             </div>
                             <div>
                               <div className="text-sm font-bold text-blue-200">{topStory.ticker}</div>
-                              <div className="text-xs text-blue-300/70 -mt-1">Underlying Asset</div>
                             </div>
                           </div>
                         )}

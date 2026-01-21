@@ -4,7 +4,6 @@ from contextlib import asynccontextmanager
 import asyncio
 import time
 import httpx
-import uvicorn
 
 app = FastAPI(title="DR Calculation API (Cache + Background Refresh + Symbol Map)")
 
@@ -401,4 +400,5 @@ async def calculate_dr(dr_symbol: str):
     }
 
 if __name__ == "__main__":
-    uvicorn.run("dr_calculation_api:app", host="0.0.0.0", port=8000, reload=True)
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8002)

@@ -1,7 +1,5 @@
-from fastapi import FastAPI, Query, Request
+from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import Optional, Dict, Any
 from contextlib import asynccontextmanager
 import httpx
 import uvicorn
@@ -261,57 +259,6 @@ def init_database():
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_rating_accuracy_ticker_timestamp 
             ON rating_accuracy(ticker, timestamp DESC)
-        """)
-
-        # --- 1. User Behavior Tracking Table (Detailed Logs) ---
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS user_behavior (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT NOT NULL,
-                user_id TEXT, -- Stores IP Address as requested
-                event_type TEXT NOT NULL,
-                event_data TEXT,
-                page_path TEXT,
-                timestamp TEXT NOT NULL,
-                user_agent TEXT,
-                ip_address TEXT,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
-        # --- 2. Visitor Stats Table (Unique IP Counting) ---
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS visitor_stats (
-                ip_address TEXT PRIMARY KEY,
-                first_seen TEXT,
-                last_seen TEXT,
-                total_visits INTEGER DEFAULT 0
-            )
-        """)
-
-        # --- 3. User Page Analytics Table (Page visits per User/IP) ---
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS user_page_analytics (
-                ip_address TEXT,
-                page_name TEXT,
-                visit_count INTEGER DEFAULT 0,
-                last_visit TEXT,
-                PRIMARY KEY (ip_address, page_name)
-            )
-        """)
-        
-        # สร้าง indexes สำหรับ user_behavior
-        cur.execute("""
-            CREATE INDEX IF NOT EXISTS idx_user_behavior_session 
-            ON user_behavior(session_id)
-        """)
-        cur.execute("""
-            CREATE INDEX IF NOT EXISTS idx_user_behavior_event_type 
-            ON user_behavior(event_type)
-        """)
-        cur.execute("""
-            CREATE INDEX IF NOT EXISTS idx_user_behavior_timestamp 
-            ON user_behavior(timestamp DESC)
         """)
 
         con.commit()
@@ -953,8 +900,7 @@ def update_rating_main(cur, ticker, timestamp_str, daily_val, daily_rating, week
 
     cur.execute("""
         SELECT daily_val, daily_rating, daily_prev, daily_changed_at,
-               weekly_val, weekly_rating, weekly_prev, weekly_changed_at,
-               timestamp
+               weekly_val, weekly_rating, weekly_prev, weekly_changed_at
         FROM rating_main 
         WHERE ticker=? 
         ORDER BY timestamp DESC 
@@ -971,24 +917,6 @@ def update_rating_main(cur, ticker, timestamp_str, daily_val, daily_rating, week
     current_weekly_rating = current_main[5] if current_main and current_main[5] else None
     current_weekly_prev = current_main[6] if current_main and current_main[6] else None
     current_weekly_changed_at = current_main[7] if current_main and current_main[7] else None
-    current_timestamp = current_main[8] if current_main and current_main[8] else None
-    
-    # อัพเดตข้อมูลราคาที่ timestamp เดิมเสมอ (ถ้ามี record เดิม)
-    if current_main is not None and current_timestamp:
-        cur.execute("""
-            UPDATE rating_main 
-            SET price=?, high=?, low=?, change_pct=?, change_abs=?, currency=?
-            WHERE ticker=? AND timestamp=?
-        """, (
-            market_data.get("price"),
-            market_data.get("high"),
-            market_data.get("low"),
-            market_data.get("change_pct"),
-            market_data.get("change_abs"),
-            market_data.get("currency", ""),
-            ticker,
-            current_timestamp
-        ))
     
     # Determine what to update
     update_daily = False
@@ -1326,10 +1254,10 @@ def upsert_history_snapshot(
         # Already have snapshot for this day -> nothing to do
         return
 
-    # Find previous history record (for prev fields and price calculation)
+    # Find previous history record (for prev fields)
     cur.execute(
         """
-        SELECT daily_rating, weekly_rating, price
+        SELECT daily_rating, weekly_rating
         FROM rating_history
         WHERE ticker=? AND timestamp < ?
         ORDER BY timestamp DESC
@@ -1340,15 +1268,6 @@ def upsert_history_snapshot(
     prev = cur.fetchone()
     prev_daily = prev[0] if prev else None
     prev_weekly = prev[1] if prev else None
-    prev_price = prev[2] if prev else None
-
-    # คำนวณ change_pct จาก price และ prev_price
-    current_price = market_data.get("price")
-    calculated_change_pct = 0.0
-    calculated_change_abs = 0.0
-    if prev_price and current_price and prev_price > 0:
-        calculated_change_pct = ((current_price - prev_price) / prev_price) * 100
-        calculated_change_abs = current_price - prev_price
 
     cur.execute(
         """
@@ -1375,9 +1294,9 @@ def upsert_history_snapshot(
             exchange or "",
             market_code or "",
             market_data.get("currency", ""),
-            current_price,
-            calculated_change_pct,
-            calculated_change_abs,
+            market_data.get("price"),
+            market_data.get("change_pct"),
+            market_data.get("change_abs"),
             market_data.get("high"),
             market_data.get("low"),
         ),
@@ -1668,6 +1587,7 @@ async def fetch_market_history(market_code: str):
         try:
             fetched_count = 0
             skipped_count = 0
+            fetched_tickers = []  # เก็บ list ของ tickers ที่เพิ่ง upsert สำเร็จ (สำหรับคำนวณ accuracy)
             
             for item in market_tickers:
                 ticker = item.get("u_code")
@@ -1755,59 +1675,24 @@ async def fetch_market_history(market_code: str):
                 
                 if upsert_success:
                     fetched_count += 1
+                    # เก็บ ticker, timestamp, price, change_pct สำหรับคำนวณ accuracy ภายหลัง
+                    ts_str = now_thai.replace(tzinfo=None).isoformat()
+                    fetched_tickers.append({
+                        "ticker": ticker,
+                        "timestamp": ts_str,
+                        "price": market_data.get("price"),
+                        "change_pct": market_data.get("change_pct"),
+                        "currency": market_data.get("currency"),
+                        "high": market_data.get("high"),
+                        "low": market_data.get("low")
+                    })
                 else:
                     print(f"[History] [{market_code}] Failed to upsert {ticker} after retries")
                 
                 # Small delay between requests
                 await asyncio.sleep(0.1)
             
-            # คำนวณ accuracy สำหรับทุก ticker ในวันนี้ (ก่อน commit)
-            # Query ทุก ticker ที่มีข้อมูลในวันนี้ (รวมที่ skip และที่เพิ่งดึงใหม่)
-            date_str = now_thai.date().isoformat()
-            cur.execute("""
-                SELECT ticker, timestamp, price, change_pct, currency, high, low
-                FROM rating_history
-                WHERE strftime('%Y-%m-%d', timestamp) = ?
-                AND market = ?
-                ORDER BY ticker
-            """, (date_str, market_code))
-            
-            all_tickers_today = cur.fetchall()
-            
-            if all_tickers_today:
-                print(f"[Accuracy] [{market_code}] Calculating accuracy for {len(all_tickers_today)} tickers from today's data...")
-                accuracy_calculated = 0
-                accuracy_errors = 0
-                
-                for row in all_tickers_today:
-                    ticker = row[0]
-                    timestamp_str = row[1]
-                    price = row[2]
-                    change_pct = row[3]
-                    currency = row[4]
-                    high = row[5]
-                    low = row[6]
-                    
-                    try:
-                        calculate_and_save_accuracy_for_ticker(
-                            cur, 
-                            ticker, 
-                            timestamp_str,
-                            price,
-                            change_pct,
-                            currency,
-                            high,
-                            low,
-                            window_days=90
-                        )
-                        accuracy_calculated += 1
-                    except Exception as ticker_e:
-                        accuracy_errors += 1
-                        print(f"[Accuracy] [{market_code}] Error calculating accuracy for {ticker}: {ticker_e}")
-                
-                print(f"[Accuracy] [{market_code}] Completed: {accuracy_calculated}/{len(all_tickers_today)} tickers calculated, {accuracy_errors} errors")
-            
-            # Commit with retry (ทั้ง history และ accuracy ใน transaction เดียว)
+            # Commit with retry
             commit_success = False
             # #region agent log
             debug_log(session_id, run_id, "F", f"fetch_market_history:{market_code}:before_commit",
@@ -1836,12 +1721,108 @@ async def fetch_market_history(market_code: str):
                         raise
             
             if commit_success:
-                print(f"[History] [{market_code}] ✅ Completed: {fetched_count} fetched, {skipped_count} skipped")
+                print(f"[History] [{market_code}] Completed: {fetched_count} fetched, {skipped_count} skipped (already exist)")
                 # #region agent log
                 debug_log(session_id, run_id, "G", f"fetch_market_history:{market_code}:completed",
                           f"Fetch completed for {market_code}", {"market_code": market_code, "fetched_count": fetched_count, "skipped_count": skipped_count})
+
+                if fetched_tickers:
+                    print(f"[Accuracy] [{market_code}] Calculating accuracy for {len(fetched_tickers)} tickers...")
+                    accuracy_calculated = 0
+                    accuracy_errors = 0
+                    # ปิด connection เดิมก่อน (เพื่อไม่ให้ block)
+                    con.close()
+                    con = None
+                    
+                    # Batch size: commit ทุก 10 tickers (ลด lock time แต่ยังคงมี atomicity ในระดับ batch)
+                    BATCH_SIZE = 10
+                    failed_tickers = []  # เก็บ tickers ที่ error สำหรับ retry
+                    
+                    for batch_start in range(0, len(fetched_tickers), BATCH_SIZE):
+                        batch_end = min(batch_start + BATCH_SIZE, len(fetched_tickers))
+                        batch_tickers = fetched_tickers[batch_start:batch_end]
+                        
+                        # สร้าง connection ใหม่สำหรับแต่ละ batch
+                        batch_con = None
+                        try:
+                            batch_con = sqlite3.connect(DB_FILE, timeout=3)  # ลด timeout เป็น 3 วินาที
+                            batch_cur = batch_con.cursor()
+                            batch_cur.execute("PRAGMA journal_mode=WAL")
+                            batch_cur.execute("PRAGMA busy_timeout=1000")  # ลดเป็น 1 วินาที
+                            
+                            batch_success = True
+                            for ticker_info in batch_tickers:
+                                try:
+                                    calculate_and_save_accuracy_for_ticker(
+                                        batch_cur, 
+                                        ticker_info["ticker"], 
+                                        ticker_info["timestamp"],
+                                        ticker_info["price"],
+                                        ticker_info["change_pct"],
+                                        ticker_info.get("currency"),
+                                        ticker_info.get("high"),
+                                        ticker_info.get("low"),
+                                        window_days=90
+                                    )
+                                except Exception as ticker_e:
+                                    print(f"[Accuracy] [{market_code}] Error calculating accuracy for {ticker_info['ticker']}: {ticker_e}")
+                                    failed_tickers.append(ticker_info)
+                                    batch_success = False
+                                    # Rollback transaction สำหรับ batch นี้
+                                    batch_con.rollback()
+                                    break
+                            
+                            # Commit batch ถ้าทุก ticker สำเร็จ
+                            if batch_success:
+                                batch_con.commit()
+                                accuracy_calculated += len(batch_tickers)
+                            else:
+                                # Batch failed - tickers ใน batch นี้จะถูกเก็บไว้สำหรับ retry
+                                accuracy_errors += len(batch_tickers)
+                                
+                        except Exception as batch_e:
+                            print(f"[Accuracy] [{market_code}] Error in batch ({batch_start}-{batch_end}): {batch_e}")
+                            failed_tickers.extend(batch_tickers)
+                            accuracy_errors += len(batch_tickers)
+                        finally:
+                            if batch_con:
+                                batch_con.close()
+                    
+                    # Retry failed tickers ทีละตัว (connection แยก) เพื่อให้มีข้อมูลครบถ้วน
+                    if failed_tickers:
+                        print(f"[Accuracy] [{market_code}] Retrying {len(failed_tickers)} failed tickers individually...")
+                        for ticker_info in failed_tickers:
+                            retry_con = None
+                            try:
+                                retry_con = sqlite3.connect(DB_FILE, timeout=3)  # ลด timeout เป็น 3 วินาที
+                                retry_cur = retry_con.cursor()
+                                retry_cur.execute("PRAGMA journal_mode=WAL")
+                                retry_cur.execute("PRAGMA busy_timeout=1000")  # ลดเป็น 1 วินาที
+                                
+                                calculate_and_save_accuracy_for_ticker(
+                                    retry_cur, 
+                                    ticker_info["ticker"], 
+                                    ticker_info["timestamp"],
+                                    ticker_info["price"],
+                                    ticker_info["change_pct"],
+                                    ticker_info.get("currency"),
+                                    ticker_info.get("high"),
+                                    ticker_info.get("low"),
+                                    window_days=90
+                                )
+                                retry_con.commit()
+                                accuracy_calculated += 1
+                                accuracy_errors -= 1
+                                print(f"[Accuracy] [{market_code}] ✅ Retry successful for {ticker_info['ticker']}")
+                            except Exception as retry_e:
+                                print(f"[Accuracy] [{market_code}] ❌ Retry failed for {ticker_info['ticker']}: {retry_e}")
+                            finally:
+                                if retry_con:
+                                    retry_con.close()
+                    
+                    print(f"[Accuracy] [{market_code}] Completed: {accuracy_calculated}/{len(fetched_tickers)} tickers saved, {accuracy_errors} errors")
             else:
-                print(f"[History] [{market_code}] ❌ Warning: Failed to commit after retries")
+                print(f"[History] [{market_code}] Warning: Failed to commit after retries")
             
             # Debug: ตรวจสอบว่ามี ticker ไหนที่ยังไม่มีใน rating_history (เฉพาะ US)
             # ใช้ connection ใหม่สำหรับ debug query เพื่อไม่ให้ block
@@ -2068,14 +2049,6 @@ def calculate_accuracy_from_rating_change(history_rows, window_days=90):
             daily_rating = rating
             daily_prev = prev_rating
         
-        # ข้ามการนับถ้า rating ไม่เปลี่ยน และ price ไม่เปลี่ยน (change_pct ใกล้ 0)
-        rating_not_changed = (rating_lower == prev_rating_lower)
-        price_not_changed = (abs(change_pct) < 0.01)  # tolerance 0.01%
-        
-        if rating_not_changed and price_not_changed:
-            # ไม่นับเป็น correct หรือ incorrect เพราะไม่มีการขยับตัว
-            continue
-        
         # ตรวจสอบการเปลี่ยนแปลง rating และ change_pct
         is_correct = False
         
@@ -2085,19 +2058,9 @@ def calculate_accuracy_from_rating_change(history_rows, window_days=90):
         # ถ้าเปลี่ยนจาก buy/strong buy -> sell/strong sell และ change_pct < 0 = correct
         elif prev_rating_lower in ["buy", "strong buy"] and rating_lower in ["sell", "strong sell"]:
             is_correct = change_pct < 0
-        # ถ้า rating ไม่เปลี่ยน แต่ price เปลี่ยน -> ดูว่า price เปลี่ยนไปทางเดียวกับ rating หรือไม่
-        elif rating_not_changed:
-            # Buy/Strong Buy + Price ↑ = Correct
-            # Buy/Strong Buy + Price ↓ = Incorrect
-            # Sell/Strong Sell + Price ↓ = Correct
-            # Sell/Strong Sell + Price ↑ = Incorrect
-            if rating_lower in ["buy", "strong buy"]:
-                is_correct = change_pct > 0
-            elif rating_lower in ["sell", "strong sell"]:
-                is_correct = change_pct < 0
-            else:
-                # Neutral -> ข้าม (ไม่ควรถึงจุดนี้เพราะ filter ไว้แล้ว)
-                continue
+        # ถ้า rating ไม่เปลี่ยน (เช่น buy -> buy หรือ sell -> sell) ไม่นับ
+        elif rating_lower == prev_rating_lower:
+            continue
         
         if is_correct:
             daily_correct += 1
@@ -2137,14 +2100,6 @@ def calculate_accuracy_from_rating_change(history_rows, window_days=90):
             weekly_rating = rating
             weekly_prev = prev_rating
         
-        # ข้ามการนับถ้า rating ไม่เปลี่ยน และ price ไม่เปลี่ยน (change_pct ใกล้ 0)
-        rating_not_changed = (rating_lower == prev_rating_lower)
-        price_not_changed = (abs(change_pct) < 0.01)  # tolerance 0.01%
-        
-        if rating_not_changed and price_not_changed:
-            # ไม่นับเป็น correct หรือ incorrect เพราะไม่มีการขยับตัว
-            continue
-        
         # ตรวจสอบการเปลี่ยนแปลง rating และ change_pct
         is_correct = False
         
@@ -2154,19 +2109,9 @@ def calculate_accuracy_from_rating_change(history_rows, window_days=90):
         # ถ้าเปลี่ยนจาก buy/strong buy -> sell/strong sell และ change_pct < 0 = correct
         elif prev_rating_lower in ["buy", "strong buy"] and rating_lower in ["sell", "strong sell"]:
             is_correct = change_pct < 0
-        # ถ้า rating ไม่เปลี่ยน แต่ price เปลี่ยน -> ดูว่า price เปลี่ยนไปทางเดียวกับ rating หรือไม่
-        elif rating_not_changed:
-            # Buy/Strong Buy + Price ↑ = Correct
-            # Buy/Strong Buy + Price ↓ = Incorrect
-            # Sell/Strong Sell + Price ↓ = Correct
-            # Sell/Strong Sell + Price ↑ = Incorrect
-            if rating_lower in ["buy", "strong buy"]:
-                is_correct = change_pct > 0
-            elif rating_lower in ["sell", "strong sell"]:
-                is_correct = change_pct < 0
-            else:
-                # Neutral -> ข้าม (ไม่ควรถึงจุดนี้เพราะ filter ไว้แล้ว)
-                continue
+        # ถ้า rating ไม่เปลี่ยน (เช่น buy -> buy หรือ sell -> sell) ไม่นับ
+        elif rating_lower == prev_rating_lower:
+            continue
         
         if is_correct:
             weekly_correct += 1
@@ -2245,40 +2190,6 @@ def save_accuracy_to_db_new(cur, ticker, timestamp, price, price_prev, change_pc
 def calculate_and_save_accuracy_for_ticker(cur, ticker, timestamp_str, price, change_pct, currency=None, high=None, low=None, window_days=90):
 
     try:
-        # ดึงข้อมูล rating/prev และ price_prev ที่ timestamp ปัจจุบัน
-        cur.execute("""
-            SELECT daily_rating, daily_prev, weekly_rating, weekly_prev
-            FROM rating_history
-            WHERE ticker=? AND timestamp=?
-        """, (ticker.upper(), timestamp_str))
-        current_record = cur.fetchone()
-        
-        if not current_record:
-            return
-        
-        current_daily_rating = current_record[0]
-        current_daily_prev = current_record[1]
-        current_weekly_rating = current_record[2]
-        current_weekly_prev = current_record[3]
-        
-        # ดึง price_prev จาก rating_history (timestamp ก่อนล่าสุด)
-        price_prev = None
-        cur.execute("""
-            SELECT price
-            FROM rating_history
-            WHERE ticker=? AND timestamp < ?
-            ORDER BY timestamp DESC
-            LIMIT 1
-        """, (ticker.upper(), timestamp_str))
-        prev_row = cur.fetchone()
-        if prev_row:
-            price_prev = prev_row["price"] if "price" in prev_row.keys() else None
-        
-        # ข้ามถ้าไม่มี price_prev (เป็นสัญญาณแรกของ ticker นี้)
-        if price_prev is None:
-            # ไม่บันทึกลง rating_accuracy เพราะไม่สามารถคำนวณ change_pct ได้
-            return
-        
         # ดึงข้อมูล history จาก rating_history (ย้อนหลัง window_days วัน)
         # ใช้ datetime() function ใน SQLite กับ parameter
         cur.execute("""
@@ -2298,13 +2209,21 @@ def calculate_and_save_accuracy_for_ticker(cur, ticker, timestamp_str, price, ch
         # คำนวณ accuracy
         accuracy_result = calculate_accuracy_from_rating_change(history_rows, window_days)
         
-        # คำนวณ change_pct จาก price และ price_prev (ไม่ใช้จาก TradingView)
-        calculated_change_pct = 0.0
-        if price_prev and price_prev > 0:
-            calculated_change_pct = ((price - price_prev) / price_prev) * 100
+        # ดึง price_prev จาก rating_history (timestamp ก่อนล่าสุด)
+        price_prev = None
+        cur.execute("""
+            SELECT price
+            FROM rating_history
+            WHERE ticker=? AND timestamp < ?
+            ORDER BY timestamp DESC
+            LIMIT 1
+        """, (ticker.upper(), timestamp_str))
+        prev_row = cur.fetchone()
+        if prev_row:
+            price_prev = prev_row["price"] if "price" in prev_row.keys() else None
         
         # บันทึกลงใน rating_accuracy
-        save_accuracy_to_db_new(cur, ticker, timestamp_str, price, price_prev, calculated_change_pct, currency, high, low, window_days, accuracy_result)
+        save_accuracy_to_db_new(cur, ticker, timestamp_str, price, price_prev, change_pct, currency, high, low, window_days, accuracy_result)
         
     except Exception as e:
         print(f"⚠️ [Accuracy] Error calculating accuracy for {ticker}: {e}")
@@ -2996,55 +2915,8 @@ def get_history_with_accuracy(
                 "change_abs": change_abs
             })
         
-        # คำนวณ accuracy จาก history_items (รองรับ filter_rating)
-        # ถ้ามี filter_rating จะคำนวณเฉพาะ rating ที่ตรงกับ filter
-        filtered_items = history_items
-        if filter_rating:
-            filtered_items = [item for item in history_items if item["rating"].lower() == filter_rating.lower()]
-        
-        # คำนวณ accuracy จากรายการที่กรองแล้ว
-        correct = 0
-        incorrect = 0
-        
-        for item in filtered_items:
-            rating_curr = item["rating"].lower()
-            rating_prev = item["prev"].lower()
-            change_pct = item["change_pct"]
-            
-            # ข้ามถ้า rating ไม่เปลี่ยนและ price ไม่เปลี่ยน
-            rating_not_changed = (rating_curr == rating_prev)
-            price_not_changed = (abs(change_pct) < 0.01)
-            
-            if rating_not_changed and price_not_changed:
-                continue  # ไม่นับ
-            
-            # ตรวจสอบความถูกต้อง
-            is_correct = False
-            
-            if rating_prev in ["sell", "strong sell"] and rating_curr in ["buy", "strong buy"]:
-                is_correct = change_pct > 0
-            elif rating_prev in ["buy", "strong buy"] and rating_curr in ["sell", "strong sell"]:
-                is_correct = change_pct < 0
-            elif rating_not_changed:
-                if rating_curr in ["buy", "strong buy"]:
-                    is_correct = change_pct > 0
-                elif rating_curr in ["sell", "strong sell"]:
-                    is_correct = change_pct < 0
-            
-            if is_correct:
-                correct += 1
-            else:
-                incorrect += 1
-        
-        total = correct + incorrect
-        accuracy_pct = (correct / total * 100) if total > 0 else 0.0
-        
-        accuracy_result = {
-            "accuracy": round(accuracy_pct, 2),
-            "correct": correct,
-            "incorrect": incorrect,
-            "total": total
-        }
+        # คำนวณ accuracy โดยรองรับ filter_rating
+        accuracy_result = calculate_accuracy_from_frontend_logic(history_items, filter_rating)
         
         # Get current rating from latest accuracy record (direct access - faster)
         current_rating = acc_row_latest[rating_key] or "Unknown"
@@ -3263,380 +3135,5 @@ def ratings_from_dr_api():
             con.close()
         return {"updated_at": updated_at_str, "count": 0, "rows": []}
 
-
-# ==================== USER BEHAVIOR TRACKING API ====================
-
-class TrackingEvent(BaseModel):
-    session_id: str
-    user_id: Optional[str] = None
-    event_type: str
-    event_data: Optional[Dict[str, Any]] = None
-    page_path: Optional[str] = None
-    timestamp: Optional[str] = None
-    user_agent: Optional[str] = None
-
-
-@app.post("/api/track")
-async def track_event(event: TrackingEvent, request: Request):
-    """
-    บันทึก tracking event จาก frontend
-    รองรับ event types: page_view, stock_view, search, click, session_start, session_end, filter, calculation
-    """
-    print(f"🔍 [TRACK] Processing {event.event_type} from {request.client.host if request.client else 'Unknown'}")
-    try:
-        con = sqlite3.connect(DB_FILE)
-        cur = con.cursor()
-        
-        # Enable WAL mode
-        cur.execute("PRAGMA journal_mode=WAL")
-        cur.execute("PRAGMA busy_timeout=30000")
-
-        # ตรวจสอบและเพิ่ม column user_id ถ้ายังไม่มี (Migration)
-        try:
-            cur.execute("PRAGMA table_info(user_behavior)")
-            columns = [row[1] for row in cur.fetchall()]
-            if "user_id" not in columns:
-                print("📦 Adding 'user_id' column to user_behavior table...")
-                cur.execute("ALTER TABLE user_behavior ADD COLUMN user_id TEXT")
-        except Exception as e:
-            print(f"⚠️ Failed to migrate user_behavior: {e}")
-
-        # Get client IP address
-        client_ip = request.client.host if request.client else None
-        
-        # ✅ Use IP Address as user_id (Requested by user)
-        # นี้จะทำให้การนับ user_id = การนับ IP Address
-        final_user_id = client_ip
-
-        # Convert event_data to JSON string
-        event_data_json = json.dumps(event.event_data, ensure_ascii=False) if event.event_data else None
-        
-        # Use provided timestamp or current time
-        timestamp_str = event.timestamp or datetime.now(ZoneInfo("Asia/Bangkok")).isoformat()
-        
-        # ====================================================================================
-        # 🟢 1. UNIQUE VISITORS (Count unique IPs)
-        # ====================================================================================
-        # Table: visitor_stats (ip_address, first_seen, last_seen, total_visits)
-        # ------------------------------------------------------------------------------------
-        try:
-            # Ensure table exists
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS visitor_stats (
-                    ip_address TEXT PRIMARY KEY,
-                    first_seen TEXT,
-                    last_seen TEXT,
-                    total_visits INTEGER DEFAULT 0
-                )
-            """)
-            
-            # Upsert visitor data
-            cur.execute("SELECT ip_address FROM visitor_stats WHERE ip_address = ?", (client_ip,))
-            existing_visitor = cur.fetchone()
-            
-            current_time = datetime.now(ZoneInfo("Asia/Bangkok")).isoformat()
-            
-            if existing_visitor:
-                cur.execute("""
-                    UPDATE visitor_stats 
-                    SET last_seen = ?, total_visits = total_visits + 1
-                    WHERE ip_address = ?
-                """, (current_time, client_ip))
-            else:
-                cur.execute("""
-                    INSERT INTO visitor_stats (ip_address, first_seen, last_seen, total_visits)
-                    VALUES (?, ?, ?, 1)
-                """, (client_ip, current_time, current_time))
-                
-        except Exception as e:
-            print(f"⚠️ Failed to update visitor_stats: {e}")
-
-        # ====================================================================================
-        # 🟢 2. USER PAGE ANALYTICS (User X viewed Page Y N times)
-        # ====================================================================================
-        # Table: user_page_analytics (ip_address, page_name, visit_count, last_visit)
-        # ------------------------------------------------------------------------------------
-        try:
-            if event.event_type == 'page_view':
-                # Ensure table exists
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS user_page_analytics (
-                        ip_address TEXT,
-                        page_name TEXT,
-                        visit_count INTEGER DEFAULT 0,
-                        last_visit TEXT,
-                        PRIMARY KEY (ip_address, page_name)
-                    )
-                """)
-                
-                # Determine readable page name
-                page_name_raw = event.event_data.get('page_name') if event.event_data else None
-                page_path_raw = event.page_path
-                
-                # Logic to determine "Page Name" (DR List, Cal DR, Suggestion, etc.)
-                final_page_name = page_name_raw or page_path_raw or "Unknown Page"
-                if page_path_raw == "/drlist": final_page_name = "DR List"
-                elif page_path_raw == "/caldr": final_page_name = "Cal DR" 
-                elif page_path_raw == "/suggestion": final_page_name = "Suggestion"
-                elif page_path_raw == "/calendar": final_page_name = "Calendar"
-                
-                # Upsert page visit data
-                cur.execute("""
-                    INSERT INTO user_page_analytics (ip_address, page_name, visit_count, last_visit)
-                    VALUES (?, ?, 1, ?)
-                    ON CONFLICT(ip_address, page_name) DO UPDATE SET
-                    visit_count = visit_count + 1,
-                    last_visit = excluded.last_visit
-                """, (client_ip, final_page_name, current_time))
-                
-        except Exception as e:
-            print(f"⚠️ Failed to update user_page_analytics: {e}")
-
-        # ====================================================================================
-        # 🟢 3. DETAILED LOGS (Log everything)
-        # ====================================================================================
-        # Table: user_behavior (Already exists)
-        # ------------------------------------------------------------------------------------
-        cur.execute("""
-            INSERT INTO user_behavior (session_id, user_id, event_type, event_data, page_path, timestamp, user_agent, ip_address)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            event.session_id,
-            final_user_id, # บันทึก IP ลงใน user_id
-            event.event_type,
-            event_data_json,
-            event.page_path,
-            timestamp_str,
-            event.user_agent,
-            client_ip
-        ))
-        
-        con.commit()
-        con.close()
-        
-        return {"success": True, "message": "Event tracked successfully"}
-        
-    except Exception as e:
-        print(f"❌ Tracking Error: {e}")
-        if 'con' in locals() and con:
-            con.close()
-        return {"success": False, "error": str(e)}
-
-
-@app.get("/api/analytics/summary")
-async def get_analytics_summary(
-    days: int = Query(default=7, description="จำนวนวันย้อนหลังที่ต้องการดู"),
-    event_type: Optional[str] = Query(default=None, description="กรองตาม event type")
-):
-    """
-    ดึงสรุปข้อมูล analytics
-    - จำนวน sessions ทั้งหมด
-    - จำนวน page views ต่อหน้า
-    - หุ้นที่ถูกดูบ่อยที่สุด
-    - คำค้นหายอดนิยม
-    """
-    try:
-        con = sqlite3.connect(DB_FILE)
-        con.row_factory = sqlite3.Row
-        cur = con.cursor()
-        
-        cur.execute("PRAGMA journal_mode=WAL")
-        cur.execute("PRAGMA busy_timeout=30000")
-        
-        # คำนวณ date cutoff
-        cutoff_date = (datetime.now(ZoneInfo("Asia/Bangkok")) - timedelta(days=days)).isoformat()
-        
-        # 1. Total unique sessions
-        cur.execute("""
-            SELECT COUNT(DISTINCT session_id) as total_sessions
-            FROM user_behavior
-            WHERE timestamp >= ?
-        """, (cutoff_date,))
-        total_sessions = cur.fetchone()["total_sessions"]
-        
-        # 2. Total events
-        cur.execute("""
-            SELECT COUNT(*) as total_events
-            FROM user_behavior
-            WHERE timestamp >= ?
-        """, (cutoff_date,))
-        total_events = cur.fetchone()["total_events"]
-
-        # 2.5 Total unique users (based on IP)
-        cur.execute("""
-            SELECT COUNT(DISTINCT ip_address) as total_users
-            FROM user_behavior
-            WHERE timestamp >= ?
-        """, (cutoff_date,))
-        total_users = cur.fetchone()["total_users"]
-        
-        # 3. Page views breakdown
-        cur.execute("""
-            SELECT 
-                json_extract(event_data, '$.page_name') as page_name,
-                page_path,
-                COUNT(*) as view_count
-            FROM user_behavior
-            WHERE event_type = 'page_view' AND timestamp >= ?
-            GROUP BY page_path
-            ORDER BY view_count DESC
-            LIMIT 10
-        """, (cutoff_date,))
-        page_views = [{"page_name": row["page_name"], "page_path": row["page_path"], "count": row["view_count"]} for row in cur.fetchall()]
-        
-        # 4. Most viewed stocks
-        cur.execute("""
-            SELECT 
-                json_extract(event_data, '$.ticker') as ticker,
-                json_extract(event_data, '$.stock_name') as stock_name,
-                COUNT(*) as view_count
-            FROM user_behavior
-            WHERE event_type = 'stock_view' AND timestamp >= ?
-            GROUP BY ticker
-            ORDER BY view_count DESC
-            LIMIT 10
-        """, (cutoff_date,))
-        top_stocks = [{"ticker": row["ticker"], "stock_name": row["stock_name"], "count": row["view_count"]} for row in cur.fetchall()]
-        
-        # 5. Popular searches
-        cur.execute("""
-            SELECT 
-                json_extract(event_data, '$.query') as search_query,
-                COUNT(*) as search_count
-            FROM user_behavior
-            WHERE event_type = 'search' AND timestamp >= ?
-            GROUP BY search_query
-            ORDER BY search_count DESC
-            LIMIT 10
-        """, (cutoff_date,))
-        top_searches = [{"query": row["search_query"], "count": row["search_count"]} for row in cur.fetchall()]
-        
-        # 6. Events by type
-        cur.execute("""
-            SELECT event_type, COUNT(*) as count
-            FROM user_behavior
-            WHERE timestamp >= ?
-            GROUP BY event_type
-            ORDER BY count DESC
-        """, (cutoff_date,))
-        events_by_type = [{"event_type": row["event_type"], "count": row["count"]} for row in cur.fetchall()]
-        
-        # 7. Daily activity (last N days)
-        cur.execute("""
-            SELECT 
-                date(timestamp) as date,
-                COUNT(*) as event_count,
-                COUNT(DISTINCT session_id) as session_count
-            FROM user_behavior
-            WHERE timestamp >= ?
-            GROUP BY date(timestamp)
-            ORDER BY date DESC
-        """, (cutoff_date,))
-        daily_activity = [{"date": row["date"], "events": row["event_count"], "sessions": row["session_count"]} for row in cur.fetchall()]
-        
-        con.close()
-        
-        return {
-            "success": True,
-            "period_days": days,
-            "summary": {
-                "total_sessions": total_sessions,
-                "total_users": total_users,
-                "total_events": total_events,
-                "page_views": page_views,
-                "top_stocks": top_stocks,
-                "top_searches": top_searches,
-                "events_by_type": events_by_type,
-                "daily_activity": daily_activity
-            }
-        }
-        
-    except Exception as e:
-        print(f"❌ Analytics Error: {e}")
-        import traceback
-        traceback.print_exc()
-        if 'con' in locals() and con:
-            con.close()
-        return {"success": False, "error": str(e)}
-
-
-@app.get("/api/analytics/events")
-async def get_analytics_events(
-    limit: int = Query(default=100, description="จำนวน events ที่ต้องการ"),
-    offset: int = Query(default=0, description="Offset สำหรับ pagination"),
-    event_type: Optional[str] = Query(default=None, description="กรองตาม event type"),
-    session_id: Optional[str] = Query(default=None, description="กรองตาม session")
-):
-    """
-    ดึงรายการ events ทั้งหมด (สำหรับ admin dashboard)
-    """
-    try:
-        con = sqlite3.connect(DB_FILE)
-        con.row_factory = sqlite3.Row
-        cur = con.cursor()
-        
-        cur.execute("PRAGMA journal_mode=WAL")
-        cur.execute("PRAGMA busy_timeout=30000")
-        
-        # Build query with optional filters
-        query = "SELECT * FROM user_behavior WHERE 1=1"
-        params = []
-        
-        if event_type:
-            query += " AND event_type = ?"
-            params.append(event_type)
-        
-        if session_id:
-            query += " AND session_id = ?"
-            params.append(session_id)
-        
-        query += " ORDER BY timestamp DESC LIMIT ? OFFSET ?"
-        params.extend([limit, offset])
-        
-        cur.execute(query, params)
-        events = []
-        for row in cur.fetchall():
-            events.append({
-                "id": row["id"],
-                "session_id": row["session_id"],
-                "event_type": row["event_type"],
-                "event_data": json.loads(row["event_data"]) if row["event_data"] else None,
-                "page_path": row["page_path"],
-                "timestamp": row["timestamp"],
-                "user_agent": row["user_agent"],
-                "ip_address": row["ip_address"]
-            })
-        
-        # Get total count
-        count_query = "SELECT COUNT(*) as total FROM user_behavior WHERE 1=1"
-        count_params = []
-        if event_type:
-            count_query += " AND event_type = ?"
-            count_params.append(event_type)
-        if session_id:
-            count_query += " AND session_id = ?"
-            count_params.append(session_id)
-        
-        cur.execute(count_query, count_params)
-        total = cur.fetchone()["total"]
-        
-        con.close()
-        
-        return {
-            "success": True,
-            "total": total,
-            "limit": limit,
-            "offset": offset,
-            "events": events
-        }
-        
-    except Exception as e:
-        print(f"❌ Events Error: {e}")
-        if 'con' in locals() and con:
-            con.close()
-        return {"success": False, "error": str(e)}
-
-
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8335)
-

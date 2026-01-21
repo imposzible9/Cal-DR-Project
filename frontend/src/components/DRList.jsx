@@ -1,33 +1,9 @@
 import React, { useState, useEffect, useMemo, useCallback, useTransition, useRef } from "react";
 import swipeImg from "../assets/swipe.png";
-import { trackStockView, trackSearch, trackFilter, trackFavorite } from "../utils/tracker";
 
-// const API_URL = "";
-const API_URL = "https://api.ideatrade1.com/caldr";
+// const API_URL = "http://172.17.1.85:8333/dr";
+const API_URL = "http://api.ideatrade1.com:8002/dr";
 const CACHE_KEY = "dr_cache_v3";
-
-// 🔹 MAP TH → EN (Trading Session)
-const mapTradingSessionEN = (v) => {
-  if (!v) return "-";
-  if (v.includes("กลางวันและกลางคืน")) return "Day & Night Session";
-  if (v.includes("กลางวันเท่านั้น")) return "Day Session Only";
-  return v;
-};
-
-// 🔹 MAP TH → EN (Foreign Security Type)
-const mapSecurityTypeEN = (v) => {
-  if (!v) return "-";
-  if (v.includes("หุ้นสามัญต่างประเทศ")) return "Foreign Common Stock";
-  if (v.includes("หน่วยของโครงการจัดการลงทุนต่างประเทศ"))
-    return "Units of Foreign Collective Investment Scheme";
-  return v;
-};
-
-// 🔹 Remove "บริษัท" prefix from company names
-const removeCompanyPrefix = (v) => {
-  if (!v) return "-";
-  return String(v).replace(/^บริษัท\s*/i, "");
-};
 
 /* ───────────────────────────────────────────────
     FORMAT HELPERS
@@ -135,8 +111,6 @@ export default function DRList() {
   const [loading, setLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isPending, startTransition] = useTransition();
-  const lastTrackedSearch = useRef(null);
-  const isFirstCountryMount = useRef(true);
 
   /* DR FILTER */
   const [drFilter, setDrFilter] = useState("all");
@@ -196,38 +170,9 @@ export default function DRList() {
 
   /* SEARCH DEBOUNCE */
   useEffect(() => {
-    const t = setTimeout(() => {
-      const trimmedSearch = searchTerm.trim();
-      setSearch(trimmedSearch);
-
-      if (!trimmedSearch) {
-        lastTrackedSearch.current = null;
-        return;
-      }
-
-      // Track search ONLY if it matches a valid stock symbol (DR or Underlying) exactly
-      // and hasn't been tracked recently
-      if (trimmedSearch !== lastTrackedSearch.current) {
-        const exactMatchItem = data.find(
-          (item) =>
-            (item.dr && item.dr.toLowerCase() === trimmedSearch.toLowerCase()) ||
-            (item.underlying && item.underlying.toLowerCase() === trimmedSearch.toLowerCase())
-        );
-
-        if (exactMatchItem) {
-          // Use the official symbol (DR or Underlying) for tracking to ensure consistency (e.g. "nvda" -> "NVDA")
-          // Prefer DR symbol if it matches, otherwise Underlying
-          const trackedSymbol = exactMatchItem.dr.toLowerCase() === trimmedSearch.toLowerCase()
-            ? exactMatchItem.dr
-            : exactMatchItem.underlying;
-
-          trackSearch(trackedSymbol);
-          lastTrackedSearch.current = trimmedSearch;
-        }
-      }
-    }, 250);
+    const t = setTimeout(() => setSearch(searchTerm.trim()), 250);
     return () => clearTimeout(t);
-  }, [searchTerm, data]);
+  }, [searchTerm]);
 
   /* LOAD WATCHLIST */
   useEffect(() => {
@@ -295,45 +240,9 @@ export default function DRList() {
 
   const isStarred = useCallback((s) => watchlist.includes(s), [watchlist]);
   const toggleWatchlist = useCallback(
-    (s) => {
-      setWatchlist((prev) => {
-        const isStarred = prev.includes(s);
-        trackFavorite(s, isStarred ? 'remove' : 'add');
-        return isStarred ? prev.filter((x) => x !== s) : [...prev, s];
-      });
-    },
+    (s) => setWatchlist((prev) => (prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s])),
     []
   );
-
-  // Track stock view when detailRow changes
-  useEffect(() => {
-    if (detailRow) {
-      trackStockView(detailRow.dr, detailRow.underlyingName || detailRow.underlying);
-    }
-  }, [detailRow]);
-
-  // Track filter changes (including 'all' if user switches back to it)
-  useEffect(() => {
-    if (isFirstCountryMount.current) {
-      isFirstCountryMount.current = false;
-      return;
-    }
-    trackFilter('country', countryFilter);
-  }, [countryFilter]);
-
-  useEffect(() => {
-    if (drFilter !== 'all') {
-      trackFilter('dr_filter', drFilter);
-    }
-  }, [drFilter]);
-
-  // Track tab changes (Most Popular, High Sensitivity)
-  useEffect(() => {
-    if (tab !== 'all') {
-      // tab values are "popular" and "sensitivity"
-      trackFilter('tab', tab);
-    }
-  }, [tab]);
 
   useEffect(() => {
     let mounted = true;
@@ -361,51 +270,35 @@ export default function DRList() {
           setLastUpdated(date);
         }
 
-        const formatted = rows.map((x) => {
-          const rawRatio = x.conversionRatio ?? "";
-
-          const conversionRatioSort = (() => {
-            if (!rawRatio) return null;
-            const match = String(rawRatio).match(/[\d,.]+/);
-            if (!match) return null;
-            const n = Number(match[0].replace(/,/g, ""));
-            return Number.isFinite(n) ? n : null;
-          })();
-
-          return {
-            dr: x.symbol ?? "-",
-            open: x.open ?? 0,
-            high: x.high ?? 0,
-            low: x.low ?? 0,
-            last: x.last ?? 0,
-            change: x.change ?? 0,
-            pct: x.percentChange ?? 0,
-            bid: x.bidPrice ?? 0,
-            offer: x.offerPrice ?? 0,
-            vol: x.totalVolume ?? 0,
-            value: (x.totalValue ?? 0) / 1000,
-
-            tradingSession: mapTradingSessionEN(x.tradingSession),
-            issuer: x.issuer ?? "",
-            issuerName: x.issuerName ?? "",
-            marketCap: x.marketCap ?? null,
-            ytdChange: x.ytdChange ?? null,
-            ytdPercentChange: x.ytdPercentChange ?? null,
-            underlying: extractSymbol(x.underlying || x.underlyingName),
-            underlyingName: x.underlyingName ?? "",
-
-            conversionRatio: rawRatio,
-            ratio: formatRatio(rawRatio),
-            conversionRatioSort,
-
-            divYield: x.dividendYield12M ?? null,
-            securityTypeName: mapSecurityTypeEN(x.underlyingClassName),
-            exchange: x.underlyingExchange ?? "",
-            outstandingShare: x.outstandingShare ?? null,
-            country: getCountryFromExchange(x.underlyingExchange),
-            full: x,
-          };
-        });
+        const formatted = rows.map((x) => ({
+          dr: x.symbol ?? "-",
+          open: x.open ?? 0,
+          high: x.high ?? 0,
+          low: x.low ?? 0,
+          last: x.last ?? 0,
+          change: x.change ?? 0,
+          pct: x.percentChange ?? 0,
+          bid: x.bidPrice ?? 0,
+          offer: x.offerPrice ?? 0,
+          vol: x.totalVolume ?? 0,
+          value: (x.totalValue ?? 0) / 1000,
+          tradingSession: x.tradingSession ?? "",
+          issuer: x.issuer ?? "",
+          issuerName: x.issuerName ?? "",
+          marketCap: x.marketCap ?? null,
+          ytdChange: x.ytdChange ?? null,
+          ytdPercentChange: x.ytdPercentChange ?? null,
+          underlying: extractSymbol(x.underlying || x.underlyingName),
+          underlyingName: x.underlyingName ?? "",
+          conversionRatio: x.conversionRatio ?? "",
+          divYield: x.dividendYield12M ?? null,
+          securityTypeName: x.underlyingClassName ?? "",
+          exchange: x.underlyingExchange ?? "",
+          outstandingShare: x.outstandingShare ?? null,
+          country: getCountryFromExchange(x.underlyingExchange),
+          full: x,
+          ratio: formatRatio(x.conversionRatio),
+        }));
 
         if (!mounted) return;
         setData(formatted);
@@ -434,17 +327,17 @@ export default function DRList() {
   ─────────────────────────────────────────────── */
   const renderControlBar = () => {
     return (
-      <div className="flex flex-col gap-3 mb-4 lg:flex-row lg:items-center lg:justify-between lg:gap-4">
-        <div className="flex items-center gap-2 sm:gap-3">
-          <div className="relative z-[200] flex-1 sm:flex-initial sm:w-auto" ref={countryDropdownRef} style={{ isolation: 'isolate', overflow: 'visible' }}>
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="relative z-[200]" ref={countryDropdownRef} style={{ isolation: 'isolate', overflow: 'visible' }}>
             <button
               type="button"
               onClick={() => setShowCountryMenu((prev) => !prev)}
-              className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs sm:text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#0B102A] w-full sm:min-w-[180px] h-[37.33px]"
+              className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#0B102A] min-w-[180px] h-[37.33px]"
             >
-              <span className="truncate">{selectedCountryOption.label}</span>
+              <span>{selectedCountryOption.label}</span>
               <svg
-                className={`h-4 w-4 flex-shrink-0 transition-transform ${showCountryMenu ? "rotate-180" : ""}`}
+                className={`h-4 w-4 transition-transform ${showCountryMenu ? "rotate-180" : ""}`}
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -455,7 +348,7 @@ export default function DRList() {
             {showCountryMenu && (
               <div
                 ref={dropdownMenuRef}
-                className="absolute left-0 top-full z-[9999] mt-2 w-full sm:w-56 max-h-72 overflow-auto rounded-2xl border border-gray-200 bg-white shadow-[0_10px_30px_rgba(15,23,42,0.15)] py-1"
+                className="absolute left-0 top-full z-[9999] mt-2 w-56 max-h-72 overflow-auto rounded-2xl border border-gray-200 bg-white shadow-[0_10px_30px_rgba(15,23,42,0.15)] py-1"
                 style={{ transform: 'translateZ(0)' }}
               >
                 {countryOptions.map((opt) => (
@@ -465,7 +358,7 @@ export default function DRList() {
                       setCountryFilter(opt.code);
                       setShowCountryMenu(false);
                     }}
-                    className={`flex w-full items-center justify-between px-4 py-1.5 text-left text-xs sm:text-sm transition-colors ${opt.code === countryFilter ? "bg-[#EEF2FF] text-[#0B102A] font-semibold" : "text-gray-700 hover:bg-gray-50"
+                    className={`flex w-full items-center justify-between px-4 py-1.5 text-left text-sm transition-colors ${opt.code === countryFilter ? "bg-[#EEF2FF] text-[#0B102A] font-semibold" : "text-gray-700 hover:bg-gray-50"
                       }`}
                   >
                     <span>{opt.label}</span>
@@ -479,7 +372,7 @@ export default function DRList() {
           <button
             type="button"
             onClick={() => setDrFilter((prev) => (prev === "watchlist" ? "all" : "watchlist"))}
-            className={`flex items-center gap-2 rounded-xl px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium shadow-sm border transition-colors justify-center shrink-0 h-[37.33px] ${drFilter === "watchlist"
+            className={`flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium shadow-sm border transition-colors ${drFilter === "watchlist"
               ? "bg-[#0B102A] border-[#0B102A] text-white"
               : "bg-white border-gray-200 text-gray-700 hover:bg-gray-50"
               }`}
@@ -491,14 +384,14 @@ export default function DRList() {
           </button>
         </div>
 
-        <div className="flex items-center w-full lg:w-auto gap-2 sm:gap-3">
-          <div className="relative flex-1 lg:flex-initial">
+        <div className="flex items-center w-full md:w-auto gap-3">
+          <div className="relative flex-1 md:flex-initial">
             <input
               type="text"
-              placeholder="Search DR..."
+              placeholder="Search Underlying..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="bg-white pl-3 sm:pl-4 pr-10 py-2 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#0B102A] focus:border-transparent w-full lg:w-64 text-xs sm:text-sm shadow-sm h-[37.33px]"
+              className="bg-white pl-4 pr-10 py-2 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#0B102A] focus:border-transparent w-full md:w-64 text-sm shadow-sm"
             />
             <i
               className="bi bi-search absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400"
@@ -508,9 +401,9 @@ export default function DRList() {
           <div className="shrink-0">
             <button
               onClick={() => setShowSettings(true)}
-              className="flex items-center gap-1 sm:gap-2 bg-white text-gray-700 border border-gray-200 hover:bg-gray-50 rounded-xl px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium shadow-sm transition-all h-[37.33px]"
+              className="flex items-center gap-2 bg-white text-gray-700 border border-gray-200 hover:bg-gray-50 rounded-xl px-4 py-2 text-sm font-medium shadow-sm transition-all"
             >
-              <span className="hidden sm:inline">Customize</span>
+              <span>Customize</span>
               <i className="bi bi-sliders2" style={{ '--bi-stroke-width': '1.8px' }}></i>
             </button>
           </div>
@@ -627,27 +520,27 @@ export default function DRList() {
 
     if (sortConfig.key) {
       arr.sort((a, b) => {
-        // ✅ 1) conversionRatio ต้องมาก่อน
         if (sortConfig.key === "conversionRatio") {
-          const A = a.conversionRatioSort;
-          const B = b.conversionRatioSort;
+          const parseRatio = (ratioStr) => {
+            if (!ratioStr || ratioStr === "-") return 0;
+            const str = String(ratioStr);
+            const parts = str.split(":");
+            if (parts.length === 0) return 0;
+            const numStr = parts[0].replace(/[^\d.-]/g, "");
+            return Number(numStr) || 0;
+          };
 
-          if (A == null && B == null) return 0;
-          if (A == null) return 1;
-          if (B == null) return -1;
-
+          const A = parseRatio(a[sortConfig.key]);
+          const B = parseRatio(b[sortConfig.key]);
           return sortConfig.direction === "asc" ? A - B : B - A;
         }
 
-        // ✅ 2) ตัวเลขทั่วไป
         const A = Number(a[sortConfig.key]);
         const B = Number(b[sortConfig.key]);
 
-        if (!isNaN(A) && !isNaN(B)) {
+        if (!isNaN(A) && !isNaN(B))
           return sortConfig.direction === "asc" ? A - B : B - A;
-        }
 
-        // ✅ 3) string
         const Sa = String(a[sortConfig.key] ?? "");
         const Sb = String(b[sortConfig.key] ?? "");
         return sortConfig.direction === "asc"
@@ -678,7 +571,7 @@ export default function DRList() {
     return (
       <th
         key={key}
-        className={`py-3 sm:py-4 px-3 sm:px-6 whitespace-nowrap ${alignClass} text-xs sm:text-sm font-bold cursor-pointer select-none ${extraStyle}`}
+        className={`py-4 px-6 whitespace-nowrap ${alignClass} text-sm font-bold cursor-pointer select-none ${extraStyle}`}
         onClick={() => {
           let dir = "asc";
           if (sortConfig.key === key && sortConfig.direction === "asc") dir = "desc";
@@ -703,76 +596,80 @@ export default function DRList() {
     return (
       <tr key={row.dr} className={`${rowBg} cursor-pointer`} onClick={() => setDetailRow(row)} style={{ height: "52px" }}>
         {visibleColumns.star && (
-          <td className={`py-3 sm:py-4 px-1 text-center sticky left-0 ${rowBg}`} style={{ width: "35px", minWidth: "35px", zIndex: 20 }} onClick={(e) => { e.stopPropagation(); toggleWatchlist(row.dr); }}>
-            {isStarred(row.dr) ? <i className="bi bi-star-fill text-yellow-500 text-xs sm:text-sm"></i> : <i className="bi bi-star text-gray-400 text-xs sm:text-sm hover:text-yellow-500"></i>}
+          <td className={`py-4 px-1 text-center sticky left-0 ${rowBg}`} style={{ width: "35px", minWidth: "35px", zIndex: 20 }} onClick={(e) => { e.stopPropagation(); toggleWatchlist(row.dr); }}>
+            {isStarred(row.dr) ? <i className="bi bi-star-fill text-yellow-500 text-sm"></i> : <i className="bi bi-star text-gray-400 text-sm hover:text-yellow-500"></i>}
           </td>
         )}
         {visibleColumns.dr && (
-          <td className={`py-3 sm:py-4 px-2 sm:px-4 text-left font-bold text-[#2F80ED] sticky ${rowBg} relative dr-shadow-right`} style={{ left: visibleColumns.star ? "35px" : "0px", width: "155px", minWidth: "155px", zIndex: 20 }}>
-            <div className="flex items-center gap-1 sm:gap-2">
-              <span className="text-xs sm:text-sm">{row.dr}</span>
+          <td className={`py-4 px-4 text-left font-bold text-[#2F80ED] sticky ${rowBg} relative dr-shadow-right`} style={{ left: visibleColumns.star ? "35px" : "0px", width: "155px", minWidth: "155px", zIndex: 20 }}>
+            <div className="flex items-center gap-2">
+              <span>{row.dr}</span>
               {(isSens || isPop) && (
-                <div className="flex flex-col gap-0.5 sm:gap-1">
-                  {isSens && <span className="text-[8px] sm:text-[10px] font-bold bg-gradient-to-r from-[#0007DE] to-[#00035A] bg-clip-text text-transparent whitespace-nowrap">Sensitivity</span>}
-                  {isPop && <span className="text-[8px] sm:text-[10px] font-bold bg-gradient-to-r from-[#50B728] to-[#316D19] bg-clip-text text-transparent whitespace-nowrap">Most Popular</span>}
+                <div className="flex flex-col gap-1">
+                  {isSens && <span className="text-[10px] font-bold bg-gradient-to-r from-[#0007DE] to-[#00035A] bg-clip-text text-transparent whitespace-nowrap">Sensitivity</span>}
+                  {isPop && <span className="text-[10px] font-bold bg-gradient-to-r from-[#50B728] to-[#316D19] bg-clip-text text-transparent whitespace-nowrap">Most Popular</span>}
                 </div>
               )}
             </div>
           </td>
         )}
-        {visibleColumns.open && <td className="py-3 sm:py-4 px-2 sm:px-4 text-right text-gray-600 text-xs sm:text-[14.4px] font-medium font-mono">{formatNum(row.open)}</td>}
-        {visibleColumns.high && <td className="py-3 sm:py-4 px-2 sm:px-4 text-right text-gray-600 text-xs sm:text-[14.4px] font-medium font-mono">{formatNum(row.high)}</td>}
-        {visibleColumns.low && <td className="py-3 sm:py-4 px-2 sm:px-4 text-right text-gray-600 text-xs sm:text-[14.4px] font-medium font-mono">{formatNum(row.low)}</td>}
-        {visibleColumns.last && <td className="py-3 sm:py-4 px-2 sm:px-4 text-right text-gray-600 text-xs sm:text-[14.4px] font-medium font-mono">{formatNum(row.last)}</td>}
+        {visibleColumns.open && <td className="py-4 px-4 text-right text-gray-800 text-[14.4px] font-medium font-mono">{formatNum(row.open)}</td>}
+        {visibleColumns.high && <td className="py-4 px-4 text-right text-gray-800 text-[14.4px] font-medium font-mono">{formatNum(row.high)}</td>}
+        {visibleColumns.low && <td className="py-4 px-4 text-right text-gray-800 text-[14.4px] font-medium font-mono">{formatNum(row.low)}</td>}
+        {visibleColumns.last && <td className="py-4 px-4 text-right text-gray-800 text-[14.4px] font-medium font-mono">{formatNum(row.last)}</td>}
         {visibleColumns.change && (
-          <td className="py-3 sm:py-4 px-2 sm:px-4 text-right text-xs sm:text-[14.4px] font-medium font-mono" style={{ color: row.change > 0 ? "#27AE60" : row.change < 0 ? "#EB5757" : "#4B5563" }}>
+          <td className="py-4 px-4 text-right text-gray-800 text-[14.4px] font-medium font-mono" style={{ color: row.change > 0 ? "#27AE60" : row.change < 0 ? "#EB5757" : undefined }}>
             {(() => {
+              // Check if trading data exists (if any of these are missing/0, show "-")
               const hasData = row.open && row.high && row.low && row.last &&
                 row.open !== 0 && row.high !== 0 && row.low !== 0 && row.last !== 0;
 
               if (!hasData) return "-";
 
+              // Has trading data, show change (can be 0.00 if no change)
               const changeValue = formatChange(row.change);
               return row.change > 0 ? `+${changeValue}` : changeValue;
             })()}
           </td>
         )}
         {visibleColumns.pct && (
-          <td className="py-3 sm:py-4 px-2 sm:px-4 text-right text-xs sm:text-[14.4px] font-medium font-mono" style={{ color: row.pct > 0 ? "#27AE60" : row.pct < 0 ? "#EB5757" : "#4B5563" }}>
+          <td className="py-4 px-4 text-right text-gray-800 text-[14.4px] font-medium font-mono" style={{ color: row.pct > 0 ? "#27AE60" : row.pct < 0 ? "#EB5757" : undefined }}>
             {(() => {
+              // Check if trading data exists (if any of these are missing/0, show "-")
               const hasData = row.open && row.high && row.low && row.last &&
                 row.open !== 0 && row.high !== 0 && row.low !== 0 && row.last !== 0;
 
               if (!hasData) return "-";
 
+              // Has trading data, show pct change (can be 0.00 if no change)
               const pctValue = formatChange(row.pct);
               return row.pct > 0 ? `+${pctValue}` : pctValue;
             })()}
           </td>
         )}
-        {visibleColumns.bid && <td className="py-3 sm:py-4 px-2 sm:px-4 text-right text-gray-600 text-xs sm:text-[14.4px] font-medium font-mono">{formatNum(row.bid)}</td>}
-        {visibleColumns.offer && <td className="py-3 sm:py-4 px-2 sm:px-4 text-right text-gray-600 text-xs sm:text-[14.4px] font-medium font-mono">{formatNum(row.offer)}</td>}
-        {visibleColumns.vol && <td className="py-3 sm:py-4 px-2 sm:px-4 text-right text-gray-600 text-xs sm:text-[14.4px] font-medium font-mono">{formatNum(row.vol)}</td>}
-        {visibleColumns.value && <td className="py-3 sm:py-4 px-2 sm:px-4 text-right text-gray-600 text-xs sm:text-[14.4px] font-medium font-mono">{formatNum(row.value)}</td>}
-        {visibleColumns.tradingSession && <td className="py-3 sm:py-4 px-2 sm:px-4 text-left text-gray-600 text-xs sm:text-[14.4px] font-medium whitespace-nowrap">{row.tradingSession || "-"}</td>}
-        {visibleColumns.issuerName && <td className={`py-3 sm:py-4 px-2 sm:px-4 text-left text-gray-600 text-xs sm:text-[14.4px] font-medium ${firstVisibleFundamentalKey === 'issuerName' ? 'border-l border-gray-200' : ''}`} style={{ whiteSpace: "normal", wordBreak: "keep-all", overflowWrap: "anywhere", minWidth: 100 }}>{row.issuer || "-"}</td>}
-        {visibleColumns.marketCap && <td className={`py-3 sm:py-4 px-2 sm:px-4 text-right text-gray-600 text-xs sm:text-[14.4px] font-medium font-mono ${firstVisibleFundamentalKey === 'marketCap' ? 'border-l-2 border-gray-200' : ''}`}>{row.marketCap ? formatNum(row.marketCap / 1000000) : "-"}</td>}
-        {visibleColumns.underlyingName && <td className={`py-3 sm:py-4 px-2 sm:px-4 text-left font-bold text-[#2F80ED] text-xs sm:text-[14.4px] ${firstVisibleFundamentalKey === 'underlyingName' ? 'border-l-2 border-gray-200' : ''}`} style={{ whiteSpace: "nowrap", minWidth: 180 }}>{row.underlying || "-"}</td>}
-        {visibleColumns.ytdChange && <td className={`py-3 sm:py-4 px-2 sm:px-3 text-right ${firstVisibleFundamentalKey === 'ytdChange' ? 'border-l-2 border-gray-200' : ''}`} style={{ color: row.ytdChange > 0 ? "#27AE60" : row.ytdChange < 0 ? "#EB5757" : "#6B7280", fontWeight: 500 }}>{row.ytdChange !== null ? `${row.ytdChange > 0 ? '+' : ''}${formatNum(row.ytdChange)}` : "-"}</td>}
-        {visibleColumns.ytdPercentChange && <td className={`py-3 sm:py-4 px-2 sm:px-3 text-right ${firstVisibleFundamentalKey === 'ytdPercentChange' ? 'border-l-2 border-gray-200' : ''}`} style={{ color: row.ytdPercentChange > 0 ? "#27AE60" : row.ytdPercentChange < 0 ? "#EB5757" : "#6B7280", fontWeight: 500 }}>{row.ytdPercentChange !== null ? `${row.ytdPercentChange > 0 ? '+' : ''}${formatNum(row.ytdPercentChange)}%` : "-"}</td>}
-        {visibleColumns.conversionRatio && <td className={`py-3 sm:py-4 px-2 sm:px-4 text-right text-gray-600 text-xs sm:text-[14.4px] font-medium ${firstVisibleFundamentalKey === 'conversionRatio' ? 'border-l border-gray-200' : ''}`} style={{ minWidth: 100 }}>{row.ratio}</td>}
-        {visibleColumns.divYield && <td className={`py-3 sm:py-4 px-2 sm:px-4 text-right text-gray-600 text-xs sm:text-[14.4px] font-medium font-mono ${firstVisibleFundamentalKey === 'divYield' ? 'border-l border-gray-200' : ''}`}>{row.divYield ? formatNum(row.divYield) : "-"}</td>}
-        {visibleColumns.exchange && <td className={`py-3 sm:py-4 px-2 sm:px-4 text-left text-gray-600 text-xs sm:text-[14.4px] font-medium ${firstVisibleFundamentalKey === 'exchange' ? 'border-l border-gray-200' : ''}`} style={{ whiteSpace: "nowrap", minWidth: 180 }}>{row.exchange || "-"}</td>}
+        {visibleColumns.bid && <td className="py-4 px-4 text-right text-gray-800 text-[14.4px] font-medium font-mono">{formatNum(row.bid)}</td>}
+        {visibleColumns.offer && <td className="py-4 px-4 text-right text-gray-800 text-[14.4px] font-medium font-mono">{formatNum(row.offer)}</td>}
+        {visibleColumns.vol && <td className="py-4 px-4 text-right text-gray-800 text-[14.4px] font-medium font-mono">{formatNum(row.vol)}</td>}
+        {visibleColumns.value && <td className="py-4 px-4 text-right text-gray-800 text-[14.4px] font-medium font-mono">{formatNum(row.value)}</td>}
+        {visibleColumns.tradingSession && <td className="py-4 px-4 text-left text-gray-800 text-[14.4px] font-medium whitespace-nowrap">{row.tradingSession || "-"}</td>}
+        {visibleColumns.issuerName && <td className={`py-4 px-4 text-left text-gray-800 text-[14.4px] font-medium ${firstVisibleFundamentalKey === 'issuerName' ? 'border-l border-gray-200' : ''}`} style={{ whiteSpace: "normal", wordBreak: "keep-all", overflowWrap: "anywhere", minWidth: 100 }}>{row.issuer || "-"}</td>}
+        {visibleColumns.marketCap && <td className={`py-4 px-4 text-right text-gray-800 text-[14.4px] font-medium font-mono ${firstVisibleFundamentalKey === 'marketCap' ? 'border-l-2 border-gray-200' : ''}`}>{row.marketCap ? formatNum(row.marketCap / 1000000) : "-"}</td>}
+        {visibleColumns.underlyingName && <td className={`py-4 px-4 text-left font-bold text-[#2F80ED] text-[14.4px] ${firstVisibleFundamentalKey === 'underlyingName' ? 'border-l-2 border-gray-200' : ''}`} style={{ whiteSpace: "nowrap", minWidth: 180 }}>{row.underlying || "-"}</td>}
+        {visibleColumns.ytdChange && <td className={`py-4 px-3 text-right ${firstVisibleFundamentalKey === 'ytdChange' ? 'border-l-2 border-gray-200' : ''}`} style={{ color: row.ytdChange > 0 ? "#27AE60" : row.ytdChange < 0 ? "#EB5757" : "#6B7280", fontWeight: 500 }}>{row.ytdChange !== null ? `${row.ytdChange > 0 ? '+' : ''}${formatNum(row.ytdChange)}` : "-"}</td>}
+        {visibleColumns.ytdPercentChange && <td className={`py-4 px-3 text-right ${firstVisibleFundamentalKey === 'ytdPercentChange' ? 'border-l-2 border-gray-200' : ''}`} style={{ color: row.ytdPercentChange > 0 ? "#27AE60" : row.ytdPercentChange < 0 ? "#EB5757" : "#6B7280", fontWeight: 500 }}>{row.ytdPercentChange !== null ? `${row.ytdPercentChange > 0 ? '+' : ''}${formatNum(row.ytdPercentChange)}%` : "-"}</td>}
+        {visibleColumns.conversionRatio && <td className={`py-4 px-4 text-right text-gray-800 text-[14.4px] font-medium ${firstVisibleFundamentalKey === 'conversionRatio' ? 'border-l border-gray-200' : ''}`} style={{ minWidth: 100 }}>{row.ratio}</td>}
+        {visibleColumns.divYield && <td className={`py-4 px-4 text-right text-gray-800 text-[14.4px] font-medium font-mono ${firstVisibleFundamentalKey === 'divYield' ? 'border-l border-gray-200' : ''}`}>{row.divYield ? formatNum(row.divYield) : "-"}</td>}
+        {visibleColumns.exchange && <td className={`py-4 px-4 text-left text-gray-800 text-[14.4px] font-medium ${firstVisibleFundamentalKey === 'exchange' ? 'border-l border-gray-200' : ''}`} style={{ whiteSpace: "nowrap", minWidth: 180 }}>{row.exchange || "-"}</td>}
         {visibleColumns.securityTypeName && (
           <td
-            className={`py-3 sm:py-4 px-2 sm:px-4 text-left text-gray-600 text-xs sm:text-[14.4px] font-medium ${firstVisibleFundamentalKey === "securityTypeName" ? "border-l border-gray-200" : ""
+            className={`py-4 px-4 text-left text-gray-800 text-[14.4px] font-medium ${firstVisibleFundamentalKey === "securityTypeName" ? "border-l border-gray-200" : ""
               } whitespace-nowrap truncate`}
             style={{ minWidth: 220, maxWidth: 260 }}
           >
             {row.securityTypeName || "-"}
           </td>
         )}
-        {visibleColumns.outstandingShare && <td className={`py-3 sm:py-4 px-2 sm:px-4 text-right text-gray-600 text-xs sm:text-[14.4px] font-medium font-mono ${firstVisibleFundamentalKey === 'outstandingShare' ? 'border-l border-gray-200' : ''}`} style={{ minWidth: 120 }}>{row.outstandingShare ? formatInt(row.outstandingShare) : "-"}</td>}
+        {visibleColumns.outstandingShare && <td className={`py-4 px-4 text-right text-gray-800 text-[14.4px] font-medium font-mono ${firstVisibleFundamentalKey === 'outstandingShare' ? 'border-l border-gray-200' : ''}`} style={{ minWidth: 120 }}>{row.outstandingShare ? formatInt(row.outstandingShare) : "-"}</td>}
       </tr>
     );
   };
@@ -792,7 +689,7 @@ export default function DRList() {
       const downColor = active && direction === "desc" ? "#FFFFFF" : "rgba(255, 255, 255, 0.4)";
       return (
         <div className="flex items-center ml-0 flex-shrink-0">
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" className="w-[10px] sm:w-[12px] h-[10px] sm:h-[12px] transition-all duration-200">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" className="w-[12px] h-[12px] transition-all duration-200">
             <path d="M14 2.256V30c-2.209 0-4-1.791-4-4V13H4.714c-.633 0-.949-.765-.502-1.212l9.607-9.607C13.886 2.114 14 2.162 14 2.256z" fill={upColor} />
             <path d="M27.788 20.212l-9.6 9.6C18.118 29.882 18 29.832 18 29.734V2c2.209 0 4 1.791 4 4v13h5.286C27.918 19 28.235 19.765 27.788 20.212z" fill={downColor} />
           </svg>
@@ -813,174 +710,52 @@ export default function DRList() {
     return (
       <div className="relative">
         {showScrollHint && (
-          <div className="pointer-events-none absolute right-2 sm:right-4 top-2 sm:top-3 z-20 hidden lg:flex items-center justify-center">
-            <div className="flex h-8 w-8 sm:h-9 sm:w-9 items-center justify-center rounded-full bg-white shadow-[0_8px_18px_rgba(15,23,42,0.45)] ring-1 ring-black/5" style={{ transform: `translateX(${swipeOffset}px)` }}>
-              <img src={swipeImg} alt="scroll hint" className="h-3 w-3 sm:h-4 sm:w-4" />
+          <div className="pointer-events-none absolute right-4 top-3 z-20 flex items-center justify-center">
+            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-white shadow-[0_8px_18px_rgba(15,23,42,0.45)] ring-1 ring-black/5" style={{ transform: `translateX(${swipeOffset}px)` }}>
+              <img src={swipeImg} alt="scroll hint" className="h-4 w-4" />
             </div>
           </div>
         )}
-        
-        {/* Mobile Card View */}
-        <div className="block lg:hidden">
-          <div className="space-y-3 p-3">
-            {sortedData.map((row, index) => {
-              const isPop = badges.popularIds.has(row.dr);
-              const isSens = badges.sensitivityIds.has(row.dr);
-              return (
-                <div
-                  key={row.dr}
-                  onClick={() => setDetailRow(row)}
-                  className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 cursor-pointer hover:shadow-md transition-shadow"
-                >
-                  <div className="flex items-start justify-between mb-3">
-                    <div className="flex items-center gap-2 flex-1 min-w-0">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          toggleWatchlist(row.dr);
-                        }}
-                        className="flex-shrink-0"
-                      >
-                        {isStarred(row.dr) ? (
-                          <i className="bi bi-star-fill text-yellow-500 text-sm"></i>
-                        ) : (
-                          <i className="bi bi-star text-gray-400 text-sm hover:text-yellow-500"></i>
-                        )}
-                      </button>
-                      <div className="flex-1 min-w-0">
-                        <div className="font-bold text-[#2F80ED] text-base truncate">{row.dr}</div>
-                        {(isSens || isPop) && (
-                          <div className="flex flex-wrap gap-1 mt-1">
-                            {isSens && (
-                              <span className="text-[9px] font-bold bg-gradient-to-r from-[#0007DE] to-[#00035A] bg-clip-text text-transparent">
-                                Sensitivity
-                              </span>
-                            )}
-                            {isPop && (
-                              <span className="text-[9px] font-bold bg-gradient-to-r from-[#50B728] to-[#316D19] bg-clip-text text-transparent">
-                                Most Popular
-                              </span>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                    <div className="text-right flex-shrink-0 ml-2">
-                      <div className="text-lg font-semibold text-gray-900">{formatNum(row.last)}</div>
-                      <div
-                        className={`text-xs font-medium ${row.pct > 0 ? "text-[#27AE60]" : row.pct < 0 ? "text-[#EB5757]" : "text-gray-600"
-                          }`}
-                      >
-                        {(() => {
-                          const hasData = row.open && row.high && row.low && row.last &&
-                            row.open !== 0 && row.high !== 0 && row.low !== 0 && row.last !== 0;
-                          if (!hasData) return "-";
-                          const pctValue = formatChange(row.pct);
-                          return row.pct > 0 ? `+${pctValue}%` : `${pctValue}%`;
-                        })()}
-                      </div>
-                    </div>
+        <table className="min-w-[1300px] w-full text-left border-collapse text-[14.4px]">
+          <thead className="bg-[#0B102A] text-white font-bold sticky top-0" style={{ zIndex: 50 }}>
+            <tr className="h-[50px]">
+              {visibleColumns.dr && (
+                <th rowSpan={2} colSpan={visibleColumns.star ? 2 : 1} className="py-4 px-3 text-left sticky top-0 bg-[#0B102A] align-middle cursor-pointer relative" style={{ left: "0px", width: visibleColumns.star ? "195px" : "155px", minWidth: visibleColumns.star ? "195px" : "155px", zIndex: 110 }} onClick={() => handleSort("dr")}>
+                  <div className="flex items-center gap-0.5">
+                    <span className={visibleColumns.star ? "pl-8" : ""}>DR</span>
+                    <SortIndicator colKey="dr" />
                   </div>
-
-                  <div className="grid grid-cols-2 gap-2 text-xs">
-                    {visibleColumns.open && (
-                      <div className="flex justify-between">
-                        <span className="text-gray-500">Open:</span>
-                        <span className="text-gray-700 font-medium">{formatNum(row.open)}</span>
-                      </div>
-                    )}
-                    {visibleColumns.high && (
-                      <div className="flex justify-between">
-                        <span className="text-gray-500">High:</span>
-                        <span className="text-gray-700 font-medium">{formatNum(row.high)}</span>
-                      </div>
-                    )}
-                    {visibleColumns.low && (
-                      <div className="flex justify-between">
-                        <span className="text-gray-500">Low:</span>
-                        <span className="text-gray-700 font-medium">{formatNum(row.low)}</span>
-                      </div>
-                    )}
-                    {visibleColumns.vol && (
-                      <div className="flex justify-between">
-                        <span className="text-gray-500">Volume:</span>
-                        <span className="text-gray-700 font-medium">{formatNum(row.vol)}</span>
-                      </div>
-                    )}
-                    {visibleColumns.bid && (
-                      <div className="flex justify-between">
-                        <span className="text-gray-500">Bid:</span>
-                        <span className="text-gray-700 font-medium">{formatNum(row.bid)}</span>
-                      </div>
-                    )}
-                    {visibleColumns.offer && (
-                      <div className="flex justify-between">
-                        <span className="text-gray-500">Offer:</span>
-                        <span className="text-gray-700 font-medium">{formatNum(row.offer)}</span>
-                      </div>
-                    )}
-                  </div>
-
-                  {visibleColumns.underlyingName && (
-                    <div className="mt-2 pt-2 border-t border-gray-100">
-                      <div className="text-xs text-gray-500">Underlying</div>
-                      <div className="text-sm font-medium text-[#2F80ED] truncate">{row.underlying || "-"}</div>
+                  {sortConfig.key === "dr" && (
+                    <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#2F80ED]" style={{ zIndex: 120 }}>
+                      <div className="absolute bottom-[-4px] left-1/2 -translate-x-1/2 w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[4px] border-t-[#2F80ED]"></div>
                     </div>
                   )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Desktop Table View */}
-        <div className="hidden lg:block">
-          <table className="min-w-[1300px] w-full text-left border-collapse text-[14.4px]">
-            <thead className="bg-[#0B102A] text-white font-bold sticky top-0" style={{ zIndex: 50 }}>
-              <tr className="h-[50px]">
-                {visibleColumns.dr && (
-                  <th rowSpan={2} colSpan={visibleColumns.star ? 2 : 1} className="py-4 px-3 text-left sticky top-0 bg-[#0B102A] align-middle cursor-pointer relative" style={{ left: "0px", width: visibleColumns.star ? "195px" : "155px", minWidth: visibleColumns.star ? "195px" : "155px", zIndex: 110 }} onClick={() => handleSort("dr")}>
-                    <div className="flex items-center gap-0.5">
-                      <span className={visibleColumns.star ? "pl-8" : ""}>DR</span>
-                      <SortIndicator colKey="dr" />
+                </th>
+              )}
+              {visibleTradingCount > 0 && <th colSpan={visibleTradingCount} className="py-3 text-center bg-[#020323]">Trading information</th>}
+              {visibleFundamentalCount > 0 && <th colSpan={visibleFundamentalCount} className="py-3 text-center bg-[#020323] border-l border-gray-200">Basic DR information</th>}
+            </tr>
+            <tr className="h-[50px]">
+              {[...tradingKeys, ...fundamentalKeys].map(key => visibleColumns[key] && (
+                <th key={key} className={`py-3 px-4 ${textCols.includes(key) ? "text-left" : "text-right"} bg-[#1C1D39] border-b border-gray-200 whitespace-nowrap cursor-pointer relative ${fundamentalKeys.includes(key) && key === firstVisibleFundamentalKey ? 'border-l border-gray-200' : ''}`} onClick={() => handleSort(key)}>
+                  <div className={`flex items-center ${textCols.includes(key) ? "justify-start" : "justify-end"} gap-0.5`}>
+                    {key === "open" && "Open"}{key === "high" && "High"}{key === "low" && "Low"}{key === "last" && "Last"}{key === "change" && "Change"}{key === "pct" && "%Change"}{key === "bid" && "Bid"}{key === "offer" && "Offer"}{key === "vol" && "Volume"}{key === "value" && "Value('000)"}{key === "tradingSession" && "Trading Session"}
+                    {key === "issuerName" && "Issuer"}{key === "marketCap" && "Market Cap (M)"}{key === "ytdChange" && "Change (YTD)"}{key === "ytdPercentChange" && "%Change (YTD)"}{key === "underlyingName" && "Underlying"}{key === "conversionRatio" && "Ratio"}{key === "divYield" && "Div. Yield"}{key === "exchange" && "Underlying Exchange"}{key === "securityTypeName" && "Foreign Security Type"}{key === "outstandingShare" && "Outstanding Share"}
+                    <SortIndicator colKey={key} />
+                  </div>
+                  {sortConfig.key === key && (
+                    <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#2F80ED]" style={{ zIndex: 120 }}>
+                      <div className="absolute bottom-[-4px] left-1/2 -translate-x-1/2 w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[4px] border-t-[#2F80ED]"></div>
                     </div>
-                    {sortConfig.key === "dr" && (
-                      <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#2F80ED]" style={{ zIndex: 120 }}>
-                        <div className="absolute bottom-[-4px] left-1/2 -translate-x-1/2 w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[4px] border-t-[#2F80ED]"></div>
-                      </div>
-                    )}
-                  </th>
-                )}
-                {visibleTradingCount > 0 && <th colSpan={visibleTradingCount} className="py-3 text-center bg-[#020323]">Trading information</th>}
-                {visibleFundamentalCount > 0 && <th colSpan={visibleFundamentalCount} className="py-3 text-center bg-[#020323] border-l border-gray-200">Basic DR information</th>}
-              </tr>
-              <tr className="h-[50px]">
-                {[...tradingKeys, ...fundamentalKeys].map(key => visibleColumns[key] && (
-                  <th 
-                    key={key} 
-                    className={`py-3 px-4 ${textCols.includes(key) ? "text-left" : "text-right"} bg-[#1C1D39] border-b border-gray-200 whitespace-nowrap cursor-pointer relative ${fundamentalKeys.includes(key) && key === firstVisibleFundamentalKey ? 'border-l border-gray-200' : ''}`}
-                    style={key === "securityTypeName" ? { minWidth: 360 } : undefined}
-                    onClick={() => handleSort(key)}
-                  >
-                    <div className={`flex items-center ${textCols.includes(key) ? "justify-start" : "justify-end"} gap-0.5`}>
-                      {key === "open" && "Open"}{key === "high" && "High"}{key === "low" && "Low"}{key === "last" && "Last"}{key === "change" && "Change"}{key === "pct" && "%Change"}{key === "bid" && "Bid"}{key === "offer" && "Offer"}{key === "vol" && "Volume"}{key === "value" && "Value('000)"}{key === "tradingSession" && "Trading Session"}
-                      {key === "issuerName" && "Issuer"}{key === "marketCap" && "Market Cap (M)"}{key === "ytdChange" && "Change (YTD)"}{key === "ytdPercentChange" && "%Change (YTD)"}{key === "underlyingName" && "Underlying"}{key === "conversionRatio" && "Ratio"}{key === "divYield" && "Div. Yield"}{key === "exchange" && "Underlying Exchange"}{key === "securityTypeName" && "Foreign Security Type"}{key === "outstandingShare" && "Outstanding Share"}
-                      <SortIndicator colKey={key} />
-                    </div>
-                    {sortConfig.key === key && (
-                      <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#2F80ED]" style={{ zIndex: 120 }}>
-                        <div className="absolute bottom-[-4px] left-1/2 -translate-x-1/2 w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[4px] border-t-[#2F80ED]"></div>
-                      </div>
-                    )}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100 bg-white">
-              {sortedData.map((row, index) => renderRow(row, index))}
-            </tbody>
-          </table>
-        </div>
+                  )}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100 bg-white">
+            {sortedData.map((row, index) => renderRow(row, index))}
+          </tbody>
+        </table>
       </div>
     );
   };
@@ -1014,50 +789,15 @@ export default function DRList() {
     const renderColumnLabel = (key) => ({ star: "Star", dr: "DR", open: "Open", high: "High", low: "Low", last: "Last", change: "Change", pct: "%Change", bid: "Bid", offer: "Offer", vol: "Volume", value: "Value('000)", tradingSession: "Trading Session", issuerName: "Issuer", marketCap: "Market Cap (M)", underlyingName: "Underlying", ytdChange: "Change (YTD)", ytdPercentChange: "%Change (YTD)", conversionRatio: "Ratio", divYield: "Div. Yield", exchange: "Underlying Exchange", securityTypeName: "Foreign Security Type", outstandingShare: "Outstanding Share" }[key] || key);
 
     return (
-      <div className="fixed inset-0 flex items-center justify-center z-[2000] p-4" style={{ backgroundColor: "rgba(0,0,0,0.4)" }} onClick={() => setShowSettings(false)}>
-        <div className="bg-white rounded-lg shadow-lg p-4 sm:p-6 w-full max-w-[520px] max-h-[80vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg sm:text-xl font-bold text-black">Customize</h2>
-            <button onClick={() => setShowSettings(false)} className="text-2xl font-light text-gray-600 hover:text-black transition-colors">✕</button>
+      <div className="fixed inset-0 flex items-center justify-center z-[2000]" style={{ backgroundColor: "rgba(0,0,0,0.4)" }} onClick={() => setShowSettings(false)}>
+        <div className="bg-white rounded-lg shadow-lg p-6 w-[520px] max-h-[80vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
+          <div className="flex items-center justify-between mb-4"><h2 className="text-xl font-bold text-black">Customize</h2><button onClick={() => setShowSettings(false)} className="text-2xl font-light text-gray-600 hover:text-black transition-colors">✕</button></div>
+          <label className="flex items-center gap-3 mb-4 cursor-pointer"><input type="checkbox" checked={showAllChecked} onChange={toggleAllColumns} className="w-4 h-4 rounded border-gray-300" style={{ accentColor: '#0B102A' }} /><span className="text-sm font-medium text-gray-700">Show all</span></label>
+          <div className="grid grid-cols-2 gap-6">
+            <div><h3 className="text-sm font-bold text-black mb-3">Trading information</h3><div className="space-y-2">{tradingKeys.map((key) => (<label key={key} className={`flex items-center gap-2 ${key === 'dr' ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}><input type="checkbox" checked={visibleColumns[key]} onChange={() => toggleColumn(key)} disabled={key === 'dr'} className={`w-4 h-4 rounded border-gray-300 ${key === 'dr' ? 'cursor-not-allowed' : ''}`} style={{ accentColor: key === 'dr' ? '#CCCCCC' : '#0B102A' }} /><span className={`text-xs ${key === 'dr' ? 'text-gray-400' : 'text-gray-700'}`}>{renderColumnLabel(key)}</span></label>))}</div></div>
+            <div><h3 className="text-sm font-bold text-black mb-3">Basic DR information</h3><div className="space-y-2">{basicDrKeys.map((key) => (<label key={key} className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={visibleColumns[key]} onChange={() => toggleColumn(key)} className="w-4 h-4 rounded border-gray-300" style={{ accentColor: '#0B102A' }} /><span className="text-xs text-gray-700">{renderColumnLabel(key)}</span></label>))}</div></div>
           </div>
-          <label className="flex items-center gap-3 mb-4 cursor-pointer">
-            <input type="checkbox" checked={showAllChecked} onChange={toggleAllColumns} className="w-4 h-4 rounded border-gray-300" style={{ accentColor: '#0B102A' }} />
-            <span className="text-xs sm:text-sm font-medium text-gray-700">Show all</span>
-          </label>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
-            <div>
-              <h3 className="text-xs sm:text-sm font-bold text-black mb-3">Trading information</h3>
-              <div className="space-y-2">
-                {tradingKeys.map((key) => (
-                  <label key={key} className={`flex items-center gap-2 ${key === 'dr' ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}>
-                    <input type="checkbox" checked={visibleColumns[key]} onChange={() => toggleColumn(key)} disabled={key === 'dr'} className={`w-4 h-4 rounded border-gray-300 ${key === 'dr' ? 'cursor-not-allowed' : ''}`} style={{ accentColor: key === 'dr' ? '#CCCCCC' : '#0B102A' }} />
-                    <span className={`text-[11px] sm:text-xs ${key === 'dr' ? 'text-gray-400' : 'text-gray-700'}`}>{renderColumnLabel(key)}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
-            <div>
-              <h3 className="text-xs sm:text-sm font-bold text-black mb-3">Basic DR information</h3>
-              <div className="space-y-2">
-                {basicDrKeys.map((key) => (
-                  <label key={key} className="flex items-center gap-2 cursor-pointer">
-                    <input type="checkbox" checked={visibleColumns[key]} onChange={() => toggleColumn(key)} className="w-4 h-4 rounded border-gray-300" style={{ accentColor: '#0B102A' }} />
-                    <span className="text-[11px] sm:text-xs text-gray-700">{renderColumnLabel(key)}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
-          </div>
-          <div className="mt-6 flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3">
-            <button onClick={resetToDefault} className="flex items-center justify-center gap-2 text-gray-600 hover:text-gray-800 transition-colors text-xs order-2 sm:order-1">
-              <i className="bi bi-arrow-clockwise" style={{ fontSize: '16px', fontWeight: 'bold' }}></i>
-              <span>Reset to Default</span>
-            </button>
-            <div className="flex gap-2 order-1 sm:order-2">
-              <button onClick={() => setShowSettings(false)} className="flex-1 sm:flex-none px-4 py-1.5 bg-gray-300 text-gray-700 rounded font-medium text-xs hover:bg-gray-400 transition-colors sm:w-20">Cancel</button>
-              <button onClick={() => setShowSettings(false)} className="flex-1 sm:flex-none px-4 py-1.5 bg-blue-500 text-white rounded font-medium text-xs hover:bg-blue-600 transition-colors sm:w-20">OK</button>
-            </div>
-          </div>
+          <div className="mt-6 flex justify-between items-center"><button onClick={resetToDefault} className="flex items-center gap-2 text-gray-600 hover:text-gray-800 transition-colors text-xs"><i className="bi bi-arrow-clockwise" style={{ fontSize: '16px', fontWeight: 'bold' }}></i><span>Reset to Default</span></button><div className="flex gap-2"><button onClick={() => setShowSettings(false)} className="px-4 py-1.5 bg-gray-300 text-gray-700 rounded font-medium text-xs hover:bg-gray-400 transition-colors w-20">Cancel</button><button onClick={() => setShowSettings(false)} className="px-4 py-1.5 bg-blue-500 text-white rounded font-medium text-xs hover:bg-blue-600 transition-colors w-20">OK</button></div></div>
         </div>
       </div>
     );
@@ -1075,11 +815,11 @@ export default function DRList() {
     };
 
     return (
-      <div className="flex flex-col sm:flex-row gap-0 sm:gap-0 mb-2 justify-between items-start sm:items-center">
-        <div className="flex gap-3 sm:gap-4 relative overflow-x-auto w-full sm:w-auto pb-0 sm:pb-0">
-          <button className={`pb-1 whitespace-nowrap text-sm sm:text-base ${tab === "all" ? "border-b-2 border-black font-semibold" : ""}`} onClick={() => setTab("all")}>All</button>
+      <div className="flex gap-4 mb-2 justify-between items-center">
+        <div className="flex gap-4 relative">
+          <button className={`pb-1 ${tab === "all" ? "border-b-2 border-black" : ""}`} onClick={() => setTab("all")}>All</button>
           <button
-            className={`pb-1 relative flex items-center gap-1.5 whitespace-nowrap text-sm sm:text-base ${tab === "popular" ? "border-b-2 border-black font-semibold" : ""}`}
+            className={`pb-1 relative flex items-center gap-1.5 ${tab === "popular" ? "border-b-2 border-black" : ""}`}
             onClick={() => setTab("popular")}
             onMouseEnter={(e) => handleMouseEnter("popular", e)}
             onMouseLeave={handleMouseLeave}
@@ -1087,7 +827,7 @@ export default function DRList() {
             Most Popular
             <svg
               xmlns="http://www.w3.org/2000/svg"
-              className="h-4 w-4 text-gray-500 mt-0.5 hidden sm:block"
+              className="h-4 w-4 text-gray-500 mt-0.5"
               fill="none"
               viewBox="0 0 24 24"
               stroke="currentColor"
@@ -1096,7 +836,7 @@ export default function DRList() {
             </svg>
           </button>
           <button
-            className={`pb-1 relative flex items-center gap-1.5 whitespace-nowrap text-sm sm:text-base ${tab === "sensitivity" ? "border-b-2 border-black font-semibold" : ""}`}
+            className={`pb-1 relative flex items-center gap-1.5 ${tab === "sensitivity" ? "border-b-2 border-black" : ""}`}
             onClick={() => setTab("sensitivity")}
             onMouseEnter={(e) => handleMouseEnter("sensitivity", e)}
             onMouseLeave={handleMouseLeave}
@@ -1104,7 +844,7 @@ export default function DRList() {
             High Sensitivity
             <svg
               xmlns="http://www.w3.org/2000/svg"
-              className="h-4 w-4 text-gray-500 mt-0.5 hidden sm:block"
+              className="h-4 w-4 text-gray-500 mt-0.5"
               fill="none"
               viewBox="0 0 24 24"
               stroke="currentColor"
@@ -1113,9 +853,9 @@ export default function DRList() {
             </svg>
           </button>
         </div>
-        <div className="flex flex-col items-end gap-0.5 text-[11px] sm:text-xs text-gray-500 w-full sm:w-auto">
+        <div className="flex flex-col items-end gap-0.5 text-xs text-gray-500">
           <div>Found {sortedData.length.toLocaleString()} results</div>
-          {lastUpdated && <div className="truncate max-w-full">Last Updated: {lastUpdated.toLocaleString("en-US", { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" })}</div>}
+          {lastUpdated && <div>Last Updated: {lastUpdated.toLocaleString("en-US", { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" })}</div>}
         </div>
       </div>
     );
@@ -1128,36 +868,29 @@ export default function DRList() {
     const issuerShortText = safe(detailRow.issuer || detailRow.issuerName);
 
     return (
-      <div className="fixed inset-0 z-[2000] flex items-center justify-center p-2 sm:p-4">
+      <div className="fixed inset-0 z-[2000] flex items-center justify-center p-4">
         <div
           className="absolute inset-0 bg-[#0B102A]/40 backdrop-blur-md transition-opacity"
           onClick={() => setDetailRow(null)}
         ></div>
 
-        <div className="relative w-full max-w-4xl max-h-[95vh] sm:max-h-[88vh] overflow-y-auto rounded-lg sm:rounded-2xl bg-white shadow-[0_18px_45px_rgba(0,0,0,0.25)]" onClick={(e) => e.stopPropagation()}>
-          <div className="flex flex-col gap-1.5 sm:gap-3 border-b border-gray-200 px-3 sm:px-6 pb-2 sm:pb-3 pt-3 sm:pt-5 md:flex-row md:items-start md:justify-between">
-            <div className="pr-2 sm:pr-4">
-              <h2 className="text-base sm:text-[22px] font-semibold leading-tight text-[#111827]">{safe(detailRow.dr)}</h2>
-              <div className="mt-0.5 text-[10px] sm:text-[12px] font-medium text-gray-800 leading-tight">Depositary Receipt on {symbolText} Issued by {issuerShortText}</div>
+        <div className="relative w-full max-w-4xl max-h-[88vh] overflow-y-auto rounded-2xl bg-white shadow-[0_18px_45px_rgba(0,0,0,0.25)] transform scale-[1.2]" onClick={(e) => e.stopPropagation()}>
+          <div className="flex flex-col gap-3 border-b border-gray-200 px-6 pb-3 pt-5 md:flex-row md:items-start md:justify-between">
+            <div className="pr-4">
+              <h2 className="text-[22px] font-semibold leading-tight text-[#111827]">{safe(detailRow.dr)}</h2>
+              <div className="mt-0.5 text-[12px] font-medium text-gray-800">Depositary Receipt on {symbolText} Issued by {issuerShortText}</div>
+              <div className="mt-1 text-[11px] text-gray-500">ตราสารแสดงสิทธิในหลักทรัพย์ต่างประเทศ (DR) • {safe(detailRow.full?.underlyingName)}</div>
             </div>
-            <div className="flex min-w-[140px] sm:min-w-[190px] flex-col items-start gap-0.5 sm:gap-1 pt-1 text-left">
-              <div className="flex w-full items-baseline justify-between">
-                <span className="text-[9px] sm:text-[11px] text-gray-500 w-[40px] sm:w-[50px]">Last</span>
-                <span className="text-right text-lg sm:text-[23px] font-semibold leading-none text-[#E53935]">{formatNum(detailRow.last)}</span>
-              </div>
-              <div className="flex w-full items-baseline justify-between">
-                <span className="text-[9px] sm:text-[11px] text-gray-500 w-[40px] sm:w-[50px]">Change</span>
-                <span className={`text-right text-[10px] sm:text-[12px] font-semibold ${detailRow.change > 0 ? "text-[#27AE60]" : detailRow.change < 0 ? "text-[#E53935]" : "text-gray-700"}`}>
-                  {detailRow.change > 0 ? "+" : ""}{formatNum(detailRow.change)} ({detailRow.pct > 0 ? "+" : ""}{formatNum(detailRow.pct)}%)
-                </span>
-              </div>
+            <div className="flex min-w-[190px] flex-col items-start gap-1 pt-1 text-left">
+              <div className="flex w-full items-baseline justify-between"><span className="text-[11px] text-gray-500 w-[50px]">Last</span><span className="text-right text-[23px] font-semibold leading-none text-[#E53935]">{formatNum(detailRow.last)}</span></div>
+              <div className="flex w-full items-baseline justify-between"><span className="text-[11px] text-gray-500 w-[50px]">Change</span><span className={`text-right text-[12px] font-semibold ${detailRow.change > 0 ? "text-[#27AE60]" : detailRow.change < 0 ? "text-[#E53935]" : "text-gray-700"}`}>{detailRow.change > 0 ? "+" : ""}{formatNum(detailRow.change)} ({detailRow.pct > 0 ? "+" : ""}{formatNum(detailRow.pct)}%)</span></div>
             </div>
           </div>
-          <div className="space-y-2 sm:space-y-3 bg-[#F5F5F5] px-3 sm:px-6 pb-3 sm:pb-5 pt-2 sm:pt-4">
-            <div className="grid grid-cols-1 gap-2 sm:gap-3 md:grid-cols-2">
-              <div className="rounded-lg sm:rounded-xl border border-gray-200 bg-white px-3 sm:px-5 py-2 sm:py-4 shadow-sm md:row-span-2">
-                <div className="mb-1.5 sm:mb-2 text-[11px] sm:text-[14px] font-semibold text-gray-900">Trading Snapshot</div>
-                <div className="grid grid-cols-[auto_1fr] gap-x-3 sm:gap-x-4 gap-y-0.5 sm:gap-y-1 text-[9px] sm:text-[11px] text-gray-700">
+          <div className="space-y-3 bg-[#F5F5F5] px-6 pb-5 pt-4">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <div className="rounded-xl border border-gray-200 bg-white px-5 py-4 shadow-sm md:row-span-2">
+                <div className="mb-2 text-[14px] font-semibold text-gray-900">Trading Snapshot</div>
+                <div className="grid grid-cols-[320px_minmax(0,1fr)] gap-y-1 text-[11px] text-gray-700">
                   <div>Open</div><div className="text-right text-gray-800 tabular-nums">{formatNum(detailRow.open)}</div>
                   <div>High</div><div className="text-right text-gray-800 tabular-nums">{formatNum(detailRow.high)}</div>
                   <div>Low</div><div className="text-right text-gray-800 tabular-nums">{formatNum(detailRow.low)}</div>
@@ -1170,31 +903,31 @@ export default function DRList() {
                   <div>Value</div><div className="text-right text-gray-800 tabular-nums">{formatNum(detailRow.value)}('000)</div>
                 </div>
               </div>
-              <div className="rounded-lg sm:rounded-xl border border-gray-200 bg-white px-3 sm:px-5 py-2 sm:py-4 shadow-sm">
-                <div className="mb-1.5 sm:mb-2 text-[11px] sm:text-[14px] font-semibold text-gray-900">DR Fundamental</div>
-                <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)] sm:grid-cols-[150px_minmax(0,1fr)] gap-y-0.5 sm:gap-y-1 text-[9px] sm:text-[11px] text-gray-700">
-                  <div>Issuer</div><div className="text-left text-gray-900 break-words">{safe(detailRow.issuerName)}</div>
+              <div className="rounded-xl border border-gray-200 bg-white px-5 py-4 shadow-sm">
+                <div className="mb-2 text-[14px] font-semibold text-gray-900">DR Fundamental</div>
+                <div className="grid grid-cols-[150px_minmax(0,1fr)] gap-y-1 text-[11px] text-gray-700">
+                  <div>Issuer</div><div className="text-left text-gray-900">{safe(detailRow.issuerName)}</div>
                   <div>Market Cap</div><div className="text-left text-gray-900">{detailRow.marketCap ? formatInt(detailRow.marketCap) : "-"}</div>
                   <div>Outstanding</div><div className="text-left text-gray-900">{detailRow.outstandingShare ? formatInt(detailRow.outstandingShare) : "-"}</div>
                   <div>IPO</div><div className="text-left text-gray-900">{safe(detailRow.full?.ipo)}</div>
                   <div>Conversion</div><div className="text-left text-gray-900">{safe(detailRow.ratio)}</div>
-                  <div>Div. Yield</div><div className="text-left text-gray-900">{detailRow.divYield ? `${formatNum(detailRow.divYield)}%` : "-"}</div>
-                  <div>Security Type</div><div className="text-left text-gray-900 break-words">{safe(detailRow.securityTypeName)}</div>
+                  <div>Dividend Yield</div><div className="text-left text-gray-900">{detailRow.divYield ? `${formatNum(detailRow.divYield)}%` : "-"}</div>
+                  <div>Security Type</div><div className="text-left text-gray-900">{safe(detailRow.securityTypeName)}</div>
                   <div>Trading Session</div><div className="text-left text-gray-900">{safe(detailRow.tradingSession)}</div>
                 </div>
               </div>
-              <div className="rounded-lg sm:rounded-xl border border-gray-200 bg-white px-3 sm:px-5 py-2 sm:py-4 shadow-sm">
-                <div className="mb-1.5 sm:mb-2 text-[11px] sm:text-[14px] font-semibold text-gray-900">Reference &amp; Links</div>
-                <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)] sm:grid-cols-[150px_minmax(0,1fr)] gap-y-0.5 sm:gap-y-1 text-[9px] sm:text-[11px] text-gray-700">
-                  <div>Underlying</div><div className="text-left text-gray-900 break-words">{removeCompanyPrefix(safe(detailRow.full?.underlyingName))}</div>
-                  <div>Underlying Exchange</div><div className="text-left text-gray-900 break-words">{safe(detailRow.exchange)}</div>
-                  <div>composite Ref</div><div className="text-left text-gray-900">{safe(detailRow.full?.compositeRef)}</div>
+              <div className="rounded-xl border border-gray-200 bg-white px-5 py-4 shadow-sm">
+                <div className="mb-2 text-[14px] font-semibold text-gray-900">Reference &amp; Links</div>
+                <div className="grid grid-cols-[150px_minmax(0,1fr)] gap-y-1 text-[11px] text-gray-700">
+                  <div>Underlying</div><div className="text-left text-gray-900">{safe(detailRow.full?.underlyingName)}</div>
+                  <div>Underlying Exchange</div><div className="text-left text-gray-900">{safe(detailRow.exchange)}</div>
                   <div>First Trade</div><div className="text-left text-gray-900">{detailRow.full?.firstTradeDate ? new Date(detailRow.full.firstTradeDate).toLocaleDateString('en-GB') : "-"}</div>
+                  <div>composite Ref</div><div className="text-left text-gray-900">{safe(detailRow.full?.compositeRef)}</div>
                 </div>
               </div>
             </div>
-            <div className="flex justify-end">
-              <button className="rounded-md bg-[#E5E7EB] px-4 sm:px-6 py-1.5 text-[10px] sm:text-[12px] font-medium text-gray-800 transition-colors hover:bg-[#D1D5DB]" onClick={() => setDetailRow(null)}>close</button>
+            <div className="mt-1 flex justify-end">
+              <button className="rounded-md bg-[#E5E7EB] px-6 py-1.5 text-[12px] font-medium text-gray-800 transition-colors hover:bg-[#D1D5DB]" onClick={() => setDetailRow(null)}>close</button>
             </div>
           </div>
         </div>
@@ -1205,11 +938,10 @@ export default function DRList() {
   return (
     <div className="h-screen w-full bg-[#f5f5f5] overflow-hidden flex justify-center">
       <div className="w-full max-w-[1248px] flex flex-col h-full">
-        {/* Header Section - Responsive scaling removed for mobile */}
-        <div className="pt-6 sm:pt-10 pb-0 px-4 sm:px-0 flex-shrink-0" style={{ overflow: 'visible', zIndex: 100 }}>
-          <div className="w-full lg:w-[1040px] max-w-full mx-auto lg:scale-[1.2] lg:origin-top" style={{ overflow: 'visible' }}>
-            <h1 className="text-2xl sm:text-3xl font-bold mb-2 sm:mb-3 text-black">DR List</h1>
-            <p className="text-[#6B6B6B] mb-6 sm:mb-8 text-left text-sm sm:text-base">
+        <div className="pt-10 pb-0 px-0 flex-shrink-0" style={{ overflow: 'visible', zIndex: 100 }}>
+          <div className="w-[1040px] max-w-full mx-auto scale-[1.2] origin-top" style={{ overflow: 'visible' }}>
+            <h1 className="text-3xl font-bold mb-3 text-black">DR List</h1>
+            <p className="text-[#6B6B6B] mb-8 text-left text-sm md:text-base">
               Track latest DR movements and trading stats.
             </p>
             {renderControlBar()}
@@ -1217,11 +949,11 @@ export default function DRList() {
           </div>
         </div>
 
-        {/* Main Table - Scrollable */}
-        <div className="flex-1 overflow-hidden pb-6 sm:pb-10 mt-0 sm:mt-10 px-4 sm:px-0">
+        {/* Main Table - Scrollable (ไม่ถูก scale แต่ขยายฟอนต์ให้ใหญ่ขึ้นแทน) */}
+        <div className="flex-1 overflow-hidden pb-10 mt-10">
           <div className="h-full bg-white rounded-xl shadow-[0_4px_20px_rgba(0,0,0,0.05)] border border-gray-100 overflow-auto">
             {loading ? (
-              <div className="p-6 sm:p-10 text-center text-gray-600 text-sm sm:text-base">Loading...</div>
+              <div className="p-10 text-center text-gray-600">Loading...</div>
             ) : (
               renderTable()
             )}
@@ -1229,14 +961,14 @@ export default function DRList() {
         </div>
       </div>
 
-      {/* Modals */}
+
+      {/* ✅ ย้าย Modal ออกมานอกกล่องที่ถูก scale */}
       {renderSettingsModal()}
       {renderDetailModal()}
 
-      {/* Tooltip - Hidden on mobile */}
       {hoveredTab && (
         <div
-          className="fixed z-[10000] pointer-events-none hidden sm:block"
+          className="fixed z-[10000] pointer-events-none"
           style={{
             left: `${tooltipPosition.x}px`,
             top: `${tooltipPosition.y}px`,
@@ -1286,7 +1018,7 @@ export default function DRList() {
         </div>
       )}
 
-      <style>{`
+      <style jsx>{`
         @keyframes tooltipFadeIn {
           from {
             opacity: 0;
