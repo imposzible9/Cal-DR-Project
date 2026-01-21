@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState, useRef } from "react";
 
 // const API_BASE = "http://172.17.1.85:8333";
-const API_BASE = "https://api.ideatrade1.com";
+const API_BASE = "https://api.ideatrade1.com";       // DR snapshot
+const CALC_API_BASE = "http://localhost:8000";      // DR real-time calc
 
 const EXCHANGE_CURRENCY_MAP = {
   "The Nasdaq Global Select Market": "USD",
@@ -20,6 +21,7 @@ const EXCHANGE_CURRENCY_MAP = {
   "Hochiminh Stock Exchange": "VND",
 };
 
+
 // Helper functions for table formatting
 const formatNum = (n) => {
   const num = Number(n);
@@ -32,6 +34,13 @@ const formatInt = (n) => {
   if (!isFinite(num)) return "0";
   return Math.round(num).toLocaleString();
 };
+
+const formatInputNum = (n, d = 2) => {
+  const num = Number(n);
+  if (!Number.isFinite(num)) return "";
+  return num.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+};
+
 
 const formatRatio = (raw) => {
   if (!raw) return "0:1";
@@ -49,6 +58,20 @@ const extractSymbol = (str) => {
   return match ? match[1] : str;
 };
 
+const fxDecimalsByCcy = (ccy) => {
+  if (!ccy) return 2;
+  const u = String(ccy).toUpperCase();
+  if (u === "JPY" || u === "CNY" || u === "TWD" || u === "SGD" || u === "DKK") return 4;
+  if (u === "VND") return 6;
+  return 2; // USD/HKD/EUR ปกติ
+};
+
+const roundToTick = (p) => {
+  const tick = 0.01; // SET DR ส่วนใหญ่ใช้ 0.01
+  return Math.round(Number(p) / tick) * tick;
+};
+
+
 export default function DRCal() {
   // ================== state สำหรับ DR & การค้นหา ==================
   const [allDR, setAllDR] = useState([]);
@@ -61,12 +84,56 @@ export default function DRCal() {
 
   const [sortConfig, setSortConfig] = useState({ key: null, direction: "asc" });
 
-  // ================== state สำหรับการคำนวณ ==================
-  const [underlyingValue, setUnderlyingValue] = useState("");
-  const [fxTHBPerUnderlying, setFxTHBPerUnderlying] = useState("");
+// ================== state สำหรับการคำนวณ ==================
+const [underlyingValue, setUnderlyingValue] = useState(null);              // ✅ ใช้แสดงผล (ปัดแล้ว)
+const [underlyingValueRaw, setUnderlyingValueRaw] = useState(null);        // ✅ ค่าดิบจาก backend (ไว้คำนวณ)
+const [fxTHBPerUnderlying, setFxTHBPerUnderlying] = useState(null);
+const [underlyingCurrency, setUnderlyingCurrency] = useState("USD");
+
+const [loadingRealtime, setLoadingRealtime] = useState(false);
+const [defaultDR, setDefaultDR] = useState(null);
+
+const fetchRealtimeUnderlying = async (drSymbol) => {
+  try {
+    setLoadingRealtime(true);
+
+    const res = await fetch(`${CALC_API_BASE}/api/calc/dr/${drSymbol}`);
+    if (!res.ok) throw new Error("Failed realtime calc");
+
+    const data = await res.json();
+
+    const ccy = String(data.currency ?? "USD");
+    setUnderlyingCurrency(ccy);
+
+    // ✅ 1) รับค่าดิบก่อน (ถ้า backend ส่ง underlying_price_raw มา)
+    const undRaw =
+      data.underlying_price_raw != null
+        ? Number(data.underlying_price_raw)
+        : (data.underlying_price != null ? Number(data.underlying_price) : null);
+
+    setUnderlyingValueRaw(undRaw);
+    setUnderlyingValue(undRaw != null ? Math.round((undRaw + 1e-10) * 100) / 100 : null);
+
+    // ✅ 2) ปัด 2 ตำแหน่งเพื่อแสดงผลในหน้าเว็บ
+    const undRounded =
+      Number.isFinite(undRaw) ? Math.round(undRaw * 100) / 100 : null;
+
+    setUnderlyingValue(undRounded);
+
+    setFxTHBPerUnderlying(
+      data.fx_rate != null ? Number(data.fx_rate) : null
+    );
+  } catch (err) {
+    console.error("Realtime calc error:", err);
+  } finally {
+    setLoadingRealtime(false);
+  }
+};
 
   const tableRef = useRef(null);
-  const SPREAD_PCT = 0.002; 
+  const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
+
+  const searchInputRef = useRef(null);
 
   // ================== ดึง DR ทั้งหมด ==================
   useEffect(() => {
@@ -117,8 +184,14 @@ export default function DRCal() {
         }
 
         if (data.rows.length > 0) {
-          setSelectedDR(data.rows[0]);
-          setSearchText(data.rows[0].symbol);
+          setAllDR(data.rows || []);
+
+          const first = data.rows[0];
+          setDefaultDR(first);              // ✅ เก็บ default
+          setSelectedDR(first);
+          setSearchText(first.symbol);
+
+          fetchRealtimeUnderlying(first.symbol); // ✅ ดึง realtime
         }
       } catch (err) {
         console.error(err);
@@ -146,43 +219,101 @@ export default function DRCal() {
       minimumFractionDigits: 2,
     }).format(Number(n || 0))}%`;
 
-  const underlyingCurrency = useMemo(() => {
+  /*const underlyingCurrency = useMemo(() => {
     if (!selectedDR) return "";
     return EXCHANGE_CURRENCY_MAP[selectedDR.underlyingExchange] || "";
-  }, [selectedDR]);
+  }, [selectedDR]);*/
 
   // ================== ratio ==================
-  const ratioDR = useMemo(() => {
-    if (!selectedDR) return 0;
-    if (selectedDR?.conversionRatioR) return 1 / Number(selectedDR.conversionRatioR);
-    if (selectedDR?.conversionRatio) {
-      const m = String(selectedDR.conversionRatio).split(":")[0];
-      return Number(m.replace(/[^\d.]/g, "")) || 0;
-    }
-    return 0;
-  }, [selectedDR]);
+// ================== ratio ==================
+const ratioDR = useMemo(() => {
+  if (!selectedDR) return 0;
+
+  if (selectedDR?.conversionRatio) {
+    const left = String(selectedDR.conversionRatio).split(":")[0];
+    const n = Number(left.replace(/[^\d.]/g, ""));
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  if (selectedDR?.conversionRatioR) {
+    const r = Number(selectedDR.conversionRatioR);
+    return r > 0 ? (1 / r) : 0;
+  }
+
+  return 0;
+}, [selectedDR]);
+
+// ================== dynamic spread ==================
+const dynamicSpreadPct = useMemo(() => {
+  if (!selectedDR) return 0.002;
+
+  const bid = Number(selectedDR.bidPrice || 0);
+  const ask = Number(selectedDR.offerPrice || 0);
+
+  let spread = null;
+
+  if (bid > 0 && ask > 0 && ask > bid) {
+    const mid = (bid + ask) / 2;
+    if (mid > 0) spread = (ask - bid) / mid;
+  }
+
+  if (spread == null) {
+    const value = Number(selectedDR.totalValue || 0);
+    spread =
+      value >= 50_000_000 ? 0.001 :
+      value >= 10_000_000 ? 0.002 :
+      value >= 2_000_000  ? 0.004 :
+                           0.008;
+  }
+
+  return clamp(spread, 0.001, 0.02);
+}, [selectedDR]);
+
+
 
   // ================== fair value ==================
   const fairMidTHB = useMemo(() => {
-    const und = Number(underlyingValue || 0);
+    const und = Number(underlyingValueRaw ?? underlyingValue ?? 0);
     const fx = Number(fxTHBPerUnderlying || 0);
     if (!und || !fx || !ratioDR) return 0;
     return (und * fx) / ratioDR;
   }, [underlyingValue, fxTHBPerUnderlying, ratioDR]);
 
-  const fairBidTHB = fairMidTHB * (1 - SPREAD_PCT / 2);
-  const fairAskTHB = fairMidTHB * (1 + SPREAD_PCT / 2);
-  const hasInput = underlyingValue && fxTHBPerUnderlying;
+  const fairBidTHB = useMemo(
+    () => roundToTick(fairMidTHB * (1 - dynamicSpreadPct / 2)),
+    [fairMidTHB, dynamicSpreadPct]
+  );
+
+  const fairAskTHB = useMemo(
+    () => roundToTick(fairMidTHB * (1 + dynamicSpreadPct / 2)),
+    [fairMidTHB, dynamicSpreadPct]
+  );
+  
+  const hasInput = Number(underlyingValue) > 0 && Number(fxTHBPerUnderlying) > 0 && ratioDR > 0;
 
   // ================== Suggest ==================
   const filteredSuggest = useMemo(() => {
     const q = searchText.trim().toUpperCase();
     if (!q) return [];
+
     return allDR
       .filter((dr) => {
-        const sym = dr.symbol?.toUpperCase() || "";
-        const nm = dr.name?.toUpperCase() || "";
-        return sym.includes(q) || nm.includes(q);
+        const sym = (dr.symbol || "").toUpperCase();                 // DR
+        const nm = (dr.name || "").toUpperCase();                    // ชื่อ DR
+        const und = (dr.underlying || "").toUpperCase();             // underlying (บางทีเป็นชื่อสั้น)
+        const undName = (dr.underlyingName || "").toUpperCase();     // ชื่อบริษัท/ชื่อกองทุนเต็ม
+        const issuer = (dr.issuer || "").toUpperCase();              // ผู้ออก (KTB/FSS)
+        const issuerName = (dr.issuerName || "").toUpperCase();      // ชื่อผู้ออก
+
+        // ✅ เพิ่มค้นหา “ชื่อบริษัท” ได้จาก underlyingName
+        return (
+          sym.includes(q) ||
+          nm.includes(q) ||
+          und.includes(q) ||
+          undName.includes(q) ||
+          issuer.includes(q) ||
+          issuerName.includes(q)
+        );
       })
       .slice(0, 8);
   }, [searchText, allDR]);
@@ -192,8 +323,12 @@ export default function DRCal() {
     setSearchText(dr.symbol);
     setShowSuggest(false);
     setHighlightIndex(-1);
-    setUnderlyingValue("");
-    setFxTHBPerUnderlying("");
+
+    // fallback ระหว่างรอ realtime
+    setUnderlyingCurrency(EXCHANGE_CURRENCY_MAP[dr.underlyingExchange] || "USD");
+
+    // ยิง realtime ครั้งเดียวพอ
+    fetchRealtimeUnderlying(dr.symbol);
   };
 
   const handleSearchChange = (e) => {
@@ -227,8 +362,19 @@ export default function DRCal() {
   };
 
   const onReset = () => {
-    setUnderlyingValue("");
-    setFxTHBPerUnderlying("");
+    if (!defaultDR) return;
+
+    setSelectedDR(defaultDR);
+    setSearchText(defaultDR.symbol);
+    setShowSuggest(false);
+    setHighlightIndex(-1);
+
+    setUnderlyingCurrency(
+      EXCHANGE_CURRENCY_MAP[defaultDR.underlyingExchange] || "USD"
+    );
+
+    // ดึง realtime ใหม่ของ default
+    fetchRealtimeUnderlying(defaultDR.symbol);
   };
 
   const SortIndicator = ({ colKey }) => {
@@ -312,8 +458,8 @@ export default function DRCal() {
     if (filteredTableData.length === 0) return null;
 
     return (
-      <div ref={tableRef} className="w-full mt-2 bg-white rounded-xl shadow-[0_4px_20px_rgba(0,0,0,0.05)] border border-gray-100 overflow-hidden">
-        <div className="overflow-x-auto">
+      <div ref={tableRef} className="w-full mt-2 mb-6 sm:mb-10 bg-white rounded-xl shadow-[0_4px_20px_rgba(0,0,0,0.05)] border border-gray-100 overflow-hidden font-['Sarabun']">
+        <div className="overflow-x-auto hide-scrollbar">
           <table className="w-full text-xs text-left border-separate border-spacing-0">
             <thead className="bg-[#0B102A] text-white font-bold">
               <tr>
@@ -407,23 +553,24 @@ export default function DRCal() {
   return (
     <div className="min-h-screen w-full bg-[#f5f5f5] flex flex-col items-center pb-10">
       <div className="w-full max-w-[1040px] scale-[1.2] origin-top">
-        <h1 className="text-4xl font-bold mb-3 text-black mt-10">Calculation DR</h1>
+        <h1 className="text-[34px] font-bold mb-2 text-black mt-6 sm:mt-6">Calculation DR</h1>
         <p className="text-[#6B6B6B] mb-8 text-sm md:text-base">
           Calculate DR Fair Value based on Underlying Price, Exchange Rate, and Conversion Ratio.
         </p>
 
-        <div className="w-full min-h-[627px] mt-2">
+      <div className="w-full min-h-[627px] mt-2 font-sarabun">
         <div className="flex w-full">
           <div className="flex-1 min-h-[427px] bg-[#FFFFFF] rounded-tl-[12px] rounded-bl-[12px] shadow-[0_10px_25px_rgba(0,0,0,0.12)] px-6 pt-10 border border-[#e0e0e0]">
             <h2 className="font-semibold text-[26px] text-black mb-[14px]">Select DR</h2>
             <div className="relative w-full h-[48px]">
               <input
+                ref={searchInputRef}
                 type="text"
                 placeholder="Select DR"
                 value={searchText}
                 onChange={handleSearchChange}
                 onKeyDown={handleSearchKeyDown}
-                onFocus={() => setShowSuggest(true)}
+                onClick={(e) => { e.target.select(); setShowSuggest(true); }}
                 className="w-full h-full bg-white border border-[#d0d0d0] rounded-[12px] pl-4 pr-12 text-black shadow-lg focus:outline-none"
               />
               <svg xmlns="http://www.w3.org/2000/svg" className="absolute right-4 top-1/2 -translate-y-1/2 h-6 w-6 text-black" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -439,7 +586,14 @@ export default function DRCal() {
                       className={`flex w-full justify-between px-4 py-2 text-left text-sm ${idx === highlightIndex ? "bg-gray-100" : "hover:bg-gray-50"}`}
                     >
                       <span className="font-semibold text-black">{dr.symbol}</span>
-                      <span className="text-xs text-gray-500 truncate w-40 text-right">{dr.name}</span>
+                      <span className="text-xs text-gray-500 truncate w-40 text-right">
+                        {(dr.underlyingName || dr.name)
+                          ?.replace(/^โครงการจัดการลงทุนต่างประเทศ\s*/g, "")
+                          ?.replace(/^บริษัทหลักทรัพย์\s*/g, "")
+                          ?.replace(/^บริษัท\s*/g, "")
+                          ?.replace(/\s*บริษัท$/g, "")
+                          ?.trim()}
+                      </span>
                     </button>
                   ))}
                 </div>
@@ -473,21 +627,23 @@ export default function DRCal() {
           </div>
 
           <div className="flex-1 bg-[#0B102A] rounded-tr-[16px] rounded-br-[16px] shadow-lg p-6">
-            <div className="w-full h-[253px] bg-white/20 border border-[#9A9A9A] rounded-[12px] shadow-lg p-6">
+            <div className="w-full h-[253px] bg-white/20 border border-[#9A9A9A] rounded-[12px] shadow-lg p-6 flex flex-col">
               <div className="mb-4">
                 <p className="font-bold text-[13px] text-white mb-1">Underlying Price</p>
                 <div className="w-full h-[46px] bg-white/20 border border-[#9A9A9A] rounded-[12px] flex items-center hover:border-[#4AB6FF] transition-colors duration-150">
                   <input
                     type="text"
                     autoComplete="off"
-                    placeholder="Underlying Price"
-                    value={underlyingValue}
-                    onChange={(e) => setUnderlyingValue(e.target.value.replace(/[^0-9.]/g, ""))}
+                    value={formatInputNum(underlyingValue, 2)}
+                    readOnly
+                    disabled={loadingRealtime}
                     style={{ WebkitTextFillColor: "white" }}
-                    className="flex-1 h-full bg-transparent text-white placeholder-[#9A9A9A] px-4 focus:outline-none"
+                    className={`flex-1 h-full bg-transparent text-white placeholder-[#9A9A9A] px-4 focus:outline-none ${loadingRealtime ? "opacity-50 cursor-not-allowed" : ""}`}
                   />
                   <div className="w-[1px] h-[30px] bg-[#9A9A9A]"></div>
-                  <div className="w-[100px] flex justify-center text-white font-bold text-[13px]">{underlyingCurrency || "USD"}</div>
+                  <div className="w-[100px] flex justify-center text-white font-bold text-[13px]">
+                    {underlyingCurrency || "USD"}
+                  </div>
                 </div>
               </div>
 
@@ -497,19 +653,30 @@ export default function DRCal() {
                   <input
                     type="text"
                     autoComplete="off"
-                    placeholder="Exchange Rate"
-                    value={fxTHBPerUnderlying}
-                    onChange={(e) => setFxTHBPerUnderlying(e.target.value.replace(/[^0-9.]/g, ""))}
+                    value={formatInputNum(fxTHBPerUnderlying, fxDecimalsByCcy(underlyingCurrency))}
+                    readOnly
+                    disabled={loadingRealtime}
                     style={{ WebkitTextFillColor: "white" }}
-                    className="flex-1 h-full bg-transparent text-white placeholder-[#9A9A9A] px-4 focus:outline-none"
+                    className={`flex-1 h-full bg-transparent text-white placeholder-[#9A9A9A] px-4 focus:outline-none ${loadingRealtime ? "opacity-50 cursor-not-allowed" : ""}`}
                   />
                   <div className="w-[1px] h-[30px] bg-[#9A9A9A]"></div>
-                  <div className="w-[100px] flex justify-center text-white font-bold text-[13px]">{underlyingCurrency || "USD"}/THB</div>
+                  <div className="w-[100px] flex justify-center text-white font-bold text-[13px]">{"THB/" + (underlyingCurrency || "USD")}</div>
                 </div>
               </div>
 
+              {loadingRealtime && (
+                <span className="text-xs text-blue-300 ml-2">
+                  Calculating fair value…
+                </span>
+              )}
+
               <div className="flex justify-center gap-2 mt-4 w-full">
-                <button onClick={onReset} className="w-[139px] h-[38px] bg-white rounded-[8px] flex justify-center items-center gap-2 text-black font-bold text-[12px] hover:bg-gray-200 transition-colors">Clear</button>
+                <button
+                  onClick={onReset}
+                  className="w-[139px] h-[38px] bg-white rounded-[8px] flex justify-center items-center gap-2 text-black font-bold text-[12px] hover:bg-gray-200 transition-colors"
+                >
+                  Clear
+                </button>
               </div>
             </div>
 

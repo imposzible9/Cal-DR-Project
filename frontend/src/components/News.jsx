@@ -175,10 +175,18 @@ const News = () => {
     async function loadSymbol() {
       setLoadingSearch(true);
       setErrorSearch("");
+      
+      // Determine query symbol (append .BK for Thai stocks)
+      let querySymbol = selected;
+      const match = allSymbols.find(s => s.symbol === selected);
+      if (match && (match.exchange === 'SET' || match.exchange === 'mai')) {
+        querySymbol = selected + ".BK";
+      }
+
       try {
         const [qRes, nRes] = await Promise.all([
-          axios.get(`${API_BASE}/api/finnhub/quote/${encodeURIComponent(selected)}`),
-          axios.get(`${API_BASE}/api/finnhub/company-news/${encodeURIComponent(selected)}`, { params: { hours: 168, limit: 30 } }),
+          axios.get(`${API_BASE}/api/finnhub/quote/${encodeURIComponent(querySymbol)}`),
+          axios.get(`${API_BASE}/api/finnhub/company-news/${encodeURIComponent(querySymbol)}`, { params: { hours: 168, limit: 30 } }),
         ]);
         if (!mounted) return;
         setQuote(qRes.data || null);
@@ -225,33 +233,54 @@ const News = () => {
     }
   };
 
+  const updateSuggestions = (value) => {
+    if (value.length > 0) {
+      const filtered = allSymbols.filter(s => s.symbol.startsWith(value));
+      setSuggestions(filtered.slice(0, 100));
+    } else {
+      setSuggestions(allSymbols.slice(0, 100));
+    }
+    setShowSuggestions(true);
+  };
+
   const handleSearchChange = (e) => {
     const newSearch = e.target.value.toUpperCase();
     setSearch(newSearch);
-
-    if (newSearch.length > 0) {
-      const filtered = allSymbols.filter(s => s.symbol.startsWith(newSearch));
-      setSuggestions(filtered.slice(0, 10));
-      setShowSuggestions(true);
-    } else {
-      setSuggestions([]);
-      setShowSuggestions(false);
-    }
+    updateSuggestions(newSearch);
   };
 
-const selectSuggestion = (s) => {
-  setSearch(s.symbol);
-  setSelected(s.symbol);
-  setShowSuggestions(false);
-  setErrorSearch("");
-};
+  const handleSearchFocus = () => {
+    updateSuggestions(search);
+  };
 
-const clearSearch = () => {
-  setSearch("");
-  setSelected("");
-  setSuggestions([]);
-  setShowSuggestions(false);
-};
+  // Close suggestions when clicking outside would be ideal, 
+  // but for now we'll rely on selection or blur (careful with blur vs click)
+  // A simple way is to delay hiding on blur to allow click to register
+  const handleSearchBlur = () => {
+    // Delay hiding to allow item click to register
+    setTimeout(() => {
+      setShowSuggestions(false);
+    }, 200);
+  };
+
+  const selectSuggestion = (s) => {
+    setSearch(s.symbol);
+    setSelected(s.symbol);
+    setShowSuggestions(false);
+    setErrorSearch("");
+  };
+
+  const clearSearch = () => {
+    setSearch("");
+    setSelected("");
+    setSuggestions(allSymbols.slice(0, 100)); // Reset to default suggestions
+    setShowSuggestions(true); // Keep open or close? Usually close if cleared via X, but maybe user wants to search again.
+    // Let's close it if they click X, or maybe keep it open if they want to pick another?
+    // User said "Search" button clears it. 
+    // If I click clear, I probably want to reset.
+    // Let's keep it closed for now unless they focus again.
+    setShowSuggestions(false); 
+  };
 
   let suggestionsContent = null;
   if (showSuggestions && suggestions.length > 0) {
@@ -284,6 +313,11 @@ const clearSearch = () => {
                 </span>
               </div>
               <span className="font-bold text-[#0B102A]">{s.symbol}</span>
+              {s.exchange && (
+                <span className="text-xs font-medium text-gray-400 border border-gray-200 rounded px-1.5 py-0.5 bg-gray-50">
+                  {s.exchange}
+                </span>
+              )}
             </div>
             <span className="text-xs text-gray-500 truncate max-w-[150px]">{s.name}</span>
           </div>
@@ -292,46 +326,50 @@ const clearSearch = () => {
     );
   }
 
-  console.log('suggestionsContent', suggestionsContent);
-
-return (
-  <div className="min-h-screen w-full bg-[#F5F5F5] flex justify-center">
-    <div className="w-full max-w-[1248px] flex flex-col h-full py-10">
-      
+  return (
+  <div className="min-h-screen w-full bg-[#f5f5f5] flex justify-center">
+    <div className="w-full max-w-[1248px] flex flex-col pb-6 sm:pb-10">
       {/* Header Section */}
-      <div className="flex flex-col md:flex-row md:items-start justify-between gap-6 mb-8 px-4 md:px-0">
-        <div>
-          <h1 className="text-3xl font-bold mb-2 text-[#0B102A]">News</h1>
-          <p className="text-[#6B6B6B] text-sm">Latest market updates, earnings reports, and insights for Underlying Assets</p>
-        </div>
-        <div className="relative w-full md:w-[300px]">
-          <input
-              type="text"
-              value={search}
-              onChange={handleSearchChange}
-              onKeyDown={onSearchKey}
-              placeholder="Search Underlying"
-              className="w-full bg-white pl-4 pr-10 py-2.5 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#0B102A] text-sm shadow-sm"
-            />
-            {selected ? (
-              <button onClick={clearSearch} className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600">
-                <i className="bi bi-x-lg"></i>
-              </button>
-            ) : (
-              <i className="bi bi-search absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
-            )}
-            
-            {/* Suggestions Dropdown */}
-            {suggestionsContent}
-
+      <div className="pt-6 sm:pt-10 pb-0 flex-shrink-0" style={{ overflow: 'visible', zIndex: 100 }}>
+        <div className="w-full lg:w-[1040px] max-w-full mx-auto lg:scale-[1.2] lg:origin-top" style={{ overflow: 'visible' }}>
+          <div className="mb-6 sm:mb-8">
+            <h1 className="text-2xl sm:text-3xl font-bold mb-2 sm:mb-3 text-[#0B102A]">News</h1>
+            <p className="text-[#6B6B6B] text-sm md:text-base">Latest market updates, earnings reports, and insights for Underlying Assets</p>
+          </div>
+          
+          <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-3 md:gap-4 mb-2">
+            <div></div>
+            <div className="relative w-full md:w-auto">
+              <input
+                type="text"
+                value={search}
+                onChange={handleSearchChange}
+                onKeyDown={onSearchKey}
+                onFocus={handleSearchFocus}
+                onBlur={handleSearchBlur}
+                placeholder="Search DR..."
+                className="bg-white pl-3 sm:pl-4 pr-10 py-2 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#0B102A] focus:border-transparent w-full md:w-64 text-xs sm:text-sm shadow-sm h-[37.33px]"
+              />
+              {selected ? (
+                <button onClick={clearSearch} className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                  <i className="bi bi-x-lg" style={{ fontSize: 14 }}></i>
+                </button>
+              ) : (
+                <i className="bi bi-search absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400" style={{ fontSize: 14 }} />
+              )}
+              
+              {/* Suggestions Dropdown */}
+              {suggestionsContent}
+            </div>
           </div>
         </div>
+      </div>
 
-        {/* Main Content */}
-        <div className="flex-1 pb-10 px-4 md:px-0">
-          
-          {selected ? (
-            /* Search Result View */
+      {/* Main Content */}
+      <div className="pb-6 sm:pb-10 mt-0 sm:mt-10">
+        {selected ? (
+          /* Search Result View */
+          <div>
             <div className="space-y-6">
               {loadingSearch ? (
                 <div className="animate-pulse h-32 bg-gray-200 rounded-xl" />
@@ -352,7 +390,6 @@ return (
                         </div>
                         <div>
                           <div className="text-2xl font-bold">{selected}</div>
-                          <div className="text-blue-200 text-sm">Underlying Asset</div>
                         </div>
                       </div>
                       <div className="relative z-10 text-right">
@@ -382,57 +419,58 @@ return (
                 </>
               )}
             </div>
-          ) : (
-            /* Home View */
-            <div className="space-y-8">
-              {/* Top Stories Banner */}
-              <div className="space-y-4">
-                <h2 className="text-lg font-bold text-[#0B102A]">Top Stories</h2>
-                {loadingHome ? (
-                  <div className="animate-pulse h-48 bg-gray-200 rounded-2xl" />
-                ) : topStory ? (
-                  <a href={topStory.news.url} target="_blank" rel="noreferrer" className="block group">
-                    <div className="bg-[#0B102A] rounded-2xl px-8 py-6 text-white relative overflow-hidden shadow-lg">
-                      <div className="relative z-10 max-w-3xl">
-                        {topStory.ticker && topStory.quote && (
-                          <div className="flex items-center gap-3 mb-3">
-                            <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center overflow-hidden">
-                              {topStory.quote.logo_url ? (
-                                <img src={topStory.quote.logo_url} alt={topStory.ticker} className="w-full h-full object-contain" />
-                              ) : (
-                                <span className="text-sm font-bold text-white">{topStory.ticker[0]}</span>
-                              )}
-                            </div>
-                            <div>
-                              <div className="text-sm font-bold text-blue-200">{topStory.ticker}</div>
-                              <div className="text-xs text-blue-300/70 -mt-1">Underlying Asset</div>
-                            </div>
+          </div>
+        ) : (
+          /* Home View */
+          <div className="space-y-8">
+            {/* Top Stories Banner - Fixed */}
+            <div className="space-y-4">
+              <h2 className="text-[20px] font-bold text-[#0B102A]">Top Stories</h2>
+              {loadingHome ? (
+                <div className="animate-pulse h-48 bg-gray-200 rounded-2xl" />
+              ) : topStory ? (
+                <a href={topStory.news.url} target="_blank" rel="noreferrer" className="block group">
+                  <div className="bg-[#0B102A] rounded-2xl px-8 py-6 text-white relative overflow-hidden shadow-lg">
+                    <div className="relative z-10 max-w-3xl">
+                      {topStory.ticker && topStory.quote && (
+                        <div className="flex items-center gap-3 mb-3">
+                          <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center overflow-hidden">
+                            {topStory.quote.logo_url ? (
+                              <img src={topStory.quote.logo_url} alt={topStory.ticker} className="w-full h-full object-contain" />
+                            ) : (
+                              <span className="text-sm font-bold text-white">{topStory.ticker[0]}</span>
+                            )}
                           </div>
-                        )}
-                        <h3 className="text-lg md:text-xl font-semibold leading-snug mb-2 group-hover:text-blue-200 transition-colors">
-                          {topStory.news.title}
-                        </h3>
-                        <div className="text-xs text-blue-200/80">
-                          {timeAgo(topStory.news.published_at)}
+                          <div>
+                            <div className="text-sm font-bold text-blue-200">{topStory.ticker}</div>
+                          </div>
                         </div>
-                      </div>
-                      <div className="absolute right-8 top-1/2 transform -translate-y-1/2">
-                        {topStory.quote && topStory.quote.logo_url ? (
-                          <img src={topStory.quote.logo_url} alt="background" className="w-[96px] h-[96px] object-contain" />
-                        ) : (
-                          <i className="bi bi-newspaper text-[72px] md:text-[96px]"></i>
-                        )}
+                      )}
+                      <h3 className="text-lg md:text-xl font-semibold leading-snug mb-2 group-hover:text-blue-200 transition-colors">
+                        {topStory.news.title}
+                      </h3>
+                      <div className="text-xs text-blue-200/80">
+                        {timeAgo(topStory.news.published_at)}
                       </div>
                     </div>
-                  </a>
-                ) : (
-                  <div className="text-gray-500">No top stories available</div>
-                )}
-              </div>
+                    <div className="absolute right-8 top-1/2 transform -translate-y-1/2">
+                      {topStory.quote && topStory.quote.logo_url ? (
+                        <img src={topStory.quote.logo_url} alt="background" className="w-[96px] h-[96px] object-contain rounded-3xl shadow-2xl" />
+                      ) : (
+                        <i className="bi bi-newspaper text-[72px] md:text-[96px]"></i>
+                      )}
+                    </div>
+                  </div>
+                </a>
+              ) : (
+                <div className="text-gray-500">No top stories available</div>
+              )}
+            </div>
 
-              {/* Latest Updates */}
-              <div className="space-y-4">
-                <h2 className="text-lg font-bold text-[#0B102A]">Latest Updates</h2>
+            {/* Latest Updates - Scrollable */}
+            <div>
+              <h2 className="text-[20px] font-bold text-[#0B102A] mb-4">Latest Updates</h2>
+              <div>
                 <div className="flex flex-col gap-4">
                   {loadingHome ? (
                     Array.from({ length: 3 }).map((_, i) => <div key={i} className="animate-pulse h-24 bg-gray-100 rounded-xl" />)
@@ -451,11 +489,11 @@ return (
                 </div>
               </div>
             </div>
-          )}
-          
-        </div>
+          </div>
+        )}
       </div>
     </div>
+  </div>
   );
 };
 

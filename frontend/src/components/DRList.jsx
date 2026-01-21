@@ -1138,7 +1138,7 @@ export default function DRList() {
     <div className="h-screen w-full bg-[#f5f5f5] overflow-hidden flex justify-center">
       <div className="w-full max-w-[1248px] flex flex-col h-full">
         {/* Header Section - Responsive scaling removed for mobile */}
-        <div className="pt-6 sm:pt-10 pb-0 px-4 sm:px-0 flex-shrink-0" style={{ overflow: 'visible', zIndex: 100 }}>
+        <div className="pt-6 sm:pt-10 pb-0 px-4 flex-shrink-0" style={{ overflow: 'visible', zIndex: 100 }}>
           <div className="w-full lg:w-[1040px] max-w-full mx-auto lg:scale-[1.2] lg:origin-top" style={{ overflow: 'visible' }}>
             <h1 className="text-2xl sm:text-3xl font-bold mb-2 sm:mb-3 text-black">DR List</h1>
             <p className="text-[#6B6B6B] mb-6 sm:mb-8 text-left text-sm sm:text-base">
@@ -1150,8 +1150,8 @@ export default function DRList() {
         </div>
 
         {/* Main Table - Scrollable */}
-        <div className="flex-1 overflow-hidden pb-6 sm:pb-10 mt-0 sm:mt-10 px-4 sm:px-0">
-          <div className="h-full bg-white rounded-xl shadow-[0_4px_20px_rgba(0,0,0,0.05)] border border-gray-100 overflow-auto">
+        <div className="flex-1 overflow-hidden pb-6 sm:pb-10 mt-0 sm:mt-10">
+          <div className="h-full bg-white rounded-xl shadow-[0_4px_20px_rgba(0,0,0,0.05)] border border-gray-100 overflow-auto hide-scrollbar">
             {loading ? (
               <div className="p-6 sm:p-10 text-center text-gray-600 text-sm sm:text-base">Loading...</div>
             ) : (

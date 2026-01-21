@@ -1008,7 +1008,7 @@
 
           {/* Main Content - Scrollable */}
           <div className="flex-1 overflow-hidden pb-6 md:pb-10 mt-0 md:mt-9 px-4 md:px-0">
-            <div className="h-full bg-white rounded-xl shadow border border-gray-100 overflow-auto">
+            <div className="h-full bg-white rounded-xl shadow border border-gray-100 overflow-auto hide-scrollbar">
               
               {/* Mobile Card View */}
               <div className="block lg:hidden p-3">

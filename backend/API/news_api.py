@@ -426,67 +426,161 @@ async def get_stock_overview(
         },
     }
 
+TRADINGVIEW_SCANNER_URL = "https://scanner.tradingview.com/america/scan"
+
 @app.get("/api/symbols")
 async def get_symbols():
     """
-    Fetches the list of available DR symbols and their underlying assets.
+    Fetches the list of available DR symbols and merged with TradingView stocks.
     """
-    # Use cached list if available and fresh
-    key = "dr_symbols_list"
+    key = "dr_tv_symbols_list"
     cached = _cache_get(key)
     if cached is not None:
         return cached
 
-    if _client is None:
-         # Should be initialized in lifespan, but just in case
-        async with httpx.AsyncClient() as client:
-             return await _fetch_and_cache_symbols(client, key)
+    client_to_use = _client
+    local_client = False
+    if client_to_use is None:
+        client_to_use = httpx.AsyncClient()
+        local_client = True
     
-    return await _fetch_and_cache_symbols(_client, key)
-
-async def _fetch_and_cache_symbols(client, key):
     try:
+        # 1. Fetch DR Symbols (keep existing logic)
+        dr_symbols = []
         try:
-            r = await client.get("http://172.17.1.85:8333/dr", timeout=5)
-            if r.status_code != 200:
-                print(f"DR API returned status {r.status_code}, using fallback.")
-                return FALLBACK_SYMBOLS
-            
-            data = r.json()
-            rows = data.get("rows", [])
+            r = await client_to_use.get("http://172.17.1.85:8333/dr", timeout=2)
+            if r.status_code == 200:
+                data = r.json()
+                rows = data.get("rows", [])
+                for row in rows:
+                    underlying = row.get("underlying")
+                    if underlying:
+                        underlying = underlying.strip().upper()
+                        dr_symbols.append({
+                            "symbol": underlying,
+                            "name": row.get("underlyingName") or row.get("name") or "",
+                            "dr_symbol": row.get("symbol"),
+                            "logo": row.get("logo") or row.get("logoUrl") or row.get("image")
+                        })
         except Exception as e:
-            print(f"Error connecting to DR API: {e}, using fallback.")
-            return FALLBACK_SYMBOLS
+            print(f"Error fetching DR symbols: {e}")
+            # Don't fail completely, just use fallback or empty
+
+        # 2. Fetch TradingView Stocks
+        tv_symbols = await _fetch_tradingview_stocks(client_to_use)
         
-        # Extract unique underlying symbols
-        symbols = {}
-        for row in rows:
-            # Prefer underlying symbol
-            underlying = row.get("underlying")
-            if not underlying:
-                # Fallback to symbol minus suffix if needed, or just skip
-                continue
-            
-            underlying = underlying.strip().upper()
-            if underlying not in symbols:
-                symbols[underlying] = {
-                    "symbol": underlying,
-                    "name": row.get("underlyingName") or row.get("name") or "",
-                    "dr_symbol": row.get("symbol"), # Keep reference to DR symbol if needed
-                    "logo": row.get("logo") or row.get("logoUrl") or row.get("image") # Try to get logo if available
-                }
+        # 3. Merge Lists
+        # Use a dict to dedup by symbol, preferring DR info if available (or TV info if better?)
+        # Let's prefer TV info for logo/name as it might be more standard, 
+        # but keep DR specific fields if any.
+        merged = {}
         
-        result = list(symbols.values())
-        # Sort by symbol
+        # Add fallback symbols first
+        for s in FALLBACK_SYMBOLS:
+            merged[s["symbol"]] = s.copy()
+
+        # Add DR symbols
+        for s in dr_symbols:
+            if s["symbol"] not in merged:
+                merged[s["symbol"]] = s
+            else:
+                # Merge?
+                pass
+        
+        # Add TV symbols (will overwrite if exists, which might be good for better names/logos)
+        for s in tv_symbols:
+            # If exists, maybe update logo if missing
+            if s["symbol"] in merged:
+                existing = merged[s["symbol"]]
+                if not existing.get("logo") and s.get("logo"):
+                    existing["logo"] = s["logo"]
+                if not existing.get("name") and s.get("name"):
+                    existing["name"] = s["name"]
+            else:
+                merged[s["symbol"]] = s
+        
+        result = list(merged.values())
         result.sort(key=lambda x: x["symbol"])
         
-        # Cache for longer duration (e.g. 1 hour)
         _cache_set(key, result, ttl=3600)
-        
         return result
+        
+    finally:
+        if local_client:
+            await client_to_use.aclose()
+
+async def _fetch_tradingview_stocks(client, region="america"):
+    try:
+        # Adjust filters based on region if needed, but standard stock filter usually works
+        # For Thailand, exchange might be SET or mai
+        exchange_filter = ["AMEX", "NASDAQ", "NYSE"] if region == "america" else ["SET", "mai"]
+        
+        # Filter logic to reduce noise (remove derivatives, low volume, etc.)
+        # We restrict subtypes to common/etf/reit to avoid warrants/structured products that rarely have news.
+        subtypes = ["common", "preference", "etf", "reit"]
+        
+        payload = {
+            "filter": [
+                {"left": "type", "operation": "in_range", "right": ["stock", "dr", "fund"]},
+                {"left": "subtype", "operation": "in_range", "right": subtypes},
+                {"left": "exchange", "operation": "in_range", "right": exchange_filter},
+                # Filter out inactive stocks (avg volume < 5000) which likely have no news
+                {"left": "average_volume_10d_calc", "operation": "greater", "right": 5000}
+            ],
+            "options": {"lang": "en"},
+            "symbols": {"query": {"types": []}, "tickers": []},
+            "columns": ["logoid", "name", "close", "change", "change_abs", "Recommend.All", "volume", "market_cap_basic"],
+            "sort": {"sortBy": "market_cap_basic", "sortOrder": "desc"},
+            "range": [0, 2000] 
+        }
+        
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Origin": "https://www.tradingview.com",
+            "Referer": "https://www.tradingview.com/",
+            "Content-Type": "application/json"
+        }
+
+        r = await client.post(TRADINGVIEW_SCANNER_URL, json=payload, headers=headers, timeout=10)
+        if r.status_code != 200:
+            print(f"TV Scanner error: {r.status_code} {r.text[:100]}")
+            return []
+            
+        data = r.json()
+        total = data.get("totalCount", 0)
+        rows = data.get("data", [])
+        
+        results = []
+        for row in rows:
+            # "d": ["apple-big", "Apple Inc", 234.5, ...]
+            # columns: ["logoid", "name", ...]
+            d = row.get("d", [])
+            if not d or len(d) < 2:
+                continue
+                
+            symbol = row.get("s", "").split(":")[-1] # NASDAQ:AAPL -> AAPL
+            logoid = d[0]
+            name = d[1]
+            
+            logo_url = None
+            if logoid:
+                # TV logo logic
+                base_tv_logo = "https://s3-symbol-logo.tradingview.com/"
+                logo_url = f"{base_tv_logo}{logoid}.svg"
+            
+            results.append({
+                "symbol": symbol,
+                "name": name,
+                "logo": logo_url
+            })
+            
+        return results
     except Exception as e:
-        print(f"Error fetching symbols: {e}")
-        return FALLBACK_SYMBOLS
+        print(f"Error fetching TV stocks: {e}")
+        return []
+
+# Removed old _fetch_and_cache_symbols as it's integrated above
+
 
 
 if __name__ == "__main__":

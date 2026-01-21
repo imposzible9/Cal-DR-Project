@@ -726,7 +726,7 @@ const markAsSeen = (earningId) => {
         
         {/* Main Content - Scrollable */}
         <div className="flex-1 overflow-hidden pb-6 sm:pb-10 -mt-2 md:mt-9 px-4 sm:px-0">
-          <div className="h-full bg-white rounded-xl shadow-[0_2px_10px_rgba(0,0,0,0.03)] border border-gray-100 overflow-auto">
+          <div className="h-full bg-white rounded-xl shadow-[0_2px_10px_rgba(0,0,0,0.03)] border border-gray-100 overflow-auto hide-scrollbar">
             
             {/* Mobile Card View */}
             <div className="block lg:hidden p-3">
