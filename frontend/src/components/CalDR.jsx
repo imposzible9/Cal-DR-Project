@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, useRef } from "react";
 
 // const API_BASE = "http://172.17.1.85:8333";
-const API_BASE = "https://api.ideatrade1.com";       // DR snapshot
+const API_BASE = "https://localhost:8003";       // DR snapshot
 const CALC_API_BASE = "http://localhost:8002";      // DR real-time calc
 
 const EXCHANGE_CURRENCY_MAP = {
@@ -397,7 +397,7 @@ export default function DRCal() {
                 <th rowSpan={2} className="py-4 px-3 text-left sticky bg-[#0B102A] align-middle cursor-pointer relative"
                   style={{ left: "0px", width: "155px", minWidth: "155px", zIndex: 30 }}
                   onClick={() => handleSort("dr")}>
-                  <div className={`flex items-center gap-0.5`}>DR <SortIndicator colKey="dr" /></div>
+                  <div className={`flex items-center gap-0.5`}>Underlying <SortIndicator colKey="dr" /></div>
                   {sortConfig.key === "dr" && (
                     <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#2F80ED] z-50">
                       <div className="absolute bottom-[-4px] left-1/2 -translate-x-1/2 w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[4px] border-t-[#2F80ED]"></div>
@@ -405,7 +405,7 @@ export default function DRCal() {
                   )}
                 </th>
                 <th colSpan={9} className="py-3 text-center bg-[#020323]">Trading information</th>
-                <th colSpan={6} className="py-3 text-center bg-[#020323] border-l border-gray-700">Basic DR information</th>
+                <th colSpan={6} className="py-3 text-center bg-[#020323] border-l border-gray-700">Basic Underlying information</th>
               </tr>
               <tr>
                 {[
@@ -484,9 +484,9 @@ export default function DRCal() {
   return (
     <div className="min-h-screen w-full bg-[#f5f5f5] flex flex-col items-center pb-10">
       <div className="w-full max-w-[1040px] scale-[1.2] origin-top">
-        <h1 className="text-4xl font-bold mb-3 text-black mt-10">Calculation DR</h1>
+        <h1 className="text-4xl font-bold mb-3 text-black mt-10">Calculation Underlying</h1>
         <p className="text-[#6B6B6B] mb-8 text-sm md:text-base">
-          Calculate DR Fair Value based on Underlying Price, Exchange Rate, and Conversion Ratio.
+          Calculate Underlying Fair Value based on Underlying Price, Exchange Rate, and Conversion Ratio.
         </p>
 
         <div className="w-full min-h-[627px] mt-2">
