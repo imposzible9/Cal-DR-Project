@@ -116,9 +116,8 @@ const News = () => {
         });
         
         // Load Default Updates (Mocking the "Latest Updates" list with specific tickers)
-        // We fetch quote + news for DEFAULT_SYMBOLS
-        const updates = [];
-        for (const sym of DEFAULT_SYMBOLS) {
+        // We fetch quote + news for DEFAULT_SYMBOLS in Parallel
+        const updatesPromises = DEFAULT_SYMBOLS.map(async (sym) => {
           try {
             const [qRes, nRes] = await Promise.all([
               axios.get(`${API_BASE}/api/finnhub/quote/${sym}`),
@@ -126,17 +125,19 @@ const News = () => {
             ]);
             
             const articles = nRes.data?.news || [];
-            for (const art of articles.slice(0, 2)) {
-              updates.push({
-                ticker: sym,
-                quote: qRes.data,
-                news: art
-              });
-            }
+            return articles.slice(0, 2).map(art => ({
+              ticker: sym,
+              quote: qRes.data,
+              news: art
+            }));
           } catch (e) {
             console.error(`Failed to load default data for ${sym}`, e);
+            return [];
           }
-        }
+        });
+
+        const updatesResults = await Promise.all(updatesPromises);
+        const updates = updatesResults.flat();
         
         const toMs = (v) => typeof v === "number" ? v * 1000 : (new Date(v).getTime() || 0);
         updates.sort((a, b) => toMs(b.news.published_at) - toMs(a.news.published_at));

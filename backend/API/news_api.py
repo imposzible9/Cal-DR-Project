@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from contextlib import asynccontextmanager
 import httpx
 import os
@@ -20,6 +21,8 @@ DR_LIST_URL = os.getenv("DR_LIST_URL") or "http://172.17.1.85:8333/dr"
 TRADINGVIEW_SCANNER_URL = os.getenv("TRADINGVIEW_SCANNER_URL") or "https://scanner.tradingview.com/america/scan"
 
 app = FastAPI(title="News API")
+
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 app.add_middleware(
     CORSMiddleware,
@@ -311,6 +314,12 @@ async def get_company_news(
     limit: int = Query(20, ge=1, le=50),
     country: str | None = Query(None, description="Two-letter country code (e.g., us, gb)"),
 ):
+    # Cache check
+    key = f"company_news|{symbol.upper()}|{hours}|{limit}|{country}"
+    cached = _cache_get(key)
+    if cached:
+        return cached
+
     if not FINNHUB_TOKEN:
         items = await fetch_news(symbol.upper(), limit, language="en", hours=hours, country=country)
         return {
@@ -347,11 +356,15 @@ async def get_company_news(
                 "image_url": a.get("image"),
             }
         )
-    return {
+    
+    result = {
         "symbol": symbol.upper(),
         "total": len(normalized),
         "news": normalized,
     }
+    
+    _cache_set(key, result, ttl=NEWS_TTL_SECONDS)
+    return result
 
 
 @app.get("/api/stock/overview/{symbol}")
