@@ -36,16 +36,16 @@ _client: httpx.AsyncClient | None = None
 _news_cache: dict[str, dict] = {}
 
 FALLBACK_SYMBOLS = [
-    {"symbol": "AAPL", "name": "Apple Inc.", "logo": "https://upload.wikimedia.org/wikipedia/commons/f/fa/Apple_logo_black.svg"},
-    {"symbol": "MSFT", "name": "Microsoft Corporation", "logo": "https://upload.wikimedia.org/wikipedia/commons/4/44/Microsoft_logo.svg"},
-    {"symbol": "GOOG", "name": "Alphabet Inc.", "logo": "https://upload.wikimedia.org/wikipedia/commons/2/2f/Google_2015_logo.svg"},
-    {"symbol": "AMZN", "name": "Amazon.com, Inc.", "logo": "https://upload.wikimedia.org/wikipedia/commons/a/a9/Amazon_logo.svg"},
-    {"symbol": "NVDA", "name": "NVIDIA Corporation", "logo": "https://upload.wikimedia.org/wikipedia/commons/2/21/Nvidia_logo.svg"},
-    {"symbol": "TSLA", "name": "Tesla, Inc.", "logo": "https://upload.wikimedia.org/wikipedia/commons/e/e8/Tesla_logo.png"},
-    {"symbol": "META", "name": "Meta Platforms, Inc.", "logo": "https://upload.wikimedia.org/wikipedia/commons/7/7b/Meta_Platforms_Inc._logo.svg"},
-    {"symbol": "BABA", "name": "Alibaba Group Holding Limited", "logo": "https://upload.wikimedia.org/wikipedia/en/8/80/Alibaba-Group-Logo.svg"},
-    {"symbol": "NFLX", "name": "Netflix, Inc.", "logo": "https://upload.wikimedia.org/wikipedia/commons/0/08/Netflix_2015_logo.svg"},
-    {"symbol": "AMD", "name": "Advanced Micro Devices, Inc.", "logo": "https://upload.wikimedia.org/wikipedia/commons/7/7c/AMD_Logo.svg"}
+    {"symbol": "AAPL", "name": "Apple Inc.", "logo": "https://s3-symbol-logo.tradingview.com/apple.svg"},
+    {"symbol": "MSFT", "name": "Microsoft Corporation", "logo": "https://s3-symbol-logo.tradingview.com/microsoft.svg"},
+    {"symbol": "GOOG", "name": "Alphabet Inc.", "logo": "https://s3-symbol-logo.tradingview.com/alphabet.svg"},
+    {"symbol": "AMZN", "name": "Amazon.com, Inc.", "logo": "https://s3-symbol-logo.tradingview.com/amazon.svg"},
+    {"symbol": "NVDA", "name": "NVIDIA Corporation", "logo": "https://s3-symbol-logo.tradingview.com/nvidia.svg"},
+    {"symbol": "TSLA", "name": "Tesla, Inc.", "logo": "https://s3-symbol-logo.tradingview.com/tesla.svg"},
+    {"symbol": "META", "name": "Meta Platforms, Inc.", "logo": "https://s3-symbol-logo.tradingview.com/meta-platforms.svg"},
+    {"symbol": "BABA", "name": "Alibaba Group Holding Limited", "logo": "https://s3-symbol-logo.tradingview.com/alibaba.svg"},
+    {"symbol": "NFLX", "name": "Netflix, Inc.", "logo": "https://s3-symbol-logo.tradingview.com/netflix.svg"},
+    {"symbol": "AMD", "name": "Advanced Micro Devices, Inc.", "logo": "https://s3-symbol-logo.tradingview.com/advanced-micro-devices.svg"}
 ]
 
 
@@ -283,20 +283,80 @@ async def _require_client():
 
 @app.get("/api/finnhub/quote/{symbol}")
 async def get_quote(symbol: str):
-    if not FINNHUB_TOKEN:
-        raise HTTPException(500, "FINNHUB_TOKEN is not configured")
+    symbol = symbol.upper()
+    
+    # 1. Try Finnhub first
+    q = {}
+    success = False
+    
+    if FINNHUB_TOKEN:
+        await _require_client()
+        try:
+            r = await _client.get(f"{FINNHUB_BASE_URL}/quote", params={"symbol": symbol, "token": FINNHUB_TOKEN})
+            if r.status_code == 200:
+                q = r.json() or {}
+                # Finnhub often returns c=0 for invalid symbols
+                if q.get("c") != 0:
+                     success = True
+        except Exception as e:
+            print(f"Finnhub quote exception for {symbol}: {e}")
 
-    await _require_client()
+    # 2. Fallback to internal list (TradingView data) if Finnhub failed
+    if not success:
+        print(f"Finnhub failed/empty for {symbol}, trying internal list fallback")
+        try:
+            # We call get_symbols but we might need to await it properly if it's cached or not.
+            # get_symbols uses a cache key.
+            # To avoid circular dependency or complex logic, let's just check the cache directly first
+            # or call the function.
+            all_symbols = await get_symbols()
+            match = next((s for s in all_symbols if s["symbol"] == symbol), None)
+            
+            if match:
+                print(f"Found fallback data for {symbol}")
+                return {
+                    "symbol": symbol,
+                    "price": match.get("price", 0),
+                    "change": match.get("change", 0),
+                    "change_pct": match.get("change_pct", 0),
+                    "high": match.get("price", 0), # Approximate
+                    "low": match.get("price", 0),  # Approximate
+                    "open": match.get("price", 0), # Approximate
+                    "prev_close": match.get("price", 0), # Approximate
+                    "logo_url": match.get("logo"),
+                    "source": "fallback"
+                }
+        except Exception as e:
+            print(f"Fallback quote error: {e}")
 
-    r = await _client.get(f"{FINNHUB_BASE_URL}/quote", params={"symbol": symbol.upper(), "token": FINNHUB_TOKEN})
-    if r.status_code != 200:
-        raise HTTPException(r.status_code, f"Finnhub quote error: {r.text[:200]}")
-    q = r.json() or {}
+    # If still no success, return what we have (even if zeros) or raise error if it was a hard failure?
+    # If Finnhub returned 0s and we have no fallback, returning 0s is better than 500 Error
+    # because 500 Error causes the whole page to crash with "Invalid Symbol".
+    # Returning 0s allows the page to render (maybe with $0.00) but News might still load.
+    
+    if not success and not q:
+        # If we didn't get a response from Finnhub AND no fallback
+        # raise HTTPException(404, "Symbol not found")
+        # BUT, to be safe for user experience, let's return a dummy object with 0s
+        # so at least the News part (which is fetched separately) has a chance to show up?
+        # Actually, if quote fails, News.jsx throws error.
+        # So return dummy 0s is safer.
+        return {
+            "symbol": symbol,
+            "price": 0,
+            "change": 0,
+            "change_pct": 0,
+            "high": 0,
+            "low": 0,
+            "open": 0,
+            "prev_close": 0,
+            "logo_url": None
+        }
 
     logo_url = await fetch_logo(symbol)
 
     return {
-        "symbol": symbol.upper(),
+        "symbol": symbol,
         "price": q.get("c"),
         "change": q.get("d"),
         "change_pct": q.get("dp"),
@@ -479,8 +539,10 @@ async def get_symbols():
             print(f"Error fetching DR symbols: {e}")
             # Don't fail completely, just use fallback or empty
 
-        # 2. Fetch TradingView Stocks
-        tv_symbols = await _fetch_tradingview_stocks(client_to_use)
+        # 2. Fetch TradingView Stocks (US and Thailand)
+        tv_symbols_us = await _fetch_tradingview_stocks(client_to_use, region="america")
+        tv_symbols_th = await _fetch_tradingview_stocks(client_to_use, region="thailand")
+        tv_symbols = tv_symbols_us + tv_symbols_th
         
         # 3. Merge Lists
         # Use a dict to dedup by symbol, preferring DR info if available (or TV info if better?)
@@ -502,18 +564,26 @@ async def get_symbols():
         
         # Add TV symbols (will overwrite if exists, which might be good for better names/logos)
         for s in tv_symbols:
-            # If exists, maybe update logo if missing
+            # If exists, update logo/name but also merge volume/market_cap info if available
             if s["symbol"] in merged:
                 existing = merged[s["symbol"]]
                 if not existing.get("logo") and s.get("logo"):
                     existing["logo"] = s["logo"]
                 if not existing.get("name") and s.get("name"):
                     existing["name"] = s["name"]
+                
+                # Merge financial info
+                existing["market_cap"] = s.get("market_cap", 0)
+                existing["volume"] = s.get("volume", 0)
+                existing["price"] = s.get("price", 0)
+                existing["change_pct"] = s.get("change_pct", 0)
+                existing["change"] = s.get("change", 0)
             else:
                 merged[s["symbol"]] = s
         
         result = list(merged.values())
-        result.sort(key=lambda x: x["symbol"])
+        # Sort by Market Cap Descending (Popularity)
+        result.sort(key=lambda x: x.get("market_cap", 0), reverse=True)
         
         _cache_set(key, result, ttl=3600)
         return result
@@ -524,10 +594,15 @@ async def get_symbols():
 
 async def _fetch_tradingview_stocks(client, region="america"):
     try:
-        # Adjust filters based on region if needed, but standard stock filter usually works
-        # For Thailand, exchange might be SET or mai
-        exchange_filter = ["AMEX", "NASDAQ", "NYSE"] if region == "america" else ["SET", "mai"]
-        
+        url = "https://scanner.tradingview.com/america/scan"
+        min_volume = 500000 # Higher threshold for US to ensure news availability
+        exchange_filter = ["AMEX", "NASDAQ", "NYSE"]
+
+        if region == "thailand":
+            url = "https://scanner.tradingview.com/thailand/scan"
+            min_volume = 50000 # Threshold for Thai stocks
+            exchange_filter = ["SET", "mai"]
+
         # Filter logic to reduce noise (remove derivatives, low volume, etc.)
         # We restrict subtypes to common/etf/reit to avoid warrants/structured products that rarely have news.
         subtypes = ["common", "preference", "etf", "reit"]
@@ -537,8 +612,8 @@ async def _fetch_tradingview_stocks(client, region="america"):
                 {"left": "type", "operation": "in_range", "right": ["stock", "dr", "fund"]},
                 {"left": "subtype", "operation": "in_range", "right": subtypes},
                 {"left": "exchange", "operation": "in_range", "right": exchange_filter},
-                # Filter out inactive stocks (avg volume < 50000) which likely have no news
-                {"left": "average_volume_10d_calc", "operation": "greater", "right": 50000}
+                # Filter out inactive stocks
+                {"left": "average_volume_10d_calc", "operation": "greater", "right": min_volume}
             ],
             "options": {"lang": "en"},
             "symbols": {"query": {"types": []}, "tickers": []},
@@ -554,7 +629,7 @@ async def _fetch_tradingview_stocks(client, region="america"):
             "Content-Type": "application/json"
         }
 
-        r = await client.post(TRADINGVIEW_SCANNER_URL, json=payload, headers=headers, timeout=10)
+        r = await client.post(url, json=payload, headers=headers, timeout=10)
         if r.status_code != 200:
             print(f"TV Scanner error: {r.status_code} {r.text[:100]}")
             return []
@@ -575,6 +650,33 @@ async def _fetch_tradingview_stocks(client, region="america"):
             logoid = d[0]
             name = d[1]
             
+            # --- Additional Filtering Heuristics ---
+            # 1. Thai Specific Filters
+            if region == "thailand":
+                # Exclude Foreign board / NVDR / Warrants often denoted by dots (e.g., PTT.F, PTT.R)
+                # But allow numbers (2S, 7UP)
+                if "." in symbol:
+                    continue
+                # Exclude if Name is same as Symbol (often bad data like "88TH")
+                # Real companies usually have full names "PTT Public Company..."
+                if name.strip().upper() == symbol.strip().upper():
+                    continue
+
+            # 2. General Filters
+            # Exclude if name is empty
+            if not name:
+                continue
+            # ---------------------------------------
+
+            # Extract additional data (close, change, change_abs, volume, market_cap)
+            # columns: ["logoid", "name", "close", "change", "change_abs", "Recommend.All", "volume", "market_cap_basic"]
+            # indices:     0        1        2        3          4              5             6           7
+            close = d[2] if len(d) > 2 else 0
+            change_pct = d[3] if len(d) > 3 else 0
+            change_abs = d[4] if len(d) > 4 else 0
+            volume = d[6] if len(d) > 6 else 0
+            market_cap = d[7] if len(d) > 7 else 0
+
             logo_url = None
             if logoid:
                 # TV logo logic
@@ -584,7 +686,12 @@ async def _fetch_tradingview_stocks(client, region="america"):
             results.append({
                 "symbol": symbol,
                 "name": name,
-                "logo": logo_url
+                "logo": logo_url,
+                "price": close,
+                "change_pct": change_pct,
+                "change": change_abs,
+                "volume": volume,
+                "market_cap": market_cap
             })
             
         return results
