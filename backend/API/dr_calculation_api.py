@@ -6,11 +6,14 @@ import asyncio
 import time
 import httpx
 import re
+import os
+import json
+from contextlib import suppress
 import uvicorn
 
 app = FastAPI(title="DR Calculation API (Cache + Background Refresh + Symbol Map)")
 
-DR_API_URL = os.getenv("DR_API_URL")
+IDEATRADE_BASE = "https://api.ideatrade1.com"
 TV_SCAN_URL = "https://scanner.tradingview.com/global/scan"
 
 # -----------------------------
@@ -19,6 +22,9 @@ TV_SCAN_URL = "https://scanner.tradingview.com/global/scan"
 CACHE_TTL_SECONDS = 5            # อายุ cache (วินาที) เช่น 3-10
 REFRESH_INTERVAL_SECONDS = 2     # background รีทุกกี่วินาที
 WARM_KEYS_LIMIT = 120            # จะอุ่นกี่ตัวล่าสุด (กันหนัก)
+CACHE_FILE = "dr_price_cache.json"   # จะเก็บไฟล์แคชไว้ไฟล์นี้
+CACHE_SAVE_DEBOUNCE_SEC = 0.5        # หน่วงรวมการเขียนไฟล์ (กันเขียนถี่)
+CACHE_MAX_ITEMS = 5000               # กันไฟล์โตเกิน (ปรับได้)
 
 # ถ้าอยากให้ FX รีถี่กว่า underlying:
 FX_REFRESH_MULT = 1              # 1 = เท่ากัน, 2 = underlying ช้ากว่า FX 2 เท่า ฯลฯ
@@ -114,20 +120,100 @@ app.add_middleware(
 # -----------------------------
 _price_cache: dict[str, dict] = {}
 _warm_keys: dict[str, float] = {}
+_cache_lock = asyncio.Lock()
+_cache_dirty = False
+_cache_save_task: asyncio.Task | None = None
 
 def cache_get(key: str):
     item = _price_cache.get(key)
     if not item:
         return None
     if item["exp"] <= _now():
+        _price_cache.pop(key, None)
         return None
     return item["value"]
 
 def cache_set(key: str, value: float, ttl: int = CACHE_TTL_SECONDS):
     _price_cache[key] = {"value": float(value), "exp": _now() + ttl}
+    schedule_cache_save()   # ✅ บันทึกลงไฟล์
 
 def mark_warm(key: str):
     _warm_keys[key] = _now()
+
+def _prune_expired_inplace():
+    now = _now()
+    expired = [k for k, v in _price_cache.items() if v.get("exp", 0) <= now]
+    for k in expired:
+        _price_cache.pop(k, None)
+
+def _prune_to_limit_inplace(limit=CACHE_MAX_ITEMS):
+    if len(_price_cache) <= limit:
+        return
+    items = sorted(
+        _price_cache.items(),
+        key=lambda kv: kv[1].get("exp", 0),
+        reverse=True
+    )
+    _price_cache.clear()
+    _price_cache.update(dict(items[:limit]))
+
+async def load_cache_from_file():
+    if not os.path.exists(CACHE_FILE):
+        return
+
+    try:
+        with open(CACHE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        async with _cache_lock:
+            _price_cache.clear()
+            _price_cache.update(data.get("price_cache", {}))
+
+            _warm_keys.clear()
+            wk = data.get("warm_keys", {})
+            _warm_keys.update({str(k): float(v) for k, v in wk.items() if v is not None})
+
+            _prune_expired_inplace()
+            _prune_to_limit_inplace()
+
+        print(f"✅ Loaded cache file: {CACHE_FILE} items={len(_price_cache)}")
+
+    except Exception as e:
+        print("⚠️ Cache load failed:", e)
+
+def _write_cache_file(snapshot: dict):
+    tmp = CACHE_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(snapshot, f, ensure_ascii=False)
+    os.replace(tmp, CACHE_FILE)
+
+async def save_cache_to_file():
+    global _cache_dirty
+    async with _cache_lock:
+        snapshot = {
+            "ts": _now(),
+            "price_cache": dict(_price_cache),
+            "warm_keys": dict(_warm_keys),
+        }
+        _cache_dirty = False
+
+    await asyncio.to_thread(_write_cache_file, snapshot)
+
+def schedule_cache_save():
+    global _cache_save_task, _cache_dirty
+    _cache_dirty = True
+
+    if _cache_save_task and not _cache_save_task.done():
+        return
+
+    async def _debounced():
+        global _cache_save_task
+        await asyncio.sleep(CACHE_SAVE_DEBOUNCE_SEC)
+        if _cache_dirty:
+            await save_cache_to_file()
+        _cache_save_task = None
+
+    _cache_save_task = asyncio.create_task(_debounced())
 
 def _trim_warm_keys():
     if len(_warm_keys) <= WARM_KEYS_LIMIT:
@@ -145,43 +231,100 @@ _idea_client: httpx.AsyncClient | None = None
 # ✅ แก้หลัก: fallback columns + debug log ตอน error
 async def tv_scan_close(tv_ticker: str) -> float:
     columns = ["last", "close", "open"]
-    payload = {
-        "symbols": {"tickers": [tv_ticker], "query": {"types": []}},
-        "columns": columns,
-    }
-
     assert _tv_client is not None
 
-    data = None  # ✅ สำคัญมาก กัน NameError
+    def to_float(x):
+        if x is None:
+            return None
+        try:
+            f = float(x)
+            if f == f and f > 0:  # กัน NaN / 0 / ติดลบ
+                return f
+        except Exception:
+            return None
+        return None
 
-    try:
+    async def _fetch(ticker: str) -> dict:
+        payload = {
+            "symbols": {"tickers": [ticker], "query": {"types": []}},
+            "columns": columns,
+        }
         r = await _tv_client.post(TV_SCAN_URL, json=payload)
         r.raise_for_status()
-        data = r.json()
-
-        # ❗ TradingView หา ticker ไม่เจอ
-        if not data.get("data"):
-            print("TV_SCAN_NOT_FOUND ticker=", tv_ticker)
-            print("TV_SCAN_RESPONSE=", data)
-            raise HTTPException(
-                404,
-                f"TradingView ticker not found or no data returned: {tv_ticker}",
+        try:
+            return r.json()
+        except Exception:
+            print(
+                "TV_SCAN_NONJSON ticker=", ticker,
+                "status=", r.status_code,
+                "text=", (r.text or "")[:300],
             )
+            raise HTTPException(502, f"TradingView returned non-JSON for {ticker}")
 
-        d = data["data"][0]["d"]  # [last, close, open]
+    data = None
+    used_ticker = tv_ticker
 
-        def to_float(x):
-            if x is None:
-                return None
-            try:
-                f = float(x)
-                if f == f and f > 0:  # กัน NaN
-                    return f
-            except Exception:
-                return None
-            return None
+    try:
+        # ------------------------------------------------
+        # 1) ยิงด้วย ticker เดิมก่อน
+        # ------------------------------------------------
+        data = await _fetch(tv_ticker)
 
-        # ✅ ให้ตรงกับ TradingView → ใช้ last ก่อน
+        # ------------------------------------------------
+        # 2) fallback ด้วย TV_SYMBOL_OVERRIDES (สำคัญ)
+        # ------------------------------------------------
+        if not data.get("data"):
+            override = TV_SYMBOL_OVERRIDES.get(tv_ticker)
+            if override and override != tv_ticker:
+                data2 = await _fetch(override)
+                if data2.get("data"):
+                    data = data2
+                    used_ticker = override
+
+        # ------------------------------------------------
+        # 3) fallback NYSEARCA → AMEX / ARCA / BATS
+        # ------------------------------------------------
+        if not data.get("data"):
+            if tv_ticker.startswith("NYSEARCA:"):
+                sym = tv_ticker.split(":", 1)[1]
+                candidates = [
+                    f"AMEX:{sym}",
+                    f"ARCA:{sym}",
+                    f"BATS:{sym}",
+                ]
+
+                found = False
+                for alt in candidates:
+                    data2 = await _fetch(alt)
+                    if data2.get("data"):
+                        data = data2
+                        used_ticker = alt
+                        found = True
+                        break
+
+                if not found:
+                    print(
+                        "TV_SCAN_NOT_FOUND ticker=", tv_ticker,
+                        "override=", TV_SYMBOL_OVERRIDES.get(tv_ticker),
+                        "candidates=", candidates,
+                    )
+                    print("TV_SCAN_RESPONSE=", data)
+                    raise HTTPException(
+                        404,
+                        f"TradingView ticker not found or no data returned: {tv_ticker}",
+                    )
+            else:
+                print("TV_SCAN_NOT_FOUND ticker=", tv_ticker)
+                print("TV_SCAN_RESPONSE=", data)
+                raise HTTPException(
+                    404,
+                    f"TradingView ticker not found or no data returned: {tv_ticker}",
+                )
+
+        # ------------------------------------------------
+        # 4) ดึงราคา last → close → open
+        # ------------------------------------------------
+        d = data["data"][0]["d"]  # list ตาม columns
         for v in d:
             fv = to_float(v)
             if fv is not None:
@@ -189,99 +332,35 @@ async def tv_scan_close(tv_ticker: str) -> float:
 
         raise HTTPException(
             500,
-            f"No usable price fields for {tv_ticker} (tried {columns})",
+            f"No usable price fields for {used_ticker} (tried {columns})",
         )
 
     except HTTPException:
         raise
 
+    except httpx.HTTPError as e:
+        try:
+            status = getattr(e.response, "status_code", None)
+            text = getattr(e.response, "text", "")
+        except Exception:
+            status, text = None, ""
+        print(
+            "TV_SCAN_HTTP_ERROR ticker=", used_ticker,
+            "status=", status,
+            "err=", repr(e),
+            "text=", (text or "")[:300],
+        )
+        raise HTTPException(
+            502,
+            f"TradingView request failed for {used_ticker}",
+        )
+
     except Exception as e:
-        # ✅ ต่อให้ error ก่อน data = r.json() ก็ไม่พัง
-        print("TV_SCAN_ERROR ticker=", tv_ticker)
+        print("TV_SCAN_ERROR ticker=", used_ticker)
         print("TV_SCAN_ERROR response=", data)
         raise HTTPException(
             500,
-            f"Cannot fetch close for {tv_ticker}: {type(e).__name__}",
-        )
-
-    # ================== FIX หลัก ==================
-    # TradingView หา ticker ไม่เจอ → data จะว่าง
-    if not data.get("data"):
-        # ✅ fallback เฉพาะ NYSEARCA ETF
-        if tv_ticker.startswith("NYSEARCA:"):
-            sym = tv_ticker.split(":", 1)[1]
-
-            # prefix ที่ TradingView ใช้กับ ETF บ่อย
-            candidates = [
-                f"AMEX:{sym}",
-                f"ARCA:{sym}",
-                f"BATS:{sym}",
-            ]
-
-            found = False
-            for alt in candidates:
-                r2 = await _tv_client.post(
-                    TV_SCAN_URL,
-                    json={
-                        "symbols": {"tickers": [alt], "query": {"types": []}},
-                        "columns": columns,
-                    },
-                )
-                r2.raise_for_status()
-                data2 = r2.json()
-
-                if data2.get("data"):
-                    data = data2
-                    tv_ticker = alt   # ✅ ใช้ symbol ที่หาเจอจริง
-                    found = True
-                    break
-
-            if not found:
-                print("TV_SCAN_NOT_FOUND ticker=", tv_ticker, "candidates=", candidates)
-                print("TV_SCAN_RESPONSE=", data)
-                raise HTTPException(
-                    404,
-                    f"TradingView ticker not found or no data returned: {tv_ticker}",
-                )
-        else:
-            print("TV_SCAN_NOT_FOUND ticker=", tv_ticker)
-            print("TV_SCAN_RESPONSE=", data)
-            raise HTTPException(
-                404,
-                f"TradingView ticker not found or no data returned: {tv_ticker}",
-            )
-    # =================================================
-
-    try:
-        d = data["data"][0]["d"]  # list ตาม columns
-
-        for i, col in enumerate(columns):
-            v = d[i]
-            if v is None:
-                continue
-
-            fv = float(v)
-            if fv == fv and fv > 0:  # กัน NaN
-                return fv
-
-        # ไม่มี field ไหน usable
-        raise HTTPException(
-            500,
-            f"No usable price fields for {tv_ticker} (tried {columns})",
-        )
-
-    except HTTPException:
-        raise
-
-    except Exception as e:
-        # debug ให้เห็น response จริง
-        print("TV_SCAN_ERROR ticker=", tv_ticker)
-        print("TV_SCAN_ERROR columns=", columns)
-        print("TV_SCAN_ERROR response=", data)
-
-        raise HTTPException(
-            500,
-            f"Cannot fetch close for {tv_ticker}: {type(e).__name__}",
+            f"Cannot fetch close for {used_ticker}: {type(e).__name__}",
         )
 
 async def get_price_cached(kind: str, tv_ticker: str, ttl: int = CACHE_TTL_SECONDS) -> float:
@@ -511,6 +590,9 @@ async def refresher_loop():
             keys = [k for k, _ in keys[:WARM_KEYS_LIMIT]]
 
             for key in keys:
+                if "|" not in key:
+                    continue
+
                 item = _price_cache.get(key)
                 near_exp = (not item) or (item["exp"] - _now() < 1)
                 if not near_exp:
@@ -518,6 +600,7 @@ async def refresher_loop():
 
                 kind, tv_ticker = key.split("|", 1)
 
+                # ✅ ทำให้ Underlying รีช้ากว่า FX ตามที่ตั้งใจ
                 if kind == "U" and FX_REFRESH_MULT > 1:
                     if tick % FX_REFRESH_MULT != 0:
                         continue
@@ -525,6 +608,8 @@ async def refresher_loop():
                 v = await tv_scan_close(tv_ticker)
                 cache_set(key, v, ttl=CACHE_TTL_SECONDS)
 
+        except asyncio.CancelledError:
+            raise
         except Exception:
             pass
 
@@ -536,11 +621,21 @@ async def lifespan(app: FastAPI):
     _tv_client = httpx.AsyncClient(timeout=10)
     _idea_client = httpx.AsyncClient(timeout=20)
 
+    # ✅ โหลด cache จากไฟล์
+    await load_cache_from_file()
+
     task = asyncio.create_task(refresher_loop())
     try:
         yield
     finally:
         task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+        # ✅ เซฟก่อนปิด
+        if _cache_dirty:
+            await save_cache_to_file()
+
         await _tv_client.aclose()
         await _idea_client.aclose()
 
@@ -560,7 +655,7 @@ async def calculate_dr(dr_symbol: str):
     try:
         assert _idea_client is not None
 
-        r = await _idea_client.get(f"{DR_API_URL}/caldr")
+        r = await _idea_client.get(f"{IDEATRADE_BASE}/caldr")
         r.raise_for_status()
         rows = r.json().get("rows", [])
         if not rows:
