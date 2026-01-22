@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, useRef } from "react";
 
+// const API_BASE = "http://172.17.1.85:8333";
 const API_BASE = import.meta.env.VITE_DR_LIST_BASE_API; // DR snapshot (use same as DRList)
 const CALC_API_BASE = import.meta.env.VITE_CAL_API; // DR real-time calc
 
@@ -96,7 +97,9 @@ const fetchRealtimeUnderlying = async (drSymbol) => {
   try {
     setLoadingRealtime(true);
 
-    const res = await fetch(`${CALC_API_BASE}/api/calc/dr/${drSymbol}`);
+const res = await fetch(
+  `${CALC_API_BASE}/api/calc/dr/${encodeURIComponent(drSymbol)}`
+);
     if (!res.ok) throw new Error("Failed realtime calc");
 
     const data = await res.json();
