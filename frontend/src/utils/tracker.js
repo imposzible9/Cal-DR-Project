@@ -3,7 +3,7 @@
  * ระบบติดตามพฤติกรรมผู้ใช้งาน - พร้อมระบบนับจำนวนครั้ง
  */
 
-const API_BASE_URL = 'http://localhost:8335';
+const API_BASE_URL = 'http://localhost:8000/ratings';
 
 // ==================== DEBUG MODE ====================
 // เปิด DEBUG_MODE = true เพื่อทดสอบระบบโดยไม่เก็บ database

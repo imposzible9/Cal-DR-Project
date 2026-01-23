@@ -245,7 +245,7 @@ const RatingHistoryModal = ({ item, timeframe, onClose }) => {
         const tf = timeframe === "1W" ? "1W" : "1D";
 
         // Use local API for development
-        const baseUrl = "http://172.18.1.56:8335";
+        const baseUrl = "http://localhost:8000/ratings";
         const url = `${baseUrl}/ratings/history-with-accuracy/${ticker}?timeframe=${tf}`;
         console.log("🔍 Fetching from URL:", url);
 
