@@ -20,7 +20,6 @@ from contextlib import asynccontextmanager
 import asyncio
 
 # Import apps from each API module
-# Note: These imports will also import their lifespan and background tasks
 import ratings_api_dynamic
 import earnings_api
 import news_api
@@ -33,12 +32,24 @@ async def lifespan(app: FastAPI):
     print("[STARTUP] Starting Cal-DR Unified API Server...")
     print("=" * 60)
     
-    # Initialize each sub-app's lifespan manually if needed
-    # Most initialization happens during import
-    
+    # ========== Initialize Ratings API ==========
+    print("[INIT] Initializing Ratings API...")
+    ratings_api_dynamic.init_database()
+    ratings_api_dynamic.migrate_from_json_if_needed()
+    asyncio.create_task(ratings_api_dynamic.background_updater())
     print("[OK] Ratings API: Ready")
+    
+    # ========== Initialize Earnings API ==========
+    print("[INIT] Initializing Earnings API...")
+    earnings_api.load_db_from_disk()
+    asyncio.create_task(earnings_api.background_updater())
     print("[OK] Earnings API: Ready")
+    
+    # ========== Initialize News API ==========
+    print("[INIT] Initializing News API...")
+    # News API uses httpx client initialized on-demand, no explicit init needed
     print("[OK] News API: Ready")
+    
     print("=" * 60)
     print("[INFO] Server is running on http://localhost:8000")
     print("")
