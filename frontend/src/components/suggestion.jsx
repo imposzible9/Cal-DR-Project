@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
+import { trackPageView, trackSearch, trackFilter, trackStockView, trackClick } from "../utils/tracker";
 
 // const API_URL = "http://172.17.1.85:8333/dr";
 const API_URL = "https://api.ideatrade1.com/caldr";
@@ -327,7 +328,7 @@ const RatingHistoryModal = ({ item, timeframe, onClose }) => {
 
         // ตรวจสอบว่าทำนายถูกหรือไม่
         let isCorrect = false;
-        
+
         if (ratingDirection === 0) {
           // Rating ไม่เปลี่ยน (Buy→Buy, Sell→Sell)
           if (isCurrPositive) {
@@ -372,7 +373,10 @@ const RatingHistoryModal = ({ item, timeframe, onClose }) => {
   if (!item) return null;
 
   const handleRatingFilterClick = (rating) => {
-    setFilterRating(filterRating === rating ? null : rating);
+    const newRating = filterRating === rating ? null : rating;
+    setFilterRating(newRating);
+    // 📊 Track modal filter selection
+    trackClick('modal_filter_rating', { rating: newRating || 'clear', symbol: item?.displaySymbol });
   };
 
   const formatModalDate = (dateStr) => {
@@ -608,6 +612,22 @@ export default function Suggestion() {
   const [tooltipPosition, setTooltipPosition] = useState({ x: 0, y: 0 });
   const tableRef = useRef(null);
 
+  // 📊 Track page view on mount
+  useEffect(() => {
+    trackPageView('suggestion');
+  }, []);
+
+  // 📊 Track search with debounce
+  useEffect(() => {
+    const trimmedSearch = searchTerm.trim();
+    if (trimmedSearch.length >= 2) {
+      const timeout = setTimeout(() => {
+        trackSearch(trimmedSearch);
+      }, 500);
+      return () => clearTimeout(timeout);
+    }
+  }, [searchTerm]);
+
   useEffect(() => {
     const handler = (e) => { if (countryDropdownRef.current && !countryDropdownRef.current.contains(e.target)) setShowCountryMenu(false); };
     document.addEventListener("mousedown", handler);
@@ -754,11 +774,18 @@ export default function Suggestion() {
 
   const handleSort = (key) => {
     setSortConfig((prev) => {
+      let newConfig;
       if (prev.key === key) {
-        if (prev.direction === "asc") return { key, direction: "desc" };
-        return { key: null, direction: "asc" };
+        if (prev.direction === "asc") newConfig = { key, direction: "desc" };
+        else newConfig = { key: null, direction: "asc" };
+      } else {
+        newConfig = { key, direction: "asc" };
       }
-      return { key, direction: "asc" };
+      // 📊 Track sort action
+      if (newConfig.key) {
+        trackClick('sort', { column: newConfig.key, direction: newConfig.direction });
+      }
+      return newConfig;
     });
   };
 
@@ -852,7 +879,15 @@ export default function Suggestion() {
     );
   };
 
-  const handleRatingFilterClick = (rating) => { if (filterRating === rating) setFilterRating(null); else setFilterRating(rating); };
+  const handleRatingFilterClick = (rating) => {
+    if (filterRating === rating) {
+      setFilterRating(null);
+      trackFilter('rating_filter', 'clear');
+    } else {
+      setFilterRating(rating);
+      trackFilter('rating_filter', rating);
+    }
+  };
   const RATINGS_OPTIONS = ["Strong Buy", "Buy", "Sell", "Strong Sell"];
   const CHANGE_OPTIONS = [{ label: "Latest Only", val: "All" }, { label: "Show Changes", val: "ShowChanges", color: "bg-blue-500" }, { label: "Positive", val: "Positive", color: "bg-[#137333]" }, { label: "Negative", val: "Negative", color: "bg-[#C5221F]" }];
   const shouldShowChange = filterRating !== null || changeFilter !== "All";
@@ -869,8 +904,8 @@ export default function Suggestion() {
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-2">
               <div className="flex flex-col sm:flex-row items-center gap-3">
                 <div className="flex bg-white p-1 rounded-xl border border-gray-200 shadow-sm h-[37.33px]">
-                  <button onClick={() => setTimeframe("1D")} className={`px-3 py-1 rounded-lg text-sm font-medium transition-all ${timeframe === "1D" ? "bg-[#0B102A] text-white shadow-md" : "text-gray-800 hover:bg-gray-50"}`}>1 Day</button>
-                  <button onClick={() => setTimeframe("1W")} className={`px-3 py-1 rounded-lg text-sm font-medium transition-all ${timeframe === "1W" ? "bg-[#0B102A] text-white shadow-md" : "text-gray-800 hover:bg-gray-50"}`}>1 Week</button>
+                  <button onClick={() => { setTimeframe("1D"); trackFilter('timeframe', '1D'); }} className={`px-3 py-1 rounded-lg text-sm font-medium transition-all ${timeframe === "1D" ? "bg-[#0B102A] text-white shadow-md" : "text-gray-800 hover:bg-gray-50"}`}>1 Day</button>
+                  <button onClick={() => { setTimeframe("1W"); trackFilter('timeframe', '1W'); }} className={`px-3 py-1 rounded-lg text-sm font-medium transition-all ${timeframe === "1W" ? "bg-[#0B102A] text-white shadow-md" : "text-gray-800 hover:bg-gray-50"}`}>1 Week</button>
                 </div>
                 <div className="relative z-[200]" ref={countryDropdownRef} style={{ isolation: 'isolate', overflow: 'visible' }}>
                   <button type="button" onClick={() => setShowCountryMenu((prev) => !prev)} className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 min-w-[180px] h-[37.33px]">
@@ -880,7 +915,7 @@ export default function Suggestion() {
                   {showCountryMenu && (
                     <div className="absolute left-0 top-full z-[9999] mt-2 w-56 max-h-72 overflow-auto rounded-2xl border border-gray-200 bg-white shadow-[0_10px_30px_rgba(15,23,42,0.15)] py-1" style={{ transform: 'translateZ(0)' }}>
                       {countryOptions.map((opt) => (
-                        <button key={opt.code} onClick={() => { setCountry(opt.code); setShowCountryMenu(false); }} className={`flex w-full items-center justify-between px-4 py-1.5 text-left text-sm transition-colors ${country === opt.code ? "bg-[#EEF2FF] text-[#0B102A] font-semibold" : "text-gray-700 hover:bg-gray-50"}`}>
+                        <button key={opt.code} onClick={() => { setCountry(opt.code); setShowCountryMenu(false); trackFilter('country', opt.label); }} className={`flex w-full items-center justify-between px-4 py-1.5 text-left text-sm transition-colors ${country === opt.code ? "bg-[#EEF2FF] text-[#0B102A] font-semibold" : "text-gray-700 hover:bg-gray-50"}`}>
                           <span>{opt.label}</span>
                           {country === opt.code && <i className="bi bi-check-lg text-[#0B102A] text-base"></i>}
                         </button>
@@ -888,7 +923,7 @@ export default function Suggestion() {
                     </div>
                   )}
                 </div>
-                <FilterDropdown label="Rating change" value={changeFilter} options={CHANGE_OPTIONS} onSelect={setChangeFilter} />
+                <FilterDropdown label="Rating change" value={changeFilter} options={CHANGE_OPTIONS} onSelect={(val) => { setChangeFilter(val); trackFilter('rating_change', val); }} />
               </div>
               <div className="relative w-full md:w-auto">
                 <input type="text" placeholder="Search DR..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="bg-white pl-4 pr-10 py-2 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#0B102A] w-full md:w-64 text-sm shadow-sm h-[37.33px]" />
@@ -945,7 +980,7 @@ export default function Suggestion() {
                 {processedData.map((row, idx) => (
                   <tr
                     key={idx}
-                    onClick={() => setSelectedItem(row)}
+                    onClick={() => { setSelectedItem(row); trackStockView(row.displaySymbol, row.displayName); trackClick('rating_history_modal_open', { symbol: row.displaySymbol }); }}
                     className={`transition-colors ${idx % 2 === 0 ? "bg-white" : "bg-[#F7F8FA]"} hover:bg-gray-50 cursor-pointer relative`}
                     style={{ height: "52px" }}
                   >

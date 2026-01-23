@@ -1,5 +1,4 @@
 import { Link, useNavigate, useLocation } from 'react-router-dom';
-import { useState, useEffect } from 'react';
 import img from '../assets/logo.png';
 
 const Navbar = () => {
@@ -7,19 +6,6 @@ const Navbar = () => {
   const location = useLocation();
 
   const isActive = (path) => location.pathname === path;
-
-  // Listen for calendar notification updates
-  useEffect(() => {
-    const handleNotificationUpdate = (event) => {
-      setCalendarNotifications(event.detail.count);
-    };
-
-    window.addEventListener('calendarNotificationUpdate', handleNotificationUpdate);
-
-    return () => {
-      window.removeEventListener('calendarNotificationUpdate', handleNotificationUpdate);
-    };
-  }, []);
 
   return (
     <header className="bg-white sticky top-0 z-[110] shadow-sm border-b border-gray-200">
@@ -77,18 +63,6 @@ const Navbar = () => {
           >
             News
           </Link>
-
-          <div
-            className="relative cursor-pointer ml-2"
-            onClick={() => navigate('/calendar')}
-          >
-            <i className="bi bi-bell text-xl text-gray-700 hover:text-gray-900 transition-colors"></i>
-            {calendarNotifications > 0 && (
-              <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[9px] font-bold rounded-full h-4 w-4 flex items-center justify-center border-2 border-white">
-                {calendarNotifications > 99 ? '99+' : calendarNotifications}
-              </span>
-            )}
-          </div>
         </nav>
       </div>
     </header>
@@ -96,3 +70,4 @@ const Navbar = () => {
 };
 
 export default Navbar;
+
