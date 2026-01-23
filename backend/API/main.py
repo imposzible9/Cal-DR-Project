@@ -47,7 +47,7 @@ async def lifespan(app: FastAPI):
     
     # ========== Initialize News API ==========
     print("[INIT] Initializing News API...")
-    # News API uses httpx client initialized on-demand, no explicit init needed
+    await news_api.init_client()
     print("[OK] News API: Ready")
     
     print("=" * 60)
@@ -63,6 +63,7 @@ async def lifespan(app: FastAPI):
     yield
     
     print("[SHUTDOWN] Shutting down Cal-DR Unified API Server...")
+    await news_api.close_client()
 
 
 # Create main app

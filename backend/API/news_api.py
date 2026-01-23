@@ -66,15 +66,24 @@ def _cache_set(key: str, value, ttl: int = NEWS_TTL_SECONDS):
     _news_cache[key] = {"value": value, "exp": _now() + ttl}
 
 
+async def init_client():
+    global _client
+    if _client is None:
+        _client = httpx.AsyncClient(timeout=10)
+
+async def close_client():
+    global _client
+    if _client:
+        await _client.aclose()
+        _client = None
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _client
-    _client = httpx.AsyncClient(timeout=10)
+    await init_client()
     try:
         yield
     finally:
-        await _client.aclose()
-
+        await close_client()
 
 app.router.lifespan_context = lifespan
 
