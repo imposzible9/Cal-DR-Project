@@ -397,7 +397,7 @@ export default function DRList() {
           <div className="relative flex-1 md:flex-initial">
             <input
               type="text"
-              placeholder="Search Underlying..."
+              placeholder="Search DR..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="bg-white pl-4 pr-10 py-2 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#0B102A] focus:border-transparent w-full md:w-64 text-sm shadow-sm"

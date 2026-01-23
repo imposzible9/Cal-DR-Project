@@ -5,7 +5,6 @@ import img from '../assets/logo.png';
 const Navbar = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const [calendarNotifications, setCalendarNotifications] = useState(0);
 
   const isActive = (path) => location.pathname === path;
 
@@ -55,7 +54,7 @@ const Navbar = () => {
             to="/caldr"
             className={`text-sm font-medium transition-colors ${isActive('/caldr') ? 'text-blue-500' : 'text-gray-700 hover:text-gray-900'}`}
           >
-            Calculation
+            Calculation DR
           </Link>
 
           <Link
