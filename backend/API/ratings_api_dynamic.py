@@ -7,6 +7,7 @@ import uvicorn
 import asyncio
 import json
 import os
+print("--- RELOADED RATINGS API (UPDATED) ---")
 import re
 import random
 import sqlite3
@@ -2079,6 +2080,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+@app.get("/api/test_high")
+def test_high():
+    return {"status": "high", "message": "High priority route"}
 
 # Simple health check endpoint
 @app.get("/")

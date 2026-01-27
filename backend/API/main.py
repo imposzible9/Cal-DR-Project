@@ -86,6 +86,10 @@ app.add_middleware(
 # Mount sub-applications
 # All routes from each app will be prefixed with their path
 app.mount("/ratings", ratings_api_dynamic.app)
+print(f"[DEBUG] Mounted Ratings API with {len(ratings_api_dynamic.app.routes)} routes")
+for route in ratings_api_dynamic.app.routes:
+    print(f"  - {route.path} ({route.name})")
+
 app.mount("/earnings", earnings_api.app)
 app.mount("/news", news_api.app)
 
@@ -115,6 +119,22 @@ async def health_check():
             "earnings": "ok",
             "news": "ok"
         }
+    }
+
+@app.get("/debug/routes")
+def debug_routes():
+    routes = []
+    for route in app.routes:
+        routes.append(f"{route.path} ({route.name})")
+    
+    # Check ratings app routes
+    ratings_routes = []
+    for route in ratings_api_dynamic.app.routes:
+        ratings_routes.append(f"{route.path} ({route.name})")
+        
+    return {
+        "main_routes": routes,
+        "ratings_routes": ratings_routes
     }
 
 

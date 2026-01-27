@@ -4,6 +4,7 @@ import { trackPageView, trackSearch, trackFilter, trackStockView, trackClick } f
 // const API_URL = "http://172.17.1.85:8333/dr";
 const API_URL = "https://api.ideatrade1.com/caldr";
 
+
 // const RATINGS_API = "http://172.18.1.56:8335/ratings/from-dr-api";
 const RATINGS_API = "https://api.ideatrade1.com/caldr?ratings=true";
 

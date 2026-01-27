@@ -7,7 +7,7 @@ echo.
 
 :: 1. Start Backend (Unified - All APIs in one process)
 echo [1/2] Starting Backend (Unified API)...
-start "Cal-DR Backend" cmd /k "cd /D \"%~dp0backend\API\" && python main.py"
+start "Cal-DR Backend" cmd /k "cd /D \"%~dp0backend\" && if exist venv\Scripts\activate.bat (echo Activating venv... & call venv\Scripts\activate.bat) else (echo No venv found, relying on system python...) & cd API && python main.py"
 
 :: Wait a moment for backend to initialize
 timeout /t 3 /nobreak > nul
