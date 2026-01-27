@@ -5,15 +5,15 @@ from contextlib import asynccontextmanager
 import httpx
 import os
 import time
+import asyncio
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from dotenv import load_dotenv
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env'))
 
-
-NEWS_API_BASE_URL = os.getenv("NEWS_API_BASE_URL") or "https://newsapi.org/v2/top-headlines"
-NEWS_API_KEY = os.getenv("NEWS_API_KEY") or None
+NEWS_API_BASE_URL = "https://newsapi.org/v2/top-headlines"
+NEWS_API_KEY = "a2982e76c7844902b4289a6b08712d89"
 NEWS_TTL_SECONDS = int(os.getenv("NEWS_TTL_SECONDS") or "300")
 FINNHUB_BASE_URL = "https://finnhub.io/api/v1"
 FINNHUB_TOKEN = os.getenv("FINNHUB_TOKEN") or None
@@ -66,17 +66,6 @@ def _cache_set(key: str, value, ttl: int = NEWS_TTL_SECONDS):
     _news_cache[key] = {"value": value, "exp": _now() + ttl}
 
 
-async def init_client():
-    global _client
-    if _client is None:
-        _client = httpx.AsyncClient(timeout=10)
-
-async def close_client():
-    global _client
-    if _client:
-        await _client.aclose()
-        _client = None
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_client()
@@ -85,22 +74,45 @@ async def lifespan(app: FastAPI):
     finally:
         await close_client()
 
+
 app.router.lifespan_context = lifespan
 
 
+async def init_client():
+    global _client
+    _client = httpx.AsyncClient(timeout=10)
+
+
+async def close_client():
+    global _client
+    if _client:
+        await _client.aclose()
+
+
 async def fetch_news(symbol: str, limit: int, language: str | None, hours: int, country: str | None):
+    # Enhance query to ensure relevance, especially for common words (e.g. "LOVE", "BEST")
+    search_query = symbol
+    target_country = country if country else "us"
+    
+    is_general_market = symbol.lower() in ["stock market", "market", "business"]
+    
+    if target_country.lower() == "us" and not is_general_market:
+         search_query = f"{symbol} stock"
+
     if not NEWS_API_KEY:
-        return await fetch_google_news(symbol, limit, language, hours, country)
+        return await fetch_google_news(search_query, limit, language, hours, country)
 
     assert _client is not None
 
     params: dict[str, str | int] = {
-        "q": symbol,
         "pageSize": limit,
-        "sortBy": "publishedAt",
         "apiKey": NEWS_API_KEY,
         "category": "business",
     }
+    
+    if not is_general_market:
+        params["q"] = search_query
+        # params["sortBy"] = "publishedAt" # Not supported by top-headlines
 
     if country:
         params["country"] = country
@@ -109,20 +121,30 @@ async def fetch_news(symbol: str, limit: int, language: str | None, hours: int, 
 
     if language:
         params["language"] = language
+    
+    print(f"Fetching NewsAPI: {NEWS_API_BASE_URL} Params: {params}")
 
-    if hours > 0:
-        now_utc = datetime.now(timezone.utc)
-        since = now_utc - timedelta(hours=hours)
-        params["from"] = since.isoformat()
+    # 'from' param is not supported by top-headlines, so we omit it or only use it if we were using /everything
+    # But since we are forced to use top-headlines, we skip 'from' logic for API call.
+    # We can filter results manually if needed, but top-headlines are usually recent.
+    
+    # if hours > 0:
+    #     now_utc = datetime.now(timezone.utc)
+    #     since = now_utc - timedelta(hours=hours)
+    #     params["from"] = since.isoformat()
 
-    r = await _client.get(NEWS_API_BASE_URL, params=params)
+    try:
+        r = await _client.get(NEWS_API_BASE_URL, params=params)
+    except Exception:
+        return await fetch_google_news(search_query, limit, language, hours, country)
+
     if r.status_code != 200:
-        return await fetch_google_news(symbol, limit, language, hours, country)
+        return await fetch_google_news(search_query, limit, language, hours, country)
 
     data = r.json()
     articles = data.get("articles") or []
     if not articles:
-        return await fetch_google_news(symbol, limit, language, hours, country)
+        return await fetch_google_news(search_query, limit, language, hours, country)
 
     normalized = []
     for a in articles:
@@ -252,7 +274,7 @@ async def get_news(
     hours: int = Query(24, ge=1, le=168),
     country: str | None = Query(None, description="Two-letter country code (e.g., us, gb)"),
 ):
-    key = f"news-v2|{symbol.upper()}|{limit}|{language or ''}|{hours}|{country or ''}"
+    key = f"news-v3|{symbol.upper()}|{limit}|{language or ''}|{hours}|{country or ''}"
     cached = _cache_get(key)
     if cached is not None:
         return {
@@ -265,9 +287,11 @@ async def get_news(
             "ttl_seconds": NEWS_TTL_SECONDS,
         }
 
-    items = await fetch_news(symbol, limit, language, hours, country)
-    quote = await fetch_quote(symbol)
-    logo_url = await fetch_logo(symbol)
+    items, quote, logo_url = await asyncio.gather(
+        fetch_news(symbol, limit, language, hours, country),
+        fetch_quote(symbol),
+        fetch_logo(symbol)
+    )
 
     payload = {"news": items, "quote": quote, "logo_url": logo_url}
     _cache_set(key, payload, ttl=NEWS_TTL_SECONDS)
@@ -509,6 +533,28 @@ async def get_stock_overview(
             "items": news_items,
         },
     }
+
+async def _fetch_dr_symbols(client):
+    dr_symbols = []
+    try:
+        r = await client.get(DR_LIST_URL, timeout=2)
+        if r.status_code == 200:
+            data = r.json()
+            rows = data.get("rows", [])
+            for row in rows:
+                underlying = row.get("underlying")
+                if underlying:
+                    underlying = underlying.strip().upper()
+                    dr_symbols.append({
+                        "symbol": underlying,
+                        "name": row.get("underlyingName") or row.get("name") or "",
+                        "dr_symbol": row.get("symbol"),
+                        "logo": row.get("logo") or row.get("logoUrl") or row.get("image")
+                    })
+    except Exception as e:
+        print(f"Error fetching DR symbols: {e}")
+    return dr_symbols
+
 
 @app.get("/api/symbols")
 async def get_symbols():
