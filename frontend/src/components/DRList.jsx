@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, useTransition, useRef } from "react";
 import swipeImg from "../assets/swipe.png";
-import { trackFilter, trackSearch, trackStockView } from "../utils/tracker";
+import { trackFilter, trackSearch, trackStockView, trackPageView } from "../utils/tracker";
 
 // const API_URL = "http://172.17.1.85:8333/dr";
 const API_URL = "http://api.ideatrade1.com:8002/dr";
@@ -225,6 +225,11 @@ export default function DRList() {
     }, 40);
     return () => clearInterval(id);
   }, [showScrollHint, swipeDir]);
+
+  /* TRACK PAGE VIEW */
+  useEffect(() => {
+    trackPageView('dr_list');
+  }, []);
 
   // Handle click outside for country dropdown
   const countryDropdownRef = useRef(null);

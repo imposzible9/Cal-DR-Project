@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import axios from "axios";
+import { trackPageView, trackFilter, trackSearch } from "../utils/tracker";
 
 // ================= CONSTANTS =================
 const countryOptions = [
@@ -313,6 +314,16 @@ export default function Calendar() {
 
   const selectedLabel = useMemo(() => countryOptions.find((c) => c.code === country)?.label || "All Markets", [country]);
 
+  // Track search with debounce
+  useEffect(() => {
+    const t = setTimeout(() => {
+      if (search.trim().length >= 2) {
+        trackSearch(search.trim());
+      }
+    }, 500);
+    return () => clearTimeout(t);
+  }, [search]);
+
   // Load seen earnings from localStorage
   useEffect(() => {
     try {
@@ -324,6 +335,7 @@ export default function Calendar() {
     } catch (e) {
       console.error('Error loading seen earnings:', e);
     }
+    trackPageView('calendar');
   }, []);
 
   // Save seen earnings to localStorage and update navbar
@@ -736,7 +748,11 @@ export default function Calendar() {
                     {countryOptions.map((opt) => (
                       <button
                         key={opt.code}
-                        onClick={() => { setCountry(opt.code); setShowCountryMenu(false); }}
+                        onClick={() => {
+                          setCountry(opt.code);
+                          setShowCountryMenu(false);
+                          trackFilter('country', opt.label);
+                        }}
                         className={`flex w-full items-center justify-between px-4 py-1.5 text-left text-sm transition-colors ${country === opt.code ? "bg-[#EEF2FF] text-[#0B102A] font-semibold" : "text-gray-700 hover:bg-gray-50"}`}
                       >
                         <span>{opt.label}</span>
@@ -762,10 +778,13 @@ export default function Calendar() {
                       return (
                         <button
                           key={day}
-                          onClick={() => setSelectedDay(day)}
+                          onClick={() => {
+                            setSelectedDay(day);
+                            if (day !== "All") trackFilter('day', day);
+                          }}
                           className={`px-2 py-1 rounded-lg text-xs font-bold transition-all ${isSelected
-                              ? "bg-[#0B102A] text-white ring-2 ring-offset-1 ring-black/10 shadow-md scale-105"
-                              : "text-gray-600 opacity-60 hover:opacity-100"
+                            ? "bg-[#0B102A] text-white ring-2 ring-offset-1 ring-black/10 shadow-md scale-105"
+                            : "text-gray-600 opacity-60 hover:opacity-100"
                             }`}
                         >
                           {day}

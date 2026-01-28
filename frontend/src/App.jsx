@@ -1,7 +1,10 @@
 import { Routes, Route, useLocation } from "react-router-dom";
-import { useEffect } from "react";
+import { useEffect, lazy, Suspense } from "react";
 import { Navbar, SuggestionPage, DRCal, DRList, CalendarPage, News } from "./components";
 import { initTracker, trackPageView } from "./utils/tracker";
+
+// Lazy load Stats component
+const Stats = lazy(() => import("./components/Stats"));
 
 // Page name mapping
 const PAGE_NAMES = {
@@ -37,6 +40,23 @@ function App() {
         <Route path="/suggestion" element={<SuggestionPage />} />
         <Route path="/calendar" element={<CalendarPage />} />
         <Route path="/news" element={<News />} />
+        <Route
+          path="/caldr/stats"
+          element={
+            <Suspense fallback={<div className="p-10 text-center">Loading Dashboard...</div>}>
+              <Stats />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/stats"
+          element={
+            <Suspense fallback={<div className="p-10 text-center">Loading Dashboard...</div>}>
+              <Stats />
+            </Suspense>
+          }
+        />
+        <Route path="*" element={<DRList />} />
       </Routes>
     </>
   );

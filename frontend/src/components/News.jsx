@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
+import { trackPageView, trackSearch, trackClick } from "../utils/tracker";
+import { API_CONFIG } from '../config/api';
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/caldr/news";
+const API_BASE = API_CONFIG.NEWS_API;
 const TH_QUERY = "ตลาดหุ้น OR หุ้น OR ดัชนี";
 const EN_QUERY = "stock market";
 const DEFAULT_SYMBOLS = ["NVDA", "TSLA", "GOOG", "AAPL", "MSFT", "AMZN", "META", "BABA"];
@@ -28,7 +30,7 @@ const NewsCard = ({ ticker, quote, news }) => {
   const isPositive = quote && quote.change_pct >= 0;
 
   return (
-    <a href={news.url} target="_blank" rel="noreferrer" className="block group">
+    <a href={news.url} target="_blank" rel="noreferrer" className="block group" onClick={() => trackClick('news_article', { title: news.title, url: news.url, ticker: ticker || 'market' })}>
       <div className="bg-white rounded-xl border border-gray-200 p-6 hover:shadow-md transition-shadow flex flex-col md:flex-row gap-6 items-start">
         {ticker && quote && (
           <div className="flex-shrink-0 w-full md:w-[120px] bg-[#F9FAFB] rounded-lg border border-gray-100 p-3 flex flex-col items-center justify-center text-center gap-2">
@@ -94,6 +96,7 @@ const News = () => {
       }
     }
     loadSymbols();
+    trackPageView('news');
   }, []);
 
   // Fetch Market News (Top Stories)
@@ -231,6 +234,7 @@ const News = () => {
       setErrorSearch("");
       setSelected(raw.toUpperCase());
       setShowSuggestions(false);
+      trackSearch(raw.toUpperCase());
     }
   };
 
@@ -269,6 +273,7 @@ const News = () => {
     setSelected(s.symbol);
     setShowSuggestions(false);
     setErrorSearch("");
+    trackSearch(s.symbol);
   };
 
   const clearSearch = () => {
@@ -427,7 +432,7 @@ const News = () => {
                 {loadingHome ? (
                   <div className="animate-pulse h-48 bg-gray-200 rounded-2xl" />
                 ) : topStory ? (
-                  <a href={topStory.news.url} target="_blank" rel="noreferrer" className="block group">
+                  <a href={topStory.news.url} target="_blank" rel="noreferrer" className="block group" onClick={() => trackClick('news_top_story', { title: topStory.news.title, url: topStory.news.url, ticker: topStory.ticker })}>
                     <div className="bg-[#0B102A] rounded-2xl px-8 py-6 text-white relative overflow-hidden shadow-lg">
                       <div className="relative z-10 max-w-3xl">
                         {topStory.ticker && topStory.quote && (

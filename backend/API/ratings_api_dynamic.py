@@ -2081,10 +2081,6 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-@app.get("/api/test_high")
-def test_high():
-    return {"status": "high", "message": "High priority route"}
-
 # Simple health check endpoint
 @app.get("/")
 def root():
@@ -3306,6 +3302,75 @@ async def track_event(event: TrackingEvent, request: Request):
     
     return {"status": "error", "message": "Max retries exceeded"}
 
+
+# Validating request body
+class TrackingEvent(BaseModel):
+    session_id: str
+    user_id: str
+    event_type: str
+    event_data: dict
+    page_path: str
+    timestamp: str
+    user_agent: str = None
+
+@app.post("/api/track")
+async def track_event(event: TrackingEvent, request: Request):
+    try:
+        con = sqlite3.connect(DB_FILE)
+        cur = con.cursor()
+        
+        # Get client IP
+        client_ip = request.client.host
+        x_forwarded_for = request.headers.get("X-Forwarded-For")
+        if x_forwarded_for:
+            client_ip = x_forwarded_for.split(",")[0]
+            
+        # Insert into user_behavior
+        try:
+            # Schema: id, ip_address, session_id, event_type, event_data, page_path, timestamp, user_agent, created_at
+            cur.execute("""
+                INSERT INTO user_behavior (session_id, ip_address, event_type, event_data, page_path, timestamp, user_agent)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                event.session_id,
+                client_ip, # mapped to ip_address column
+                event.event_type,
+                json.dumps(event.event_data),
+                event.page_path,
+                event.timestamp,
+                event.user_agent
+            ))
+            
+            # Update visitor_stats (UPSERT)
+            cur.execute("""
+                INSERT INTO visitor_stats (ip_address, visit_count, last_visit)
+                VALUES (?, 1, ?)
+                ON CONFLICT(ip_address) DO UPDATE SET
+                    visit_count = visit_count + 1,
+                    last_visit = excluded.last_visit
+            """, (client_ip, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+
+            # Update page analytics
+            if event.event_type == "page_view":
+                 cur.execute("""
+                    INSERT INTO user_page_analytics (ip_address, page_path, view_count)
+                    VALUES (?, ?, 1)
+                    ON CONFLICT(ip_address, page_path) DO UPDATE SET
+                        view_count = view_count + 1
+                 """, (client_ip, event.page_path))
+
+            con.commit()
+            return {"status": "success"}
+        except Exception as db_err:
+            print(f"[ERROR] DB Insert Error: {db_err}")
+            return {"status": "error", "message": str(db_err)}
+        finally:
+            con.close()
+            
+    except Exception as e:
+        print(f"[ERROR] Track Event Error: {e}")
+        return {"status": "error", "message": str(e)}
+
 @app.get("/api/analytics/summary")
 def get_analytics_summary():
     try:
@@ -3327,7 +3392,6 @@ def get_analytics_summary():
             FROM user_page_analytics
             GROUP BY page_path 
             ORDER BY total_views DESC 
-            LIMIT 5
         """)
         top_pages = [dict(row) for row in cur.fetchall()]
         
@@ -3340,10 +3404,20 @@ def get_analytics_summary():
         """)
         event_types = [dict(row) for row in cur.fetchall()]
         
+        # Count active users (last 5 minutes) based on sessions
+        active_threshold = (datetime.utcnow() - timedelta(minutes=5)).isoformat()
+        cur.execute("""
+            SELECT COUNT(DISTINCT session_id) 
+            FROM user_behavior 
+            WHERE timestamp >= ?
+        """, (active_threshold,))
+        active_users = cur.fetchone()[0]
+
         con.close()
         return {
             "total_events": total_events,
             "unique_visitors": total_visitors,
+            "active_users": active_users,
             "top_pages": top_pages,
             "event_types": event_types
         }
@@ -3456,6 +3530,120 @@ def get_event_stats():
             "top_stocks": top_stocks,
             "top_searches": top_searches
         }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.get("/api/analytics/weekly-trend")
+def get_weekly_trend(weeks: int = 12):
+    try:
+        con = sqlite3.connect(DB_FILE)
+        con.row_factory = sqlite3.Row
+        cur = con.cursor()
+        
+        # Calculate start date
+        start_date = (datetime.now() - timedelta(weeks=weeks)).strftime("%Y-%m-%d")
+        
+        # Query: Group by Week AND Page
+        cur.execute("""
+            SELECT strftime('%Y-%W', timestamp) as week_id,
+                   MIN(substr(timestamp, 1, 10)) as start_date,
+                   page_path,
+                   COUNT(DISTINCT session_id) as users
+            FROM user_behavior
+            WHERE substr(timestamp, 1, 10) >= ?
+              AND page_path NOT LIKE '%stats%'
+            GROUP BY week_id, page_path
+            ORDER BY week_id ASC
+        """, (start_date,))
+        
+        rows = cur.fetchall()
+        
+        # Process data to pivot by page
+        weeks_data = {}
+        
+        for row in rows:
+            week_id = row["week_id"]
+            if week_id not in weeks_data:
+                # Format date
+                try:
+                    dt = datetime.strptime(row["start_date"], "%Y-%m-%d")
+                    end_dt = dt + timedelta(days=6)
+                    display_date = f"{dt.strftime('%d')} - {end_dt.strftime('%d %b %y')}"
+                except:
+                    display_date = week_id
+                    
+                weeks_data[week_id] = {
+                    "date": display_date,
+                    "full_date": row["start_date"],
+                    "total_users": 0
+                }
+            
+            # Normalize Page Name
+            path = row["page_path"].lower().rstrip('/')
+            if not path.startswith('/'): path = '/' + path
+            
+            # Simple Mapping (Keep generic fallbacks mostly)
+            if path in ['/', '/home']: page_name = 'Home'
+            elif path == '/news': page_name = 'News'
+            elif 'drlist' in path: page_name = 'DR List'
+            elif 'caldr' in path: page_name = 'CalDR'
+            elif 'suggestion' in path: page_name = 'Suggestion'
+            elif 'calendar' in path: page_name = 'Calendar'
+            elif 'view-docs' in path: page_name = 'Documentation'
+            else:
+                # Fallback
+                parts = path.split('/')
+                page_name = parts[-1].capitalize() if parts else 'Unknown'
+
+            # Add to week data
+            if page_name not in weeks_data[week_id]:
+                weeks_data[week_id][page_name] = 0
+            
+            weeks_data[week_id][page_name] += row["users"]
+            weeks_data[week_id]["total_users"] += row["users"]
+
+        con.close()
+        return list(weeks_data.values())
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.get("/api/analytics/daily-trend")
+def get_daily_trend(days: int = 30):
+    try:
+        con = sqlite3.connect(DB_FILE)
+        con.row_factory = sqlite3.Row
+        cur = con.cursor()
+        
+        # Calculate start date
+        start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+        
+        cur.execute("""
+            SELECT substr(timestamp, 1, 10) as date, COUNT(DISTINCT session_id) as sessions, COUNT(*) as events
+            FROM user_behavior
+            WHERE substr(timestamp, 1, 10) >= ?
+            GROUP BY date
+            ORDER BY date ASC
+        """, (start_date,))
+        
+        rows = cur.fetchall()
+        data = []
+        for row in rows:
+             # Format date for display
+            try:
+                dt = datetime.strptime(row["date"], "%Y-%m-%d")
+                display_date = dt.strftime("%b %d")
+            except:
+                display_date = row["date"]
+
+            data.append({
+                "date": display_date,
+                "full_date": row["date"],
+                "sessions": row["sessions"],
+                "events": row["events"]
+            })
+            
+        con.close()
+        return data
     except Exception as e:
         return {"status": "error", "message": str(e)}
 

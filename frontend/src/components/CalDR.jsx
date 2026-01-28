@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState, useRef } from "react";
+import { trackPageView, trackDRSelection, trackCalculation } from "../utils/tracker";
+import { API_CONFIG } from "../config/api";
 
 // const API_BASE = "http://172.17.1.85:8333";
 const API_BASE = "https://api.ideatrade1.com";       // DR snapshot (production)
-const CALC_API_BASE = "http://localhost:8000/ratings";      // DR real-time calc (local unified API)
+const CALC_API_BASE = API_CONFIG.RATINGS_API;      // DR real-time calc (local unified API)
 
 const EXCHANGE_CURRENCY_MAP = {
   "The Nasdaq Global Select Market": "USD",
@@ -178,7 +180,9 @@ export default function DRCal() {
         console.error(err);
       }
     }
+
     fetchDR();
+    trackPageView('caldr');
   }, []);
 
   // ================== format numbers ==================
@@ -228,6 +232,22 @@ export default function DRCal() {
   const fairAskTHB = fairMidTHB * (1 + SPREAD_PCT / 2);
   const hasInput = underlyingValue && fxTHBPerUnderlying;
 
+  // Track Calculation
+  useEffect(() => {
+    if (selectedDR && hasInput && fairMidTHB > 0) {
+      const timeout = setTimeout(() => {
+        trackCalculation(
+          selectedDR.symbol,
+          underlyingValue,
+          fxTHBPerUnderlying,
+          fairBidTHB.toFixed(2),
+          fairAskTHB.toFixed(2)
+        );
+      }, 2000);
+      return () => clearTimeout(timeout);
+    }
+  }, [selectedDR, hasInput, fairMidTHB, fairBidTHB, fairAskTHB, underlyingValue, fxTHBPerUnderlying]);
+
   // ================== Suggest ==================
   const filteredSuggest = useMemo(() => {
     const q = searchText.trim().toUpperCase();
@@ -259,6 +279,7 @@ export default function DRCal() {
 
     // 🔥 ดึง realtime
     fetchRealtimeUnderlying(dr.symbol);
+    trackDRSelection(dr.symbol);
   };
 
 
