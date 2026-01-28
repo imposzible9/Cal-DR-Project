@@ -277,7 +277,142 @@ async def fetch_logo(symbol: str):
     except Exception:
         return None
 
-@app.get("/api/news/{symbol}")
+
+HOME_SYMBOLS = ["NVDA", "TSLA", "GOOG", "AAPL", "MSFT", "AMZN", "META", "BABA"]
+
+@app.get("/api/market/home")
+async def get_market_home(limit: int = 20):
+    """
+    Aggregates all data needed for the Home view:
+    1. Market News (EN & TH)
+    2. Updates for HOME_SYMBOLS (Quote + Latest News)
+    """
+    key = "market_home_data_v2"
+    cached = _cache_get(key)
+    if cached:
+        return cached
+
+    # 1. Fetch Market News (EN & TH) concurrently
+    # We use asyncio.gather for these
+    t0 = time.time()
+
+    # Pre-fetch symbols logo map to ensures consistency and speed
+    try:
+        symbols_list = await get_symbols()
+        logo_map = {s["symbol"]: s.get("logo") for s in symbols_list}
+    except Exception as e:
+        print(f"Error pre-fetching symbols for logos: {e}")
+        logo_map = {}
+    
+    # Define tasks for general news
+    task_en = fetch_news("stock market", limit, "en", 72, "us")
+    task_th = fetch_news("ตลาดหุ้น OR หุ้น OR ดัชนี", limit, "th", 72, "th")
+
+    # Define tasks for individual stocks (Quote + News)
+    # To avoid hitting rate limits too hard, we might want to chunk them or just go full parallel if the API permits.
+    # Finnhub has limits, but let's try parallel first.
+    
+    async def fetch_stock_data(sym):
+        try:
+            # Re-use existing endpoints helper logic? 
+            # Ideally we call the internal functions directly to avoid overhead of creating new requests if possible,
+            # but our functions are async so we can call them.
+            # But get_quote and get_company_news are route handlers.
+            # Let's call the helper functions they rely on or refactor logic slightly.
+            # fetch_quote and get_company_news logic.
+            
+            # Since get_company_news logic is inside a route handler, let's duplicate the logic slightly or call helpers.
+            # We have fetch_quote defined.
+            # We DON'T have a clean fetch_company_news helper, it's inside get_company_news.
+            # Let's quickly refactor get_company_news logic into a helper usually, but for now I'll implement it inline or call a new helper.
+            
+            # Helper for company news (inline for now to avoid massive refactor affecting other lines)
+            news_items = []
+            quote_data = await fetch_quote(sym)
+            
+            # Inject Logo from map
+            if quote_data:
+                quote_data["logo_url"] = logo_map.get(sym) or logo_map.get(sym.split(".")[0])
+            
+            if FINNHUB_TOKEN:
+                if not _client: await init_client()
+                now_utc = datetime.now(timezone.utc)
+                since = now_utc - timedelta(hours=72)
+                params_news = {
+                    "symbol": sym,
+                    "from": since.date().isoformat(),
+                    "to": now_utc.date().isoformat(),
+                    "token": FINNHUB_TOKEN,
+                }
+                try:
+                    r = await _client.get(f"{FINNHUB_BASE_URL}/company-news", params=params_news)
+                    if r.status_code == 200:
+                        raw_news = r.json() or []
+                        for a in raw_news[:2]: # Limit to 2 per stock for home feed
+                            news_items.append({
+                                "title": a.get("headline"),
+                                "summary": a.get("summary"),
+                                "published_at": a.get("datetime"),
+                                "source": a.get("source"),
+                                "url": a.get("url"),
+                                "image_url": a.get("image"),
+                            })
+                except Exception:
+                    pass
+            
+            return {
+                "ticker": sym,
+                "quote": quote_data,
+                "news": news_items
+            }
+        except Exception as e:
+            print(f"Error fetching home data for {sym}: {e}")
+            return None
+
+    # internal stock tasks
+    stock_tasks = [fetch_stock_data(sym) for sym in HOME_SYMBOLS]
+    
+    # Execute all
+    results = await asyncio.gather(task_en, task_th, *stock_tasks)
+    
+    news_en = results[0] or []
+    news_th = results[1] or []
+    stock_results = results[2:]
+    
+    # Process General News
+    # Merge and sort
+    combined_market_news = news_en + news_th
+    # Sort happens frontend usually, but we can send sorted
+    
+    # Process Stock Updates
+    # We want to flatten: each stock returned a list of news items ? 
+    # Frontend logic: 
+    # "updates" is a flat list of objects: { ticker, quote, news: {title, ...} }
+    # So if NVDA has 2 news, that creates 2 update items.
+    
+    updates_flat = []
+    for res in stock_results:
+        if res and res.get("news"):
+            for n in res["news"]:
+                updates_flat.append({
+                    "ticker": res["ticker"],
+                    "quote": res["quote"],
+                    "news": n
+                })
+    
+    # Sort updates by time desc
+    updates_flat.sort(key=lambda x: x["news"].get("published_at") or 0, reverse=True)
+    
+    payload = {
+        "market_news": combined_market_news,
+        "updates": updates_flat
+    }
+    
+    # Cache for 5 minutes
+    _cache_set(key, payload, ttl=300)
+    
+    return payload
+
 async def get_news(
     symbol: str,
     limit: int = Query(10, ge=1, le=50),

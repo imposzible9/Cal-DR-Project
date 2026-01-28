@@ -8,6 +8,37 @@ const TH_QUERY = "ตลาดหุ้น OR หุ้น OR ดัชนี";
 const EN_QUERY = "stock market";
 const DEFAULT_SYMBOLS = ["NVDA", "TSLA", "GOOG", "AAPL", "MSFT", "AMZN", "META", "BABA"];
 
+const CACHE_KEY_HOME = "caldr_news_home_v1";
+const CACHE_KEY_SEARCH_PREFIX = "caldr_news_search_";
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+// Helper for LocalStorage Caching
+const getCache = (key, ignoreTTL = false) => {
+  try {
+    const item = localStorage.getItem(key);
+    if (!item) return null;
+    const parsed = JSON.parse(item);
+    if (ignoreTTL) return parsed.data;
+    if (Date.now() - parsed.timestamp < CACHE_TTL) {
+      return parsed.data;
+    }
+    return null;
+  } catch (e) {
+    return null;
+  }
+};
+
+const setCache = (key, data) => {
+  try {
+    localStorage.setItem(key, JSON.stringify({
+      timestamp: Date.now(),
+      data
+    }));
+  } catch (e) {
+    console.error("Cache save failed", e);
+  }
+};
+
 function timeAgo(ts) {
   try {
     let d;
@@ -103,59 +134,45 @@ const News = () => {
   useEffect(() => {
     let mounted = true;
     async function loadMarket() {
-      setLoadingHome(true);
+      // 1. Try Cache First (Stale-While-Revalidate)
+      const cached = getCache(CACHE_KEY_HOME, true);
+      if (cached) {
+        setMarketNews(cached.marketNews);
+        setDefaultUpdates(cached.defaultUpdates);
+
+        // If strictly fresh, stop here
+        if (getCache(CACHE_KEY_HOME)) {
+          setLoadingHome(false);
+          return;
+        }
+      } else {
+        setLoadingHome(true);
+      }
+
       try {
-        const [enRes, thRes] = await Promise.all([
-          axios.get(`${API_BASE}/api/news/${encodeURIComponent(EN_QUERY)}`, { params: { limit: 20, language: "en", hours: 72 } }),
-          axios.get(`${API_BASE}/api/news/${encodeURIComponent(TH_QUERY)}`, { params: { limit: 20, language: "th", hours: 72 } })
-        ]);
+        // Single aggregated call
+        const res = await axios.get(`${API_BASE}/api/market/home`, { params: { limit: 20 } });
         if (!mounted) return;
-        const enNews = enRes.data?.news || [];
-        const thNews = thRes.data?.news || [];
-        const merged = [...enNews, ...thNews].sort((a, b) => {
-          const da = a.published_at ? new Date(a.published_at) : new Date(0);
-          const db = b.published_at ? new Date(b.published_at) : new Date(0);
-          return db - da;
-        });
 
-        // Load Default Updates (Mocking the "Latest Updates" list with specific tickers)
-        // We fetch quote + news for DEFAULT_SYMBOLS in Parallel
-        const updatesPromises = DEFAULT_SYMBOLS.map(async (sym) => {
-          try {
-            const [qRes, nRes] = await Promise.all([
-              axios.get(`${API_BASE}/api/finnhub/quote/${sym}`),
-              axios.get(`${API_BASE}/api/finnhub/company-news/${sym}`, { params: { hours: 72, limit: 2 } })
-            ]);
+        const { market_news, updates } = res.data;
 
-            const articles = nRes.data?.news || [];
-            return articles.slice(0, 2).map(art => ({
-              ticker: sym,
-              quote: qRes.data,
-              news: art
-            }));
-          } catch (e) {
-            console.error(`Failed to load default data for ${sym}`, e);
-            return [];
-          }
-        });
-
-        const updatesResults = await Promise.all(updatesPromises);
-        const updates = updatesResults.flat();
-
-        const toMs = (v) => typeof v === "number" ? v * 1000 : (new Date(v).getTime() || 0);
-        updates.sort((a, b) => toMs(b.news.published_at) - toMs(a.news.published_at));
-
-        if (mounted) setDefaultUpdates(updates);
-
-        // Merge general news and company updates for "Top Stories"
+        // Transform market_news for frontend (wrap in {news: item})
         const combinedNews = [
-          ...merged.map(item => ({ news: item })), // Wrap general news
-          ...updates // Company news already has { news, ticker, quote }
+          ...(market_news || []).map(item => ({ news: item })),
+          ...(updates || [])
         ];
 
+        const toMs = (v) => typeof v === "number" ? v * 1000 : (new Date(v).getTime() || 0);
         combinedNews.sort((a, b) => toMs(b.news.published_at) - toMs(a.news.published_at));
 
         setMarketNews(combinedNews);
+        setDefaultUpdates(updates || []);
+
+        // Update Cache
+        setCache(CACHE_KEY_HOME, {
+          marketNews: combinedNews,
+          defaultUpdates: updates || []
+        });
 
       } catch (e) {
         console.error("Failed to load market news", e);
@@ -177,7 +194,20 @@ const News = () => {
 
     let mounted = true;
     async function loadSymbol() {
-      setLoadingSearch(true);
+      const cacheKey = `${CACHE_KEY_SEARCH_PREFIX}${selected}`;
+      const cached = getCache(cacheKey, true);
+
+      if (cached) {
+        setQuote(cached.quote);
+        setSymbolNews(cached.symbolNews);
+        if (getCache(cacheKey)) {
+          setLoadingSearch(false);
+          return;
+        }
+      } else {
+        setLoadingSearch(true);
+      }
+
       setErrorSearch("");
 
       // Determine query symbol (append .BK for Thai stocks)
@@ -193,14 +223,27 @@ const News = () => {
           axios.get(`${API_BASE}/api/finnhub/company-news/${encodeURIComponent(querySymbol)}`, { params: { hours: 168, limit: 30 } }),
         ]);
         if (!mounted) return;
-        setQuote(qRes.data || null);
-        setSymbolNews(nRes.data?.news || []);
+
+        const newQuote = qRes.data || null;
+        const newNews = nRes.data?.news || [];
+
+        setQuote(newQuote);
+        setSymbolNews(newNews);
+
+        setCache(cacheKey, {
+          quote: newQuote,
+          symbolNews: newNews
+        });
+
       } catch (e) {
         console.error("Search error:", e);
         if (!mounted) return;
-        setErrorSearch("ไม่สามารถดึงข้อมูลได้ หรือ Symbol ไม่ถูกต้อง");
-        setQuote(null);
-        setSymbolNews([]);
+
+        if (!cached) {
+          setErrorSearch("ไม่สามารถดึงข้อมูลได้ หรือ Symbol ไม่ถูกต้อง");
+          setQuote(null);
+          setSymbolNews([]);
+        }
       } finally {
         if (mounted) setLoadingSearch(false);
       }
