@@ -353,6 +353,15 @@ def init_database():
             )
         """)
 
+        # Authorized sessions table for IP-based persistence
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS authorized_sessions (
+                ip_address TEXT PRIMARY KEY,
+                expires_at TEXT NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         con.commit()
         con.close()
         if needs_recreate:
@@ -3752,6 +3761,28 @@ def get_daily_trend(days: int = 30):
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
+@app.get("/api/auth/check")
+def check_auth_status(request: Request):
+    client_ip = request.client.host
+    try:
+        con = sqlite3.connect(DB_FILE)
+        cur = con.cursor()
+        
+        # Check if IP has valid session
+        cur.execute("SELECT expires_at FROM authorized_sessions WHERE ip_address = ?", (client_ip,))
+        row = cur.fetchone()
+        con.close()
+        
+        if row:
+            expires_at = datetime.fromisoformat(row[0])
+            if datetime.now() < expires_at:
+                return {"authenticated": True}
+        
+        return {"authenticated": False}
+    except Exception as e:
+        print(f"Auth Check Error: {e}")
+        return {"authenticated": False}
+
 @app.post("/api/auth/verify")
 def verify_password(req: AuthRequest, request: Request):
     client_ip = request.client.host
@@ -3788,6 +3819,14 @@ def verify_password(req: AuthRequest, request: Request):
         if req.password == secret:
             # Success: Reset failed attempts
             cur.execute("DELETE FROM auth_security WHERE ip_address = ?", (client_ip,))
+            
+            # Create Session (2 hours)
+            expiry = (datetime.now() + timedelta(hours=2)).isoformat()
+            cur.execute("""
+                INSERT OR REPLACE INTO authorized_sessions (ip_address, expires_at)
+                VALUES (?, ?)
+            """, (client_ip, expiry))
+            
             con.commit()
             con.close()
             return {"success": True}

@@ -10,8 +10,6 @@ import { useMemo } from 'react';
 import { API_CONFIG } from '../config/api';
 
 const API_BASE = API_CONFIG.RATINGS_API; // Unified API
-const STATS_AUTH_KEY = 'stats_auth_expiry';
-const AUTH_DURATION = 2 * 60 * 60 * 1000; // 2 hours in ms
 
 // Memoized Summary Section to prevent re-renders (Restored)
 const StatsSummary = React.memo(({ summary, loading, processedPageData, totalViews }) => {
@@ -189,14 +187,19 @@ const Stats = () => {
         trendTypeRef.current = trendType;
     }, [trendType]);
 
-    // Check for existing session
+    // Check for existing session via IP
     useEffect(() => {
-        const expiry = localStorage.getItem(STATS_AUTH_KEY);
-        if (expiry && parseInt(expiry) > Date.now()) {
-            setIsAuth(true);
-        } else {
-            localStorage.removeItem(STATS_AUTH_KEY);
-        }
+        const checkAuth = async () => {
+            try {
+                const res = await axios.get(`${API_BASE}/api/auth/check`);
+                if (res.data.authenticated) {
+                    setIsAuth(true);
+                }
+            } catch (e) {
+                console.error("Auth check failed", e);
+            }
+        };
+        checkAuth();
     }, []);
 
     // Initial Load + Polling (Summary + Trend)
@@ -263,8 +266,6 @@ const Stats = () => {
             if (response.data.success) {
                 setIsAuth(true);
                 setError("");
-                // Set expiry
-                localStorage.setItem(STATS_AUTH_KEY, (Date.now() + AUTH_DURATION).toString());
             } else {
                 setError(response.data.message || "Incorrect password");
                 setPassword(""); // Clear password on failure
