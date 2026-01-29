@@ -1,15 +1,15 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import axios from 'axios';
-import { trackPageView, trackSearch, trackClick } from "../utils/tracker";
-import { API_CONFIG } from '../config/api';
 
-const API_BASE = API_CONFIG.NEWS_API;
+// Read API base from Vite environment variables. Support multiple names
+// (some projects use VITE_NEWS_API, others VITE_NEWS_API_URL or VITE_API_BASE)
+const API_BASE = import.meta.env.VITE_NEWS_API || import.meta.env.VITE_NEWS_API_URL || import.meta.env.VITE_API_BASE || '';
 const TH_QUERY = "ตลาดหุ้น OR หุ้น OR ดัชนี";
 const EN_QUERY = "stock market";
 const DEFAULT_SYMBOLS = ["NVDA", "TSLA", "GOOG", "AAPL", "MSFT", "AMZN", "META", "BABA"];
-
-const CACHE_KEY_HOME = "caldr_news_home_v1";
-const CACHE_KEY_SEARCH_PREFIX = "caldr_news_search_";
+const CACHE_KEY_HOME = "caldr_news_home_v2";
+const CACHE_KEY_SEARCH_PREFIX = "caldr_news_search_v2_";
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 // Helper for LocalStorage Caching
@@ -57,12 +57,53 @@ function timeAgo(ts) {
   }
 }
 
+// Simple keyword-based sentiment analysis
+const analyzeSentiment = (text) => {
+  if (!text) return "neutral";
+  const lower = text.toLowerCase();
+  // Expanded keywords for better accuracy
+  const positive = [
+    "surge", "jump", "record", "gain", "profit", "bull", "high", "growth", "boost", "beat", "rally", "soar", "up", "buy", "positive", "strong", "outperform", "upgrade", "lead", "leading", "success", "top", "best", "rebound", "climb", "recover",
+    "expansion", "expand", "funding", "invest", "strategic", "launch", "new", "partner", "deal", "agreement", "contract", "win", "won", "approve", "approval", "settled", "solution", "stable", "innovation", "dividend"
+  ];
+  const negative = [
+    "drop", "fall", "plunge", "loss", "crash", "bear", "low", "cut", "miss", "risk", "down", "sell", "negative", "fail", "decline", "weak", "underperform", "downgrade", "warn", "warning", "fear", "panic", "worst", "slide", "tumble", "slump", "retreat", "mixed", "volatile", "uncertain",
+    "scrapped", "shut", "close", "halt", "suspend", "ban", "lawsuit", "sue", "probe", "investigation", "breach", "hack", "attack", "debt", "bankrupt", "layoff", "fire", "terminate", "delay", "struggle",
+    "punish", "penalty", "fine", "slow", "slower", "pressure", "concern", "problem", "trouble", "hard", "tough", "hurt", "damage", "hit", "weigh", "impact"
+  ];
+  
+  const posCount = positive.filter(w => lower.includes(w)).length;
+  const negCount = negative.filter(w => lower.includes(w)).length;
+  
+  if (posCount > negCount) return "positive";
+  if (negCount > posCount) return "negative";
+  return "neutral";
+};
+
 const NewsCard = ({ ticker, quote, news }) => {
   const isPositive = quote && quote.change_pct >= 0;
+  const textSentiment = analyzeSentiment(news.title + " " + news.summary);
+
+  // Logic to resolve conflict between Price and Text Sentiment
+  let sentiment = textSentiment;
+  if (quote) {
+    // If Stock is Green but Text says Negative -> Override to Neutral (or Positive if weak negative)
+    // This prevents the "Green Price / Red Border" confusion
+    if (isPositive && textSentiment === "negative") {
+      sentiment = "neutral"; 
+    }
+    // If Stock is Red but Text says Positive -> Override to Neutral
+    if (!isPositive && textSentiment === "positive") {
+      sentiment = "neutral";
+    }
+  }
+
+  // Define classes based on sentiment
+  const containerClasses = "bg-white rounded-xl border border-gray-200 p-6 hover:shadow-md transition-shadow flex flex-col md:flex-row gap-6 items-start";
 
   return (
-    <a href={news.url} target="_blank" rel="noreferrer" className="block group" onClick={() => trackClick('news_article', { title: news.title, url: news.url, ticker: ticker || 'market' })}>
-      <div className="bg-white rounded-xl border border-gray-200 p-6 hover:shadow-md transition-shadow flex flex-col md:flex-row gap-6 items-start">
+    <a href={news.url} target="_blank" rel="noreferrer" className="block group">
+      <div className={containerClasses}>
         {ticker && quote && (
           <div className="flex-shrink-0 w-full md:w-[120px] bg-[#F9FAFB] rounded-lg border border-gray-100 p-3 flex flex-col items-center justify-center text-center gap-2">
             <div className="w-10 h-10 rounded-full bg-white/80 flex items-center justify-center overflow-hidden">
@@ -87,8 +128,14 @@ const NewsCard = ({ ticker, quote, news }) => {
           <p className="text-sm text-gray-600 mb-3 line-clamp-2">
             {news.summary}
           </p>
-          <div className="text-xs text-gray-400">
-            {timeAgo(news.published_at)}
+          <div className="flex items-center gap-2 text-xs text-gray-500">
+            {news.source && (
+              <span className="inline-flex items-center px-2 py-0.5 rounded bg-gray-100 text-gray-800 font-medium">
+                {news.source}
+              </span>
+            )}
+            {news.source && <span>•</span>}
+            <span>{timeAgo(news.published_at)}</span>
           </div>
         </div>
       </div>
@@ -97,8 +144,11 @@ const NewsCard = ({ ticker, quote, news }) => {
 };
 
 const News = () => {
-  const [search, setSearch] = useState("");
-  const [selected, setSelected] = useState("");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selected = searchParams.get("symbol") || "";
+
+  const [search, setSearch] = useState(selected);
+  // const [selected, setSelected] = useState(""); 
   const [allSymbols, setAllSymbols] = useState([]);
   const [suggestions, setSuggestions] = useState([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -114,6 +164,11 @@ const News = () => {
   const [loadingSearch, setLoadingSearch] = useState(false);
   const [errorSearch, setErrorSearch] = useState("");
 
+  // Sync search input with URL selected symbol
+  useEffect(() => {
+    setSearch(selected);
+  }, [selected]);
+
   // Fetch available symbols for suggestions
   useEffect(() => {
     async function loadSymbols() {
@@ -127,7 +182,6 @@ const News = () => {
       }
     }
     loadSymbols();
-    trackPageView('news');
   }, []);
 
   // Fetch Market News (Top Stories)
@@ -135,44 +189,80 @@ const News = () => {
     let mounted = true;
     async function loadMarket() {
       // 1. Try Cache First (Stale-While-Revalidate)
-      const cached = getCache(CACHE_KEY_HOME, true);
+      const cached = getCache(CACHE_KEY_HOME, true); // Get stale data if available
       if (cached) {
         setMarketNews(cached.marketNews);
         setDefaultUpdates(cached.defaultUpdates);
-
-        // If strictly fresh, stop here
-        if (getCache(CACHE_KEY_HOME)) {
-          setLoadingHome(false);
-          return;
+        // If cache is fresh, stop here (optional: can always revalidate if you want "live" feel)
+        const isFresh = getCache(CACHE_KEY_HOME); 
+        if (isFresh) {
+            setLoadingHome(false);
+            return;
         }
+        // If stale, we continue to fetch but don't show full loading spinner if we have data
       } else {
         setLoadingHome(true);
       }
 
       try {
-        // Single aggregated call
-        const res = await axios.get(`${API_BASE}/api/market/home`, { params: { limit: 20 } });
+        const [enRes, thRes] = await Promise.all([
+          axios.get(`${API_BASE}/api/news/${encodeURIComponent(EN_QUERY)}`, { params: { limit: 20, language: "en", hours: 72 } }),
+          axios.get(`${API_BASE}/api/news/${encodeURIComponent(TH_QUERY)}`, { params: { limit: 20, language: "th", hours: 72 } })
+        ]);
         if (!mounted) return;
+        const enNews = enRes.data?.news || [];
+        const thNews = thRes.data?.news || [];
+        const merged = [...enNews, ...thNews].sort((a, b) => {
+          const da = a.published_at ? new Date(a.published_at) : new Date(0);
+          const db = b.published_at ? new Date(b.published_at) : new Date(0);
+          return db - da;
+        });
 
-        const { market_news, updates } = res.data;
+        // Load Default Updates (Mocking the "Latest Updates" list with specific tickers)
+        // We fetch quote + news for DEFAULT_SYMBOLS in Parallel
+        const updatesPromises = DEFAULT_SYMBOLS.map(async (sym) => {
+          try {
+            const [qRes, nRes] = await Promise.all([
+              axios.get(`${API_BASE}/api/finnhub/quote/${sym}`),
+              axios.get(`${API_BASE}/api/finnhub/company-news/${sym}`, { params: { hours: 72, limit: 2 } })
+            ]);
 
-        // Transform market_news for frontend (wrap in {news: item})
-        const combinedNews = [
-          ...(market_news || []).map(item => ({ news: item })),
-          ...(updates || [])
-        ];
+            const articles = nRes.data?.news || [];
+            return articles.slice(0, 2).map(art => ({
+              ticker: sym,
+              quote: qRes.data,
+              news: art
+            }));
+          } catch (e) {
+            console.error(`Failed to load default data for ${sym}`, e);
+            return [];
+          }
+        });
+
+        const updatesResults = await Promise.all(updatesPromises);
+        const updates = updatesResults.flat();
 
         const toMs = (v) => typeof v === "number" ? v * 1000 : (new Date(v).getTime() || 0);
+        updates.sort((a, b) => toMs(b.news.published_at) - toMs(a.news.published_at));
+
+        // Merge general news and company updates for "Top Stories"
+        const combinedNews = [
+          ...merged.map(item => ({ news: item })), // Wrap general news
+          ...updates // Company news already has { news, ticker, quote }
+        ];
+
         combinedNews.sort((a, b) => toMs(b.news.published_at) - toMs(a.news.published_at));
 
-        setMarketNews(combinedNews);
-        setDefaultUpdates(updates || []);
-
-        // Update Cache
-        setCache(CACHE_KEY_HOME, {
-          marketNews: combinedNews,
-          defaultUpdates: updates || []
-        });
+        if (mounted) {
+          setDefaultUpdates(updates);
+          setMarketNews(combinedNews);
+          
+          // Save to Cache
+          setCache(CACHE_KEY_HOME, {
+            marketNews: combinedNews,
+            defaultUpdates: updates
+          });
+        }
 
       } catch (e) {
         console.error("Failed to load market news", e);
@@ -194,20 +284,24 @@ const News = () => {
 
     let mounted = true;
     async function loadSymbol() {
+      // 1. Try Cache First (Stale-While-Revalidate)
       const cacheKey = `${CACHE_KEY_SEARCH_PREFIX}${selected}`;
-      const cached = getCache(cacheKey, true);
-
+      const cached = getCache(cacheKey, true); // Get stale data
       if (cached) {
         setQuote(cached.quote);
         setSymbolNews(cached.symbolNews);
+        setErrorSearch("");
+        
+        // If fresh, stop
         if (getCache(cacheKey)) {
-          setLoadingSearch(false);
-          return;
+            setLoadingSearch(false);
+            return;
         }
+        // If stale, keep fetching in background
       } else {
         setLoadingSearch(true);
       }
-
+      
       setErrorSearch("");
 
       // Determine query symbol (append .BK for Thai stocks)
@@ -223,13 +317,14 @@ const News = () => {
           axios.get(`${API_BASE}/api/finnhub/company-news/${encodeURIComponent(querySymbol)}`, { params: { hours: 168, limit: 30 } }),
         ]);
         if (!mounted) return;
-
+        
         const newQuote = qRes.data || null;
         const newNews = nRes.data?.news || [];
 
         setQuote(newQuote);
         setSymbolNews(newNews);
 
+        // Save to Cache
         setCache(cacheKey, {
           quote: newQuote,
           symbolNews: newNews
@@ -238,11 +333,12 @@ const News = () => {
       } catch (e) {
         console.error("Search error:", e);
         if (!mounted) return;
-
+        
+        // Only show error if we don't have cached data displayed
         if (!cached) {
-          setErrorSearch("ไม่สามารถดึงข้อมูลได้ หรือ Symbol ไม่ถูกต้อง");
-          setQuote(null);
-          setSymbolNews([]);
+            setErrorSearch("ไม่สามารถดึงข้อมูลได้ หรือ Symbol ไม่ถูกต้อง");
+            setQuote(null);
+            setSymbolNews([]);
         }
       } finally {
         if (mounted) setLoadingSearch(false);
@@ -250,9 +346,22 @@ const News = () => {
     }
     loadSymbol();
     return () => { mounted = false; };
-  }, [selected]);
+  }, [selected, allSymbols]); // Added allSymbols dependency for safe match check
 
   const topStory = useMemo(() => marketNews.find(item => item.ticker), [marketNews]);
+  const topStorySentiment = useMemo(() => {
+    if (!topStory) return "neutral";
+    const textSentiment = analyzeSentiment(topStory.news.title + " " + topStory.news.summary);
+    
+    // Conflict Resolution for Top Story
+    if (topStory.quote) {
+      const isPositive = topStory.quote.change_pct >= 0;
+      if (isPositive && textSentiment === "negative") return "neutral";
+      if (!isPositive && textSentiment === "positive") return "neutral";
+    }
+    
+    return textSentiment;
+  }, [topStory]);
 
 
   const onSearchKey = (e) => {
@@ -264,20 +373,19 @@ const News = () => {
 
       const raw = search.trim();
       if (!raw) {
-        setSelected("");
+        setSearchParams({});
         setErrorSearch("");
         return;
       }
       const isValid = /^[A-Za-z0-9]+$/.test(raw);
       if (!isValid) {
-        setSelected("");
+        setSearchParams({});
         setErrorSearch("กรุณากรอกรหัส Underlying หรือ Ticker เป็นตัวอักษร/ตัวเลขเท่านั้น");
         return;
       }
       setErrorSearch("");
-      setSelected(raw.toUpperCase());
+      setSearchParams({ symbol: raw.toUpperCase() });
       setShowSuggestions(false);
-      trackSearch(raw.toUpperCase());
     }
   };
 
@@ -313,15 +421,14 @@ const News = () => {
 
   const selectSuggestion = (s) => {
     setSearch(s.symbol);
-    setSelected(s.symbol);
+    setSearchParams({ symbol: s.symbol });
     setShowSuggestions(false);
     setErrorSearch("");
-    trackSearch(s.symbol);
   };
 
   const clearSearch = () => {
     setSearch("");
-    setSelected("");
+    setSearchParams({});
     setSuggestions(allSymbols.slice(0, 100)); // Reset to default suggestions
     setShowSuggestions(true); // Keep open or close? Usually close if cleared via X, but maybe user wants to search again.
     // Let's close it if they click X, or maybe keep it open if they want to pick another?
@@ -382,10 +489,10 @@ const News = () => {
       <div className="w-full max-w-[1248px] px-4 md:px-8 flex flex-col h-full py-10">
 
         {/* Header Section */}
-        <div className="flex flex-col md:flex-row md:items-start justify-between gap-6 mb-8">
+        <div className="flex flex-col md:flex-row md:items-start justify-between gap-3 sm:gap-6 mb-4 sm:mb-8">
           <div>
-            <h1 className="text-3xl font-bold mb-2 text-[#0B102A]">News</h1>
-            <p className="text-[#6B6B6B] text-sm">Latest market updates, earnings reports, and insights for Underlying Assets</p>
+            <h1 className="text-2xl sm:text-3xl font-bold mb-2 text-[#0B102A]">News</h1>
+            <p className="text-[#6B6B6B] text-xs sm:text-sm">Latest market updates, earnings reports, and insights for Underlying Assets</p>
           </div>
           <div className="relative w-full md:w-[300px]">
             <input
@@ -475,9 +582,9 @@ const News = () => {
                 {loadingHome ? (
                   <div className="animate-pulse h-48 bg-gray-200 rounded-2xl" />
                 ) : topStory ? (
-                  <a href={topStory.news.url} target="_blank" rel="noreferrer" className="block group" onClick={() => trackClick('news_top_story', { title: topStory.news.title, url: topStory.news.url, ticker: topStory.ticker })}>
-                    <div className="bg-[#0B102A] rounded-2xl px-8 py-6 text-white relative overflow-hidden shadow-lg">
-                      <div className="relative z-10 max-w-3xl">
+                  <a href={topStory.news.url} target="_blank" rel="noreferrer" className="block group">
+                    <div className="bg-[#0B102A] rounded-2xl px-5 sm:px-7 md:px-8 py-4 sm:py-5 md:py-6 text-white relative overflow-hidden shadow-lg">
+                      <div className="relative z-10 max-w-3xl pr-20 sm:pr-28 md:pr-36">
                         {topStory.ticker && topStory.quote && (
                           <div className="flex items-center gap-3 mb-3">
                             <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center overflow-hidden">
@@ -495,15 +602,30 @@ const News = () => {
                         <h3 className="text-lg md:text-xl font-semibold leading-snug mb-2 group-hover:text-blue-200 transition-colors">
                           {topStory.news.title}
                         </h3>
-                        <div className="text-xs text-blue-200/80">
-                          {timeAgo(topStory.news.published_at)}
+                        {topStory.news.summary && (
+                          <p className="text-sm text-blue-100/80 mb-3 line-clamp-2">
+                            {topStory.news.summary}
+                          </p>
+                        )}
+                        <div className="flex items-center gap-2 text-xs text-blue-200/80">
+                          {topStory.news.source && (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded bg-white/10 text-blue-100 font-medium border border-white/10">
+                              {topStory.news.source}
+                            </span>
+                          )}
+                          {topStory.news.source && <span>•</span>}
+                          <span>{timeAgo(topStory.news.published_at)}</span>
                         </div>
                       </div>
-                      <div className="absolute right-8 top-1/2 transform -translate-y-1/2">
+                      <div className="absolute right-4 sm:right-6 md:right-8 top-1/2 transform -translate-y-1/2">
                         {topStory.quote && topStory.quote.logo_url ? (
-                          <img src={topStory.quote.logo_url} alt="background" className="w-[96px] h-[96px] object-contain" />
+                          <img
+                            src={topStory.quote.logo_url}
+                            alt="background"
+                            className="w-[64px] h-[64px] sm:w-[80px] sm:h-[80px] md:w-[96px] md:h-[96px] object-contain"
+                          />
                         ) : (
-                          <i className="bi bi-newspaper text-[72px] md:text-[96px]"></i>
+                          <i className="bi bi-newspaper text-[48px] sm:text-[72px] md:text-[96px]"></i>
                         )}
                       </div>
                     </div>
