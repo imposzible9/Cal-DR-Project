@@ -6,6 +6,7 @@ import httpx
 import os
 import time
 import asyncio
+import re
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from dotenv import load_dotenv
@@ -34,6 +35,66 @@ app.add_middleware(
 
 _client: httpx.AsyncClient | None = None
 _news_cache: dict[str, dict] = {}
+
+def _is_valid_source(item: dict) -> bool:
+    """Filter out unwanted sources like Yahoo Finance"""
+    src = (item.get("source") or "").lower()
+    url = (item.get("url") or "").lower()
+    
+    # Filter out Yahoo
+    if "yahoo" in src or "yahoo" in url:
+        return True # Allow Yahoo, but we will mix it later
+        
+    return True
+
+def _mix_news_sources(items: list[dict], limit: int) -> list[dict]:
+    """
+    Mix Yahoo news with other sources.
+    Strategy: Interleave 2 non-Yahoo items with 1 Yahoo item to ensure diversity.
+    """
+    yahoo_items = []
+    other_items = []
+    
+    seen_urls = set()
+    unique_items = []
+    
+    # Deduplicate
+    for item in items:
+        url = (item.get("url") or "").lower()
+        if url in seen_urls:
+            continue
+        seen_urls.add(url)
+        unique_items.append(item)
+        
+    for item in unique_items:
+        src = (item.get("source") or "").lower()
+        url = (item.get("url") or "").lower()
+        if "yahoo" in src or "yahoo" in url:
+            yahoo_items.append(item)
+        else:
+            other_items.append(item)
+            
+    # Interleave: 2 others, 1 yahoo
+    result = []
+    y_idx = 0
+    o_idx = 0
+    
+    while len(result) < limit and (y_idx < len(yahoo_items) or o_idx < len(other_items)):
+        # Add up to 2 others
+        for _ in range(2):
+            if o_idx < len(other_items):
+                result.append(other_items[o_idx])
+                o_idx += 1
+                if len(result) >= limit: break
+        
+        if len(result) >= limit: break
+        
+        # Add 1 yahoo
+        if y_idx < len(yahoo_items):
+            result.append(yahoo_items[y_idx])
+            y_idx += 1
+            
+    return result
 
 FALLBACK_SYMBOLS = [
     {"symbol": "AAPL", "name": "Apple Inc.", "logo": "https://s3-symbol-logo.tradingview.com/apple.svg"},
@@ -149,20 +210,23 @@ async def fetch_news(symbol: str, limit: int, language: str | None, hours: int, 
     normalized = []
     for a in articles:
         source = a.get("source") or {}
-        normalized.append(
-            {
-                "title": a.get("title"),
-                "summary": a.get("description") or a.get("content"),
-                "published_at": a.get("publishedAt"),
-                "source": source.get("name"),
-                "url": a.get("url"),
-                "image_url": a.get("urlToImage"),
-            }
-        )
+        item = {
+            "title": a.get("title"),
+            "summary": a.get("description") or a.get("content"),
+            "published_at": a.get("publishedAt"),
+            "source": source.get("name"),
+            "url": a.get("url"),
+            "image_url": a.get("urlToImage"),
+        }
+        if _is_valid_source(item):
+            normalized.append(item)
 
-    return normalized
+    if not normalized:
+        return await fetch_google_news(search_query, limit, language, hours, country)
 
-async def fetch_google_news(query: str, limit: int, language: str | None, hours: int, country: str | None):
+    return _mix_news_sources(normalized, limit)
+
+async def _fetch_google_rss_items(query: str, limit: int, language: str | None, hours: int, country: str | None):
     assert _client is not None
     hl = "en-US"
     gl = "US"
@@ -178,49 +242,86 @@ async def fetch_google_news(query: str, limit: int, language: str | None, hours:
         gl = "TH"
         ceid = "TH:th"
     params = {"q": query, "hl": hl, "gl": gl, "ceid": ceid}
-    r = await _client.get("https://news.google.com/rss/search", params=params)
-    if r.status_code != 200:
-        return []
-    text = r.text
+    
     try:
+        r = await _client.get("https://news.google.com/rss/search", params=params)
+        if r.status_code != 200:
+            return []
+        text = r.text
+        
         import xml.etree.ElementTree as ET
         root = ET.fromstring(text)
-    except Exception:
-        return []
-    channel = root.find("channel")
-    items = channel.findall("item") if channel is not None else []
-    normalized = []
-    since_dt = None
-    if hours and hours > 0:
-        since_dt = datetime.now(timezone.utc) - timedelta(hours=hours)
-    for it in items:
-        title = (it.findtext("title") or "").strip()
-        link = (it.findtext("link") or "").strip()
-        pub = it.findtext("pubDate")
-        source_el = it.find("source")
-        source = source_el.text.strip() if source_el is not None and source_el.text else None
-        published_at = pub
-        if pub:
-            try:
-                dt = parsedate_to_datetime(pub)
-                if dt and since_dt and dt.tzinfo:
-                    if dt < since_dt:
-                        continue
-            except Exception:
-                pass
-        normalized.append(
-            {
+        channel = root.find("channel")
+        items = channel.findall("item") if channel is not None else []
+        
+        normalized = []
+        since_dt = None
+        if hours and hours > 0:
+            since_dt = datetime.now(timezone.utc) - timedelta(hours=hours)
+            
+        for it in items:
+            title = (it.findtext("title") or "").strip()
+            link = (it.findtext("link") or "").strip()
+            pub = it.findtext("pubDate")
+            
+            # Extract description
+            raw_desc = (it.findtext("description") or "").strip()
+            summary = None
+            if raw_desc:
+                # Remove HTML tags (Google News RSS often has <a>...</a>)
+                summary = re.sub(r'<[^>]+>', '', raw_desc).strip()
+                # Decode HTML entities if present (basic cleanup)
+                summary = summary.replace("&nbsp;", " ").replace("&quot;", '"').replace("&apos;", "'").replace("&amp;", "&")
+
+            source_el = it.find("source")
+            source = source_el.text.strip() if source_el is not None and source_el.text else None
+            published_at = pub
+            if pub:
+                try:
+                    dt = parsedate_to_datetime(pub)
+                    if dt and since_dt and dt.tzinfo:
+                        if dt < since_dt:
+                            continue
+                except Exception:
+                    pass
+            item = {
                 "title": title or None,
-                "summary": None,
+                "summary": summary,
                 "published_at": published_at,
                 "source": source,
                 "url": link or None,
                 "image_url": None,
             }
-        )
-        if len(normalized) >= limit:
-            break
-    return normalized
+            if _is_valid_source(item):
+                normalized.append(item)
+                # Collect enough items
+                if len(normalized) >= limit * 2:
+                    break
+        return normalized
+    except Exception as e:
+        print(f"Google RSS error for {query}: {e}")
+        return []
+
+async def fetch_google_news(query: str, limit: int, language: str | None, hours: int, country: str | None):
+    # Parallel fetch strategy to ensure diversity
+    # 1. Fetch mostly non-Yahoo sources
+    # 2. Fetch Yahoo sources (if needed)
+    
+    # We add -site:yahoo.com to exclude Yahoo from the "Others" query
+    # We add site:finance.yahoo.com to specifically get Yahoo for the "Yahoo" query
+    
+    query_others = f"{query} -site:yahoo.com -site:finance.yahoo.com"
+    query_yahoo = f"{query} site:finance.yahoo.com"
+    
+    t_others = _fetch_google_rss_items(query_others, limit, language, hours, country)
+    t_yahoo = _fetch_google_rss_items(query_yahoo, limit, language, hours, country)
+    
+    items_others, items_yahoo = await asyncio.gather(t_others, t_yahoo)
+    
+    # Combine lists
+    all_items = items_others + items_yahoo
+    
+    return _mix_news_sources(all_items, limit)
 
 
 async def fetch_quote(symbol: str):
@@ -274,7 +375,7 @@ async def get_news(
     hours: int = Query(24, ge=1, le=168),
     country: str | None = Query(None, description="Two-letter country code (e.g., us, gb)"),
 ):
-    key = f"news-v3|{symbol.upper()}|{limit}|{language or ''}|{hours}|{country or ''}"
+    key = f"news-v5|{symbol.upper()}|{limit}|{language or ''}|{hours}|{country or ''}"
     cached = _cache_get(key)
     if cached is not None:
         return {
@@ -408,7 +509,7 @@ async def get_company_news(
     country: str | None = Query(None, description="Two-letter country code (e.g., us, gb)"),
 ):
     # Cache check
-    key = f"company_news|{symbol.upper()}|{hours}|{limit}|{country}"
+    key = f"company_news_v3|{symbol.upper()}|{hours}|{limit}|{country}"
     cached = _cache_get(key)
     if cached:
         return cached
@@ -438,22 +539,39 @@ async def get_company_news(
     items = r.json() or []
     # Normalize structure similar to NewsAPI
     normalized = []
-    for a in items[:limit]:
-        normalized.append(
-            {
-                "title": a.get("headline"),
-                "summary": a.get("summary"),
-                "published_at": a.get("datetime"),
-                "source": a.get("source"),
-                "url": a.get("url"),
-                "image_url": a.get("image"),
-            }
-        )
+    for a in items:
+        item = {
+            "title": a.get("headline"),
+            "summary": a.get("summary"),
+            "published_at": a.get("datetime"),
+            "source": a.get("source"),
+            "url": a.get("url"),
+            "image_url": a.get("image"),
+        }
+        if _is_valid_source(item):
+            normalized.append(item)
+            # Collect more for mixing
+            if len(normalized) >= limit * 2:
+                break
+    
+    # Check diversity: If we have too few non-Yahoo items, supplement with Google News
+    non_yahoo_count = sum(1 for item in normalized if "yahoo" not in (item.get("source") or "").lower())
+    if non_yahoo_count < 3:
+        print(f"Low diversity for {symbol} from Finnhub ({non_yahoo_count} non-Yahoo). Supplementing with Google News.")
+        try:
+            query_others = f"{symbol} stock -site:yahoo.com -site:finance.yahoo.com"
+            google_items = await _fetch_google_rss_items(query_others, limit, "en", hours, country)
+            normalized.extend(google_items)
+        except Exception as e:
+            print(f"Error supplementing news: {e}")
+
+    # Mix sources
+    final_items = _mix_news_sources(normalized, limit)
     
     result = {
         "symbol": symbol.upper(),
-        "total": len(normalized),
-        "news": normalized,
+        "total": len(final_items),
+        "news": final_items,
     }
     
     _cache_set(key, result, ttl=NEWS_TTL_SECONDS)
@@ -509,17 +627,34 @@ async def get_stock_overview(
         if r_news.status_code != 200:
             raise HTTPException(r_news.status_code, f"Finnhub news error: {r_news.text[:200]}")
         items = r_news.json() or []
-        for a in items[:limit]:
-            news_items.append(
-                {
-                    "title": a.get("headline"),
-                    "summary": a.get("summary"),
-                    "published_at": a.get("datetime"),
-                    "source": a.get("source"),
-                    "url": a.get("url"),
-                    "image_url": a.get("image"),
-                }
-            )
+        for a in items:
+            item = {
+                "title": a.get("headline"),
+                "summary": a.get("summary"),
+                "published_at": a.get("datetime"),
+                "source": a.get("source"),
+                "url": a.get("url"),
+                "image_url": a.get("image"),
+            }
+            if _is_valid_source(item):
+                news_items.append(item)
+                # Collect more to allow mixing
+                if len(news_items) >= limit * 2:
+                    break
+        
+        # Check diversity and supplement if needed
+        non_yahoo_count = sum(1 for item in news_items if "yahoo" not in (item.get("source") or "").lower())
+        if non_yahoo_count < 3:
+            print(f"Low diversity for {symbol} in Overview. Supplementing.")
+            try:
+                query_others = f"{symbol} stock -site:yahoo.com -site:finance.yahoo.com"
+                google_items = await _fetch_google_rss_items(query_others, limit, "en", hours, country)
+                news_items.extend(google_items)
+            except Exception as e:
+                print(f"Error supplementing overview news: {e}")
+
+        # Mix sources
+        news_items = _mix_news_sources(news_items, limit)
     else:
         items = await fetch_news(symbol_upper, limit, language or "en", hours, country)
         news_items = items

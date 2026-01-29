@@ -8,8 +8,8 @@ const API_BASE = import.meta.env.VITE_NEWS_API || import.meta.env.VITE_NEWS_API_
 const TH_QUERY = "ตลาดหุ้น OR หุ้น OR ดัชนี";
 const EN_QUERY = "stock market";
 const DEFAULT_SYMBOLS = ["NVDA", "TSLA", "GOOG", "AAPL", "MSFT", "AMZN", "META", "BABA"];
-const CACHE_KEY_HOME = "caldr_news_home_v1";
-const CACHE_KEY_SEARCH_PREFIX = "caldr_news_search_";
+const CACHE_KEY_HOME = "caldr_news_home_v2";
+const CACHE_KEY_SEARCH_PREFIX = "caldr_news_search_v2_";
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 // Helper for LocalStorage Caching
@@ -602,6 +602,11 @@ const News = () => {
                         <h3 className="text-lg md:text-xl font-semibold leading-snug mb-2 group-hover:text-blue-200 transition-colors">
                           {topStory.news.title}
                         </h3>
+                        {topStory.news.summary && (
+                          <p className="text-sm text-blue-100/80 mb-3 line-clamp-2">
+                            {topStory.news.summary}
+                          </p>
+                        )}
                         <div className="flex items-center gap-2 text-xs text-blue-200/80">
                           {topStory.news.source && (
                             <span className="inline-flex items-center px-2 py-0.5 rounded bg-white/10 text-blue-100 font-medium border border-white/10">
