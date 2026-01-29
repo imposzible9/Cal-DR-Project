@@ -7,6 +7,9 @@ import uvicorn
 import asyncio
 import json
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 print("--- RELOADED RATINGS API (UPDATED) ---")
 import re
 import random
@@ -43,6 +46,10 @@ MAX_CONCURRENCY = 4
 REQUEST_TIMEOUT = 15      
 UPDATE_INTERVAL_SECONDS = 180 
 BATCH_SLEEP_SECONDS = 1.0
+
+
+class AuthRequest(BaseModel):
+    password: str
 
 
 
@@ -334,6 +341,16 @@ def init_database():
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_user_behavior_timestamp 
             ON user_behavior(timestamp DESC)
+        """)
+
+        # Auth security table for IP blocking
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS auth_security (
+                ip_address TEXT PRIMARY KEY,
+                failed_attempts INTEGER DEFAULT 0,
+                blocked_until TEXT,
+                last_attempt TEXT
+            )
         """)
 
         con.commit()
@@ -3540,20 +3557,28 @@ def get_weekly_trend(weeks: int = 12):
         con.row_factory = sqlite3.Row
         cur = con.cursor()
         
-        # Calculate start date
-        start_date = (datetime.now() - timedelta(weeks=weeks)).strftime("%Y-%m-%d")
+        # Calculate start date (Align to previous Sunday)
+        today = datetime.now()
+        # weekday(): Mon=0, Sun=6. We want to subtract enough to get to last Sunday.
+        # If today is Sun(6), -0. If Mon(0), -1. 
+        # Actually in python weekday(): Mon=0 ... Sun=6.
+        # To get to Sunday: (today.weekday() + 1) % 7 is days since Sunday.
+        days_since_sunday = (today.weekday() + 1) % 7
+        this_sunday = today - timedelta(days=days_since_sunday)
+        start_date_dt = this_sunday - timedelta(weeks=weeks)
+        start_date = start_date_dt.strftime("%Y-%m-%d")
         
-        # Query: Group by Week AND Page
+        # Query: Group by Week Start (Sunday)
+        # strftime('%w', timestamp) returns 0 for Sunday, 6 for Saturday
         cur.execute("""
-            SELECT strftime('%Y-%W', timestamp) as week_id,
-                   MIN(substr(timestamp, 1, 10)) as start_date,
+            SELECT date(timestamp, '-' || strftime('%w', timestamp) || ' days') as week_start,
                    page_path,
                    COUNT(DISTINCT session_id) as users
             FROM user_behavior
             WHERE substr(timestamp, 1, 10) >= ?
               AND page_path NOT LIKE '%stats%'
-            GROUP BY week_id, page_path
-            ORDER BY week_id ASC
+            GROUP BY week_start, page_path
+            ORDER BY week_start ASC
         """, (start_date,))
         
         rows = cur.fetchall()
@@ -3562,19 +3587,28 @@ def get_weekly_trend(weeks: int = 12):
         weeks_data = {}
         
         for row in rows:
-            week_id = row["week_id"]
-            if week_id not in weeks_data:
+            week_start = row["week_start"]
+            if week_start not in weeks_data:
                 # Format date
                 try:
-                    dt = datetime.strptime(row["start_date"], "%Y-%m-%d")
+                    dt = datetime.strptime(week_start, "%Y-%m-%d")
                     end_dt = dt + timedelta(days=6)
-                    display_date = f"{dt.strftime('%d')} - {end_dt.strftime('%d %b %y')}"
-                except:
-                    display_date = week_id
                     
-                weeks_data[week_id] = {
+                    # If current week, max display date is today
+                    today_now = datetime.now()
+                    if dt.date() <= today_now.date() <= end_dt.date():
+                        display_end = today_now
+                    else:
+                        display_end = end_dt
+                        
+                    # Format: 25 Jan - 31 Jan 26
+                    display_date = f"{dt.strftime('%d %b')} - {display_end.strftime('%d %b %y')}"
+                except:
+                    display_date = week_start
+                    
+                weeks_data[week_start] = {
                     "date": display_date,
-                    "full_date": row["start_date"],
+                    "full_date": week_start,
                     "total_users": 0
                 }
             
@@ -3596,14 +3630,85 @@ def get_weekly_trend(weeks: int = 12):
                 page_name = parts[-1].capitalize() if parts else 'Unknown'
 
             # Add to week data
-            if page_name not in weeks_data[week_id]:
-                weeks_data[week_id][page_name] = 0
+            if page_name not in weeks_data[week_start]:
+                weeks_data[week_start][page_name] = 0
             
-            weeks_data[week_id][page_name] += row["users"]
-            weeks_data[week_id]["total_users"] += row["users"]
+            weeks_data[week_start][page_name] += row["users"]
+            weeks_data[week_start]["total_users"] += row["users"]
 
         con.close()
         return list(weeks_data.values())
+
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.get("/api/analytics/monthly-trend")
+def get_monthly_trend(months: int = 6):
+    try:
+        con = sqlite3.connect(DB_FILE)
+        con.row_factory = sqlite3.Row
+        cur = con.cursor()
+        
+        # Calculate start date - 6 months ago (approx)
+        # Using 30 days * months as approximation, or use dateutil if available (not standard lib)
+        # Standard lib simple way:
+        start_date = (datetime.now() - timedelta(days=months*30)).strftime("%Y-%m-%d")
+        
+        # Query: Group by Month (YYYY-MM)
+        cur.execute("""
+            SELECT strftime('%Y-%m', timestamp) as month_id,
+                   page_path,
+                   COUNT(DISTINCT session_id) as users
+            FROM user_behavior
+            WHERE substr(timestamp, 1, 10) >= ?
+              AND page_path NOT LIKE '%stats%'
+            GROUP BY month_id, page_path
+            ORDER BY month_id ASC
+        """, (start_date,))
+        
+        rows = cur.fetchall()
+        
+        months_data = {}
+        
+        for row in rows:
+            month_id = row["month_id"] # YYYY-MM
+            if month_id not in months_data:
+                # Format: "Jan 2026"
+                try:
+                    dt = datetime.strptime(month_id, "%Y-%m")
+                    display_date = dt.strftime("%b %Y")
+                except:
+                    display_date = month_id
+                
+                months_data[month_id] = {
+                    "date": display_date,
+                    "full_date": month_id,
+                    "total_users": 0
+                }
+                
+            # Page name normalization (Same logic)
+            path = row["page_path"].lower().rstrip('/')
+            if not path.startswith('/'): path = '/' + path
+            
+            if path in ['/', '/home']: page_name = 'Home'
+            elif path == '/news': page_name = 'News'
+            elif 'drlist' in path: page_name = 'DR List'
+            elif 'caldr' in path: page_name = 'CalDR'
+            elif 'suggestion' in path: page_name = 'Suggestion'
+            elif 'calendar' in path: page_name = 'Calendar'
+            elif 'view-docs' in path: page_name = 'Documentation'
+            else:
+                parts = path.split('/')
+                page_name = parts[-1].capitalize() if parts else 'Unknown'
+
+            if page_name not in months_data[month_id]:
+                months_data[month_id][page_name] = 0
+                
+            months_data[month_id][page_name] += row["users"]
+            months_data[month_id]["total_users"] += row["users"]
+            
+        con.close()
+        return list(months_data.values())
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
@@ -3646,6 +3751,82 @@ def get_daily_trend(days: int = 30):
         return data
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+@app.post("/api/auth/verify")
+def verify_password(req: AuthRequest, request: Request):
+    client_ip = request.client.host
+    
+    try:
+        con = sqlite3.connect(DB_FILE)
+        cur = con.cursor()
+        
+        # Check if IP is blocked
+        cur.execute("SELECT failed_attempts, blocked_until FROM auth_security WHERE ip_address = ?", (client_ip,))
+        row = cur.fetchone()
+        
+        if row:
+            failed = row[0]
+            blocked_until = row[1]
+            
+            if blocked_until:
+                block_time = datetime.fromisoformat(blocked_until)
+                if datetime.now() < block_time:
+                    remaining = block_time - datetime.now()
+                    days = remaining.days
+                    return {
+                        "success": False, 
+                        "message": f"Too many failed attempts. You are blocked. Please try again in {days + 1} days."
+                    }
+                else:
+                    # Block expired, reset (implicitly handled below or explicitly here)
+                    # Let's reset explicitly if expired
+                    cur.execute("UPDATE auth_security SET failed_attempts = 0, blocked_until = NULL WHERE ip_address = ?", (client_ip,))
+                    con.commit()
+                    failed = 0
+                    
+        secret = os.getenv("STATS_PASSWORD", "ideatrade")
+        if req.password == secret:
+            # Success: Reset failed attempts
+            cur.execute("DELETE FROM auth_security WHERE ip_address = ?", (client_ip,))
+            con.commit()
+            con.close()
+            return {"success": True}
+        else:
+            # Failed
+            cur.execute("SELECT failed_attempts FROM auth_security WHERE ip_address = ?", (client_ip,))
+            row = cur.fetchone()
+            current_failed = (row[0] if row else 0) + 1
+            
+            blocked_until_val = None
+            msg = f"Incorrect password. {3 - current_failed} attempts remaining."
+            
+            if current_failed >= 3:
+                blocked_until_val = (datetime.now() + timedelta(days=7)).isoformat()
+                msg = "Too many failed attempts. You are blocked for 7 days."
+            
+            now_str = datetime.now().isoformat()
+            
+            if row:
+                cur.execute("""
+                    UPDATE auth_security 
+                    SET failed_attempts = ?, blocked_until = ?, last_attempt = ? 
+                    WHERE ip_address = ?
+                """, (current_failed, blocked_until_val, now_str, client_ip))
+            else:
+                cur.execute("""
+                    INSERT INTO auth_security (ip_address, failed_attempts, blocked_until, last_attempt) 
+                    VALUES (?, ?, ?, ?)
+                """, (client_ip, current_failed, blocked_until_val, now_str))
+                
+            con.commit()
+            con.close()
+            return {"success": False, "message": msg}
+            
+    except Exception as e:
+        print(f"Auth Block Error: {e}")
+        # Fail open or closed? Here fail safe to deny if DB error, but ideally just check pwd
+        # If DB fails, fallback to simple check but warn
+        return {"success": False, "message": "Authentication system error"}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8335)

@@ -222,6 +222,13 @@ export const trackFavorite = (ticker, action) => {
     sendTrackingEvent('favorite', { ticker, action });
 };
 
+/**
+ * Track Heartbeat (Keep Alive)
+ */
+export const trackHeartbeat = () => {
+    sendTrackingEvent('heartbeat', { ts: Date.now() });
+};
+
 export default {
     trackPageView,
     trackStockView,
@@ -232,6 +239,7 @@ export default {
     trackFilter,
     trackCalculation,
     trackFavorite,
+    trackHeartbeat,
     initTracker,
     showStats,
     clearStats

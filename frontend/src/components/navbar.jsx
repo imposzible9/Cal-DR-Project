@@ -11,7 +11,7 @@ const Navbar = () => {
     <header className="bg-white sticky top-0 z-[110] shadow-sm border-b border-gray-200">
       {/* ✅ ขยาย Navbar ประมาณ 20% ให้ขนาดฟอนต์/โลโก้/เมนูใหญ่ขึ้นสอดคล้องกับแต่ละหน้า และเพิ่มความสูงกล่องเล็กน้อย
           ✅ ใช้ origin-center เพื่อให้เนื้อหาดูอยู่กึ่งกลางแกน Y มากขึ้น */}
-      <div className="w-full max-w-[1040px] mx-auto px-0 py-5 flex items-center justify-between scale-[1.2] origin-center">
+      <div className="w-full max-w-[1040px] mx-auto px-0 py-5 flex items-center justify-between scale-[1.2] origin-center relative">
         {/* Logo */}
         <div
           className="cursor-pointer shrink-0"
@@ -64,7 +64,17 @@ const Navbar = () => {
             News
           </Link>
         </nav>
+
       </div>
+
+      {/* Stats Link - Far Right (Screen Edge) */}
+      <Link
+        to="/stats"
+        className={`absolute right-6 top-1/2 -translate-y-1/2 p-2 text-gray-400 hover:text-blue-600 transition-colors ${isActive('/stats') ? 'text-blue-600' : ''}`}
+        title="Stats"
+      >
+        <i className="bi bi-file-earmark-text text-2xl"></i>
+      </Link>
     </header>
   );
 };
