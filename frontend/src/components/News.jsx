@@ -57,12 +57,53 @@ function timeAgo(ts) {
   }
 }
 
+// Simple keyword-based sentiment analysis
+const analyzeSentiment = (text) => {
+  if (!text) return "neutral";
+  const lower = text.toLowerCase();
+  // Expanded keywords for better accuracy
+  const positive = [
+    "surge", "jump", "record", "gain", "profit", "bull", "high", "growth", "boost", "beat", "rally", "soar", "up", "buy", "positive", "strong", "outperform", "upgrade", "lead", "leading", "success", "top", "best", "rebound", "climb", "recover",
+    "expansion", "expand", "funding", "invest", "strategic", "launch", "new", "partner", "deal", "agreement", "contract", "win", "won", "approve", "approval", "settled", "solution", "stable", "innovation", "dividend"
+  ];
+  const negative = [
+    "drop", "fall", "plunge", "loss", "crash", "bear", "low", "cut", "miss", "risk", "down", "sell", "negative", "fail", "decline", "weak", "underperform", "downgrade", "warn", "warning", "fear", "panic", "worst", "slide", "tumble", "slump", "retreat", "mixed", "volatile", "uncertain",
+    "scrapped", "shut", "close", "halt", "suspend", "ban", "lawsuit", "sue", "probe", "investigation", "breach", "hack", "attack", "debt", "bankrupt", "layoff", "fire", "terminate", "delay", "struggle",
+    "punish", "penalty", "fine", "slow", "slower", "pressure", "concern", "problem", "trouble", "hard", "tough", "hurt", "damage", "hit", "weigh", "impact"
+  ];
+  
+  const posCount = positive.filter(w => lower.includes(w)).length;
+  const negCount = negative.filter(w => lower.includes(w)).length;
+  
+  if (posCount > negCount) return "positive";
+  if (negCount > posCount) return "negative";
+  return "neutral";
+};
+
 const NewsCard = ({ ticker, quote, news }) => {
   const isPositive = quote && quote.change_pct >= 0;
+  const textSentiment = analyzeSentiment(news.title + " " + news.summary);
+
+  // Logic to resolve conflict between Price and Text Sentiment
+  let sentiment = textSentiment;
+  if (quote) {
+    // If Stock is Green but Text says Negative -> Override to Neutral (or Positive if weak negative)
+    // This prevents the "Green Price / Red Border" confusion
+    if (isPositive && textSentiment === "negative") {
+      sentiment = "neutral"; 
+    }
+    // If Stock is Red but Text says Positive -> Override to Neutral
+    if (!isPositive && textSentiment === "positive") {
+      sentiment = "neutral";
+    }
+  }
+
+  // Define classes based on sentiment
+  const containerClasses = "bg-white rounded-xl border border-gray-200 p-6 hover:shadow-md transition-shadow flex flex-col md:flex-row gap-6 items-start";
 
   return (
     <a href={news.url} target="_blank" rel="noreferrer" className="block group">
-      <div className="bg-white rounded-xl border border-gray-200 p-6 hover:shadow-md transition-shadow flex flex-col md:flex-row gap-6 items-start">
+      <div className={containerClasses}>
         {ticker && quote && (
           <div className="flex-shrink-0 w-full md:w-[120px] bg-[#F9FAFB] rounded-lg border border-gray-100 p-3 flex flex-col items-center justify-center text-center gap-2">
             <div className="w-10 h-10 rounded-full bg-white/80 flex items-center justify-center overflow-hidden">
@@ -87,8 +128,14 @@ const NewsCard = ({ ticker, quote, news }) => {
           <p className="text-sm text-gray-600 mb-3 line-clamp-2">
             {news.summary}
           </p>
-          <div className="text-xs text-gray-400">
-            {timeAgo(news.published_at)}
+          <div className="flex items-center gap-2 text-xs text-gray-500">
+            {news.source && (
+              <span className="inline-flex items-center px-2 py-0.5 rounded bg-gray-100 text-gray-800 font-medium">
+                {news.source}
+              </span>
+            )}
+            {news.source && <span>•</span>}
+            <span>{timeAgo(news.published_at)}</span>
           </div>
         </div>
       </div>
@@ -302,6 +349,19 @@ const News = () => {
   }, [selected, allSymbols]); // Added allSymbols dependency for safe match check
 
   const topStory = useMemo(() => marketNews.find(item => item.ticker), [marketNews]);
+  const topStorySentiment = useMemo(() => {
+    if (!topStory) return "neutral";
+    const textSentiment = analyzeSentiment(topStory.news.title + " " + topStory.news.summary);
+    
+    // Conflict Resolution for Top Story
+    if (topStory.quote) {
+      const isPositive = topStory.quote.change_pct >= 0;
+      if (isPositive && textSentiment === "negative") return "neutral";
+      if (!isPositive && textSentiment === "positive") return "neutral";
+    }
+    
+    return textSentiment;
+  }, [topStory]);
 
 
   const onSearchKey = (e) => {
@@ -542,8 +602,14 @@ const News = () => {
                         <h3 className="text-lg md:text-xl font-semibold leading-snug mb-2 group-hover:text-blue-200 transition-colors">
                           {topStory.news.title}
                         </h3>
-                        <div className="text-xs text-blue-200/80">
-                          {timeAgo(topStory.news.published_at)}
+                        <div className="flex items-center gap-2 text-xs text-blue-200/80">
+                          {topStory.news.source && (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded bg-white/10 text-blue-100 font-medium border border-white/10">
+                              {topStory.news.source}
+                            </span>
+                          )}
+                          {topStory.news.source && <span>•</span>}
+                          <span>{timeAgo(topStory.news.published_at)}</span>
                         </div>
                       </div>
                       <div className="absolute right-4 sm:right-6 md:right-8 top-1/2 transform -translate-y-1/2">
