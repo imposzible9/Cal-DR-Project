@@ -404,7 +404,7 @@ const Stats = () => {
 
                     <div className="relative z-10">
                         <h1 className="text-3xl md:text-4xl font-extrabold text-[#0B102A] mb-2 tracking-tight">
-                            CAL-DR STAST LOGS
+                            CAL-DR STATS LOGS
                         </h1>
                         <div className="inline-flex items-center gap-2 text-gray-500 bg-gray-50 px-3 py-1 rounded-full text-sm font-medium border border-gray-100">
                             <i className="bi bi-calendar-event"></i>
