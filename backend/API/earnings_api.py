@@ -130,7 +130,7 @@ async def fetch_tradingview_earnings(market_code: str, start_ts: int, end_ts: in
                     break
                     
             except Exception as e:
-                print(f"⚠️ Error fetching page {offset}: {e}")
+                print(f"[WARN] Error fetching page {offset}: {e}")
                 break
     
     return all_data
@@ -176,7 +176,7 @@ def map_tv_data_to_object(raw_data, valid_tickers: set = None, ticker_mapping: d
                     matched_ticker = ticker_name
                     # Debug: แสดง warning ถ้า match กับ underlying code ที่ไม่ตรงกับ ticker_name
                     if matched_underlying != ticker_name and len(mapped_list) < 10:
-                        print(f"  ⚠️ Warning: ticker_name='{ticker_name}' matched with underlying='{matched_underlying}' (via mapping)")
+                        print(f"  [WARN] Warning: ticker_name='{ticker_name}' matched with underlying='{matched_underlying}' (via mapping)")
             # 3) ตรวจสอบ logoid ใน valid_tickers
             elif logoid and logoid in valid_tickers:
                 matched = True
@@ -212,12 +212,12 @@ def map_tv_data_to_object(raw_data, valid_tickers: set = None, ticker_mapping: d
             if not matched:
                 # Debug: แสดง ticker ที่ไม่ match (แสดงแค่ 10 ตัวแรกเพื่อไม่ให้ log เยอะเกินไป)
                 if len([x for x in mapped_list if not hasattr(x, '_debug_shown')]) < 10:
-                    print(f"  ⚠️ Filtered out: logoid='{logoid}', name='{ticker_name}' (not in {len(valid_tickers)} DR tickers)")
+                    print(f"  [WARN] Filtered out: logoid='{logoid}', name='{ticker_name}' (not in {len(valid_tickers)} DR tickers)")
                 continue  # ไม่พบใน whitelist ให้ข้าม
             else:
                 # Debug: แสดง ticker ที่ match ได้ (แสดงแค่ 10 ตัวแรก)
                 if len(mapped_list) < 10:
-                    print(f"  ✅ Matched: logoid='{logoid}', name='{ticker_name}' -> underlying='{matched_underlying}'")
+                    print(f"  [OK] Matched: logoid='{logoid}', name='{ticker_name}' -> underlying='{matched_underlying}'")
         
         event_date = obj["earnings_release_next_date"] or obj["earnings_release_date"]
         
@@ -272,28 +272,28 @@ def load_db_from_disk():
                 _last_update_str = loaded.get("meta", {}).get("updated_at", "-")
                 # Initialize previous_earnings_db with current data (so first update won't trigger false positives)
                 _previous_earnings_db = _earnings_db.copy()
-            print(f"✅ Loaded cache: {len(_earnings_db)} markets.")
-        except Exception as e: print(f"⚠️ Load fail: {e}")
+            print(f"[OK] Loaded cache: {len(_earnings_db)} markets.")
+        except Exception as e: print(f"[WARN] Load fail: {e}")
 
 def save_db_to_disk():
     try:
         with open(CACHE_FILE, "w", encoding="utf-8") as f:
             json.dump({"meta": {"updated_at": _last_update_str}, "data": _earnings_db}, f, ensure_ascii=False)
-    except Exception as e: print(f"⚠️ Save fail: {e}")
+    except Exception as e: print(f"[WARN] Save fail: {e}")
 
 async def broadcast_to_sse_clients(message: dict):
     """Broadcast message to all connected SSE clients"""
     async with _sse_lock:
         client_count = len(_sse_clients)
         if client_count > 0:
-            print(f"📡 [SSE] Broadcasting to {client_count} client(s): {message.get('type', 'unknown')}")
+            print(f"[SSE] Broadcasting to {client_count} client(s): {message.get('type', 'unknown')}")
         disconnected_clients = []
         for queue in _sse_clients:
             try:
                 await queue.put(message)
             except Exception as e:
                 # Mark for removal if queue is closed
-                print(f"⚠️ [SSE] Failed to send to client: {e}")
+                print(f"[SSE] Failed to send to client: {e}")
                 disconnected_clients.append(queue)
         
         # Remove disconnected clients
@@ -336,7 +336,7 @@ async def background_updater():
     global _earnings_db, _last_update_str, _previous_earnings_db
     while True:
         try:
-            print(f"🔄 [Background] Updating Earnings Data at {datetime.now()}")
+            print(f"[Background] Updating Earnings Data at {datetime.now()}")
             
             # ✅ ปรับปรุง Logic การดึงรายชื่อหุ้นที่มี DR ตามค่า ENABLE_DR_FILTER
             valid_dr_tickers = None
@@ -350,7 +350,7 @@ async def background_updater():
                     async with httpx.AsyncClient() as client:
                         r_dr = await client.get(DR_LIST_URL, timeout=10)
                         dr_rows = r_dr.json().get("rows", [])
-                        print(f"  📊 [Background] Total DR rows from API: {len(dr_rows)}")
+                        print(f"  [Background] Total DR rows from API: {len(dr_rows)}")
                         for item in dr_rows:
                             u_code = None
                             source = None
@@ -497,46 +497,46 @@ async def background_updater():
                                     
                                     # Debug: แสดงตัวอย่างการ extract (เฉพาะ 10 ตัวแรก)
                                     if len(valid_dr_tickers) <= 10:
-                                        print(f"    ✅ Extracted: {u_code} from {source} (symbol: {item.get('symbol', 'N/A')}, underlyingName: {underlying_name[:50]})")
+                                        print(f"    [OK] Extracted: {u_code} from {source} (symbol: {item.get('symbol', 'N/A')}, underlyingName: {underlying_name[:50]})")
                     
                     # Debug: แสดงจำนวนที่ถูก skip
                     if skipped_count > 0:
-                        print(f"  ⚠️ Skipped {skipped_count} items: {skipped_reasons}")
+                        print(f"  [WARN] Skipped {skipped_count} items: {skipped_reasons}")
                         # แสดงรายละเอียดของ items ที่ถูก skip (เฉพาะ 5 ตัวแรก)
                         for skipped in skipped_items[:5]:
                             print(f"    - Skipped: symbol='{skipped['symbol']}', u_code='{skipped['u_code']}', reason={skipped['reason']}, underlyingName='{skipped['underlyingName']}'")
-                    print(f"📊 [Background] DR Filter is ENABLED. Found {len(valid_dr_tickers)} unique symbols (from {len(dr_rows)} DR rows, skipped {skipped_count}).")
+                    print(f"[Background] DR Filter is ENABLED. Found {len(valid_dr_tickers)} unique symbols (from {len(dr_rows)} DR rows, skipped {skipped_count}).")
                     # Debug: ตรวจสอบว่ามี underlying codes ซ้ำกันหรือไม่
                     if len(valid_dr_tickers) < len(dr_rows) - skipped_count:
                         duplicate_count = len(dr_rows) - skipped_count - len(valid_dr_tickers)
-                        print(f"  ℹ️ Note: {duplicate_count} underlying codes are duplicates (multiple DR rows share the same underlying code)")
+                        print(f"  [NOTE] Note: {duplicate_count} underlying codes are duplicates (multiple DR rows share the same underlying code)")
                     # Debug: แสดง sample ของ underlying codes (เฉพาะ ticker symbols ไม่ใช่ชื่อเต็ม)
                     # กรองเฉพาะ ticker symbols ที่ไม่มี space และไม่ยาวเกินไป
                     clean_tickers = [c for c in valid_dr_tickers if ' ' not in c and len(c) <= 15]
                     sample_codes = sorted(clean_tickers)[:10]
-                    print(f"  📋 Sample ticker symbols: {sample_codes}")
+                    print(f"  [SAMPLE] Sample ticker symbols: {sample_codes}")
                     # Debug: แสดง ticker symbols ที่มี space (ชื่อเต็ม) เพื่อตรวจสอบ - ควรไม่มี
                     full_names = [c for c in valid_dr_tickers if ' ' in c]
                     if full_names:
-                        print(f"  ⚠️ Found {len(full_names)} full names (should be filtered out): {full_names[:5]}")
+                        print(f"  [WARN] Found {len(full_names)} full names (should be filtered out): {full_names[:5]}")
                     # Debug: ตรวจสอบว่ามี "JPM", "WFC", "BAC", "MS" อยู่ใน valid_dr_tickers หรือไม่
                     test_tickers = ["JPM", "WFC", "BAC", "MS", "GS", "C"]
                     found_test = [t for t in test_tickers if t in valid_dr_tickers]
                     missing_test = [t for t in test_tickers if t not in valid_dr_tickers]
                     if found_test:
-                        print(f"  ✅ Found test tickers in DR list: {found_test}")
+                        print(f"  [OK] Found test tickers in DR list: {found_test}")
                     if missing_test:
-                        print(f"  ⚠️ Missing test tickers in DR list: {missing_test}")
+                        print(f"  [WARN] Missing test tickers in DR list: {missing_test}")
                     # Debug: แสดง sample ของ ticker_mapping
                     if ticker_mapping:
                         mapping_samples = list(ticker_mapping.items())[:10]
-                        print(f"  📋 Sample ticker mapping: {mapping_samples}")
+                        print(f"  [SAMPLE] Sample ticker mapping: {mapping_samples}")
                 except Exception as dr_err:
-                    print(f"❌ [Background] Failed to fetch DR whitelist: {dr_err}")
+                    print(f"[ERROR] [Background] Failed to fetch DR whitelist: {dr_err}")
                     # กรณีดึงข้อมูล DR ไม่ได้ ให้ยกเลิกการกรองชั่วคราวเพื่อป้องกันข้อมูลว่างเปล่า
                     valid_dr_tickers = None 
             else:
-                print(f"🔓 [Background] DR Filter is DISABLED. Fetching all stocks.")
+                print(f"[INFO] [Background] DR Filter is DISABLED. Fetching all stocks.")
 
             new_db = {}
             all_markets = ["america", "hongkong", "japan", "china", "singapore", "vietnam", "france", "netherlands", "denmark", "italy", "taiwan", "thailand"]
@@ -544,10 +544,10 @@ async def background_updater():
             for m in all_markets:
                 c_code = "JP" if m == "japan" else "US"
                 s_ts, e_ts = get_tradingview_range(c_code)
-                print(f"📅 [Background] [{m}] Date range: {datetime.fromtimestamp(s_ts, tz=timezone.utc)} to {datetime.fromtimestamp(e_ts, tz=timezone.utc)}")
+                print(f"[DATE] [Background] [{m}] Date range: {datetime.fromtimestamp(s_ts, tz=timezone.utc)} to {datetime.fromtimestamp(e_ts, tz=timezone.utc)}")
                 
                 raw_data = await fetch_tradingview_earnings(m, s_ts, e_ts)
-                print(f"📊 [Background] [{m}] Received {len(raw_data)} raw items from TradingView")
+                print(f"[DATA] [Background] [{m}] Received {len(raw_data)} raw items from TradingView")
                 
                 # Debug: แสดง sample ของ raw data structure (เฉพาะ 2 ตัวแรก)
                 if raw_data and len(raw_data) > 0:
@@ -556,30 +556,30 @@ async def background_updater():
                         d = sample.get("d", [])
                         if len(d) >= len(COLUMNS_MAP):
                             sample_obj = {COLUMNS_MAP[i]: d[i] for i in range(min(len(d), len(COLUMNS_MAP)))}
-                            print(f"  🔍 Sample TradingView item: logoid='{sample_obj.get('logoid')}', name='{sample_obj.get('name')}', description='{sample_obj.get('description', '')[:50]}'")
+                            print(f"  [DEBUG] Sample TradingView item: logoid='{sample_obj.get('logoid')}', name='{sample_obj.get('name')}', description='{sample_obj.get('description', '')[:50]}'")
                 
                 # ตรวจสอบหุ้น 2653 ใน raw_data สำหรับตลาดญี่ปุ่น
                 if m == "japan":
                     raw_2653 = [item for item in raw_data if item.get("d") and len(item.get("d", [])) > 1 and "2653" in str(item.get("d", [])[1]).upper()]
                     if raw_2653:
-                        print(f"✅ [Background] Found 2653 in raw_data: {raw_2653}")
+                        print(f"[OK] [Background] Found 2653 in raw_data: {raw_2653}")
                     else:
-                        print(f"⚠️ [Background] 2653 NOT found in raw_data")
+                        print(f"[WARN] [Background] 2653 NOT found in raw_data")
                 
                 # ✅ ส่ง valid_dr_tickers และ ticker_mapping ไปใช้กรองข้อมูล (ถ้าเป็น None จะไม่กรอง)
                 if valid_dr_tickers:
-                    print(f"  🔍 [Background] [{m}] Filtering with {len(valid_dr_tickers)} DR tickers. Sample: {list(valid_dr_tickers)[:5]}")
-                    print(f"  📋 [Background] [{m}] Ticker mapping table has {len(ticker_mapping)} entries")
+                    print(f"  [DEBUG] [Background] [{m}] Filtering with {len(valid_dr_tickers)} DR tickers. Sample: {list(valid_dr_tickers)[:5]}")
+                    print(f"  [DEBUG] [Background] [{m}] Ticker mapping table has {len(ticker_mapping)} entries")
                 stock_list = map_tv_data_to_object(raw_data, valid_dr_tickers, ticker_mapping)
-                print(f"✅ [Background] [{m}] Mapped to {len(stock_list)} stocks (from {len(raw_data)} raw items)")
+                print(f"[OK] [Background] [{m}] Mapped to {len(stock_list)} stocks (from {len(raw_data)} raw items)")
                 
                 # ตรวจสอบหุ้น 2653 ใน stock_list สำหรับตลาดญี่ปุ่น
                 if m == "japan":
                     ticker_2653 = [s for s in stock_list if "2653" in s.get("ticker", "")]
                     if ticker_2653:
-                        print(f"✅ [Background] Found 2653 in stock_list: {ticker_2653}")
+                        print(f"[OK] [Background] Found 2653 in stock_list: {ticker_2653}")
                     else:
-                        print(f"⚠️ [Background] 2653 NOT found in stock_list (was filtered out)")
+                        print(f"[WARN] [Background] 2653 NOT found in stock_list (was filtered out)")
                 
                 stock_list.sort(key=lambda x: x["date"] if x["date"] else float('inf'))
                 
@@ -598,7 +598,7 @@ async def background_updater():
             
             # Broadcast new earnings to SSE clients
             if new_earnings:
-                print(f"📢 [Background] Found {len(new_earnings)} new earnings, broadcasting to SSE clients")
+                print(f"[SSE] [Background] Found {len(new_earnings)} new earnings, broadcasting to SSE clients")
                 await broadcast_to_sse_clients({
                     "type": "new_earnings",
                     "earnings": new_earnings,
@@ -609,8 +609,8 @@ async def background_updater():
             # Update previous earnings state for next comparison
             _previous_earnings_db = new_db.copy()
             
-            print(f"✅ [Background] Update complete. (ENABLE_DR_FILTER={ENABLE_DR_FILTER})")
-        except Exception as e: print(f"❌ Updater error: {e}")
+            print(f"[OK] [Background] Update complete. (ENABLE_DR_FILTER={ENABLE_DR_FILTER})")
+        except Exception as e: print(f"[ERROR] Updater error: {e}")
         await asyncio.sleep(UPDATE_INTERVAL_SECONDS)
 
 @asynccontextmanager
@@ -692,7 +692,7 @@ async def earnings_stream():
             _sse_clients.append(queue)
             client_count = len(_sse_clients)
         
-        print(f"🔌 [SSE] New client connected. Total clients: {client_count}")
+        print(f"[SSE] New client connected. Total clients: {client_count}")
         
         try:
             # Send initial connection message
@@ -719,14 +719,14 @@ async def earnings_stream():
                         
         except asyncio.CancelledError:
             # Client disconnected
-            print(f"🔌 [SSE] Client disconnected")
+            print(f"[SSE] Client disconnected")
         finally:
             # Remove client from the list
             async with _sse_lock:
                 if queue in _sse_clients:
                     _sse_clients.remove(queue)
                     remaining = len(_sse_clients)
-                    print(f"🔌 [SSE] Client removed. Remaining clients: {remaining}")
+                    print(f"[SSE] Client removed. Remaining clients: {remaining}")
     
     return StreamingResponse(
         event_generator(),
@@ -743,7 +743,7 @@ async def force_refresh_earnings():
     """Force refresh earnings data immediately (bypass cache interval)"""
     global _earnings_db, _last_update_str, _previous_earnings_db
     try:
-        print(f"🔄 [Manual Refresh] Forcing earnings update at {datetime.now()}")
+        print(f"[REFRESH] [Manual Refresh] Forcing earnings update at {datetime.now()}")
         
         # ✅ ปรับปรุง Logic การดึงรายชื่อหุ้นที่มี DR ตามค่า ENABLE_DR_FILTER
         valid_dr_tickers = None
@@ -757,7 +757,7 @@ async def force_refresh_earnings():
                 async with httpx.AsyncClient() as client:
                     r_dr = await client.get(DR_LIST_URL, timeout=10)
                     dr_rows = r_dr.json().get("rows", [])
-                    print(f"  📊 [Manual Refresh] Total DR rows from API: {len(dr_rows)}")
+                    print(f"  [DATA] [Manual Refresh] Total DR rows from API: {len(dr_rows)}")
                     for item in dr_rows:
                         u_code = None
                         source = None
@@ -881,13 +881,13 @@ async def force_refresh_earnings():
                                             ticker_mapping[name_ticker] = u_code
                     
                     if skipped_count > 0:
-                        print(f"  ⚠️ Skipped {skipped_count} items: {skipped_reasons}")
-                    print(f"📊 [Manual Refresh] DR Filter is ENABLED. Found {len(valid_dr_tickers)} unique symbols.")
+                        print(f"  [WARN] Skipped {skipped_count} items: {skipped_reasons}")
+                    print(f"[DATA] [Manual Refresh] DR Filter is ENABLED. Found {len(valid_dr_tickers)} unique symbols.")
             except Exception as dr_err:
-                print(f"❌ [Manual Refresh] Failed to fetch DR whitelist: {dr_err}")
+                print(f"[ERROR] [Manual Refresh] Failed to fetch DR whitelist: {dr_err}")
                 valid_dr_tickers = None 
         else:
-            print(f"🔓 [Manual Refresh] DR Filter is DISABLED. Fetching all stocks.")
+            print(f"[INFO] [Manual Refresh] DR Filter is DISABLED. Fetching all stocks.")
 
         new_db = {}
         all_markets = ["america", "hongkong", "japan", "china", "singapore", "vietnam", "france", "netherlands", "denmark", "italy", "taiwan", "thailand"]
@@ -895,13 +895,13 @@ async def force_refresh_earnings():
         for m in all_markets:
             c_code = "JP" if m == "japan" else "US"
             s_ts, e_ts = get_tradingview_range(c_code)
-            print(f"📅 [Manual Refresh] [{m}] Date range: {datetime.fromtimestamp(s_ts, tz=timezone.utc)} to {datetime.fromtimestamp(e_ts, tz=timezone.utc)}")
+            print(f"[DATE] [Manual Refresh] [{m}] Date range: {datetime.fromtimestamp(s_ts, tz=timezone.utc)} to {datetime.fromtimestamp(e_ts, tz=timezone.utc)}")
             
             raw_data = await fetch_tradingview_earnings(m, s_ts, e_ts)
-            print(f"📊 [Manual Refresh] [{m}] Received {len(raw_data)} raw items from TradingView")
+            print(f"[DATA] [Manual Refresh] [{m}] Received {len(raw_data)} raw items from TradingView")
             
             stock_list = map_tv_data_to_object(raw_data, valid_dr_tickers, ticker_mapping)
-            print(f"✅ [Manual Refresh] [{m}] Mapped to {len(stock_list)} stocks")
+            print(f"[OK] [Manual Refresh] [{m}] Mapped to {len(stock_list)} stocks")
             
             stock_list.sort(key=lambda x: x["date"] if x["date"] else float('inf'))
             
@@ -920,7 +920,7 @@ async def force_refresh_earnings():
         
         # Broadcast new earnings to SSE clients
         if new_earnings:
-            print(f"📢 [Manual Refresh] Found {len(new_earnings)} new earnings, broadcasting to SSE clients")
+            print(f"[SSE] [Manual Refresh] Found {len(new_earnings)} new earnings, broadcasting to SSE clients")
             await broadcast_to_sse_clients({
                 "type": "new_earnings",
                 "earnings": new_earnings,
@@ -940,7 +940,7 @@ async def force_refresh_earnings():
             "new_earnings_count": len(new_earnings)
         }
     except Exception as e:
-        print(f"❌ [Manual Refresh] Error: {e}")
+        print(f"[ERROR] [Manual Refresh] Error: {e}")
         return {"success": False, "error": str(e)}
 
 @app.get("/api/test")

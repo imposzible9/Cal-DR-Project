@@ -1,41 +1,26 @@
 import { Link, useNavigate, useLocation } from 'react-router-dom';
-import { useState, useEffect } from 'react';
 import img from '../assets/logo.png';
 
 const Navbar = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const [calendarNotifications, setCalendarNotifications] = useState(0);
 
   const isActive = (path) => location.pathname === path;
-  
-  // Listen for calendar notification updates
-  useEffect(() => {
-    const handleNotificationUpdate = (event) => {
-      setCalendarNotifications(event.detail.count);
-    };
-    
-    window.addEventListener('calendarNotificationUpdate', handleNotificationUpdate);
-    
-    return () => {
-      window.removeEventListener('calendarNotificationUpdate', handleNotificationUpdate);
-    };
-  }, []);
 
   return (
     <header className="bg-white sticky top-0 z-[110] shadow-sm border-b border-gray-200">
       {/* ✅ ขยาย Navbar ประมาณ 20% ให้ขนาดฟอนต์/โลโก้/เมนูใหญ่ขึ้นสอดคล้องกับแต่ละหน้า และเพิ่มความสูงกล่องเล็กน้อย
           ✅ ใช้ origin-center เพื่อให้เนื้อหาดูอยู่กึ่งกลางแกน Y มากขึ้น */}
-      <div className="w-full max-w-[1040px] mx-auto px-0 py-5 flex items-center justify-between scale-[1.2] origin-center">
+      <div className="w-full max-w-[1040px] mx-auto px-0 py-5 flex items-center justify-between scale-[1.2] origin-center relative">
         {/* Logo */}
         <div
           className="cursor-pointer shrink-0"
           onClick={() => navigate('/')}
         >
-          <img 
-            className="h-10" 
-            src={img} 
-            alt="Logo" 
+          <img
+            className="h-10"
+            src={img}
+            alt="Logo"
           />
         </div>
 
@@ -43,20 +28,19 @@ const Navbar = () => {
         <nav className="flex items-center gap-8">
           <Link
             to="/drlist"
-            className={`text-sm font-medium transition-colors ${
-              location.pathname === '/' || isActive('/drlist')
-                ? 'text-blue-500'
-                : 'text-gray-700 hover:text-gray-900'
-            }`}
+            className={`text-sm font-medium transition-colors ${location.pathname === '/' || isActive('/drlist')
+              ? 'text-blue-500'
+              : 'text-gray-700 hover:text-gray-900'
+              }`}
           >
-            Underlying List
+            DR List
           </Link>
 
           <Link
             to="/caldr"
             className={`text-sm font-medium transition-colors ${isActive('/caldr') ? 'text-blue-500' : 'text-gray-700 hover:text-gray-900'}`}
           >
-            Calculation
+            Calculation DR
           </Link>
 
           <Link
@@ -79,22 +63,21 @@ const Navbar = () => {
           >
             News
           </Link>
-
-          <div 
-            className="relative cursor-pointer ml-2" 
-            onClick={() => navigate('/calendar')}
-          >
-            <i className="bi bi-bell text-xl text-gray-700 hover:text-gray-900 transition-colors"></i>
-            {calendarNotifications > 0 && (
-              <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[9px] font-bold rounded-full h-4 w-4 flex items-center justify-center border-2 border-white">
-                {calendarNotifications > 99 ? '99+' : calendarNotifications}
-              </span>
-            )}
-          </div>
         </nav>
+
       </div>
+
+      {/* Stats Link - Far Right (Screen Edge) */}
+      <Link
+        to="/stats"
+        className={`absolute right-6 top-1/2 -translate-y-1/2 p-2 text-gray-400 hover:text-blue-600 transition-colors ${isActive('/stats') ? 'text-blue-600' : ''}`}
+        title="Stats"
+      >
+        <i className="bi bi-file-earmark-text text-2xl"></i>
+      </Link>
     </header>
   );
 };
 
 export default Navbar;
+

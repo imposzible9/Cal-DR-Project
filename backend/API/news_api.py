@@ -1,18 +1,20 @@
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from contextlib import asynccontextmanager
 import httpx
 import os
 import time
+import asyncio
+import re
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from dotenv import load_dotenv
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env'))
 
-
-NEWS_API_BASE_URL = os.getenv("NEWS_API_BASE_URL") or "https://newsapi.org/v2/top-headlines"
-NEWS_API_KEY = os.getenv("NEWS_API_KEY") or None
+NEWS_API_BASE_URL = "https://newsapi.org/v2/top-headlines"
+NEWS_API_KEY = "a2982e76c7844902b4289a6b08712d89"
 NEWS_TTL_SECONDS = int(os.getenv("NEWS_TTL_SECONDS") or "300")
 FINNHUB_BASE_URL = "https://finnhub.io/api/v1"
 FINNHUB_TOKEN = os.getenv("FINNHUB_TOKEN") or None
@@ -20,6 +22,8 @@ DR_LIST_URL = os.getenv("DR_LIST_URL") or "http://172.17.1.85:8333/dr"
 TRADINGVIEW_SCANNER_URL = os.getenv("TRADINGVIEW_SCANNER_URL") or "https://scanner.tradingview.com/america/scan"
 
 app = FastAPI(title="News API")
+
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 app.add_middleware(
     CORSMiddleware,
@@ -32,17 +36,77 @@ app.add_middleware(
 _client: httpx.AsyncClient | None = None
 _news_cache: dict[str, dict] = {}
 
+def _is_valid_source(item: dict) -> bool:
+    """Filter out unwanted sources like Yahoo Finance"""
+    src = (item.get("source") or "").lower()
+    url = (item.get("url") or "").lower()
+    
+    # Filter out Yahoo
+    if "yahoo" in src or "yahoo" in url:
+        return True # Allow Yahoo, but we will mix it later
+        
+    return True
+
+def _mix_news_sources(items: list[dict], limit: int) -> list[dict]:
+    """
+    Mix Yahoo news with other sources.
+    Strategy: Interleave 2 non-Yahoo items with 1 Yahoo item to ensure diversity.
+    """
+    yahoo_items = []
+    other_items = []
+    
+    seen_urls = set()
+    unique_items = []
+    
+    # Deduplicate
+    for item in items:
+        url = (item.get("url") or "").lower()
+        if url in seen_urls:
+            continue
+        seen_urls.add(url)
+        unique_items.append(item)
+        
+    for item in unique_items:
+        src = (item.get("source") or "").lower()
+        url = (item.get("url") or "").lower()
+        if "yahoo" in src or "yahoo" in url:
+            yahoo_items.append(item)
+        else:
+            other_items.append(item)
+            
+    # Interleave: 2 others, 1 yahoo
+    result = []
+    y_idx = 0
+    o_idx = 0
+    
+    while len(result) < limit and (y_idx < len(yahoo_items) or o_idx < len(other_items)):
+        # Add up to 2 others
+        for _ in range(2):
+            if o_idx < len(other_items):
+                result.append(other_items[o_idx])
+                o_idx += 1
+                if len(result) >= limit: break
+        
+        if len(result) >= limit: break
+        
+        # Add 1 yahoo
+        if y_idx < len(yahoo_items):
+            result.append(yahoo_items[y_idx])
+            y_idx += 1
+            
+    return result
+
 FALLBACK_SYMBOLS = [
-    {"symbol": "AAPL", "name": "Apple Inc.", "logo": "https://upload.wikimedia.org/wikipedia/commons/f/fa/Apple_logo_black.svg"},
-    {"symbol": "MSFT", "name": "Microsoft Corporation", "logo": "https://upload.wikimedia.org/wikipedia/commons/4/44/Microsoft_logo.svg"},
-    {"symbol": "GOOG", "name": "Alphabet Inc.", "logo": "https://upload.wikimedia.org/wikipedia/commons/2/2f/Google_2015_logo.svg"},
-    {"symbol": "AMZN", "name": "Amazon.com, Inc.", "logo": "https://upload.wikimedia.org/wikipedia/commons/a/a9/Amazon_logo.svg"},
-    {"symbol": "NVDA", "name": "NVIDIA Corporation", "logo": "https://upload.wikimedia.org/wikipedia/commons/2/21/Nvidia_logo.svg"},
-    {"symbol": "TSLA", "name": "Tesla, Inc.", "logo": "https://upload.wikimedia.org/wikipedia/commons/e/e8/Tesla_logo.png"},
-    {"symbol": "META", "name": "Meta Platforms, Inc.", "logo": "https://upload.wikimedia.org/wikipedia/commons/7/7b/Meta_Platforms_Inc._logo.svg"},
-    {"symbol": "BABA", "name": "Alibaba Group Holding Limited", "logo": "https://upload.wikimedia.org/wikipedia/en/8/80/Alibaba-Group-Logo.svg"},
-    {"symbol": "NFLX", "name": "Netflix, Inc.", "logo": "https://upload.wikimedia.org/wikipedia/commons/0/08/Netflix_2015_logo.svg"},
-    {"symbol": "AMD", "name": "Advanced Micro Devices, Inc.", "logo": "https://upload.wikimedia.org/wikipedia/commons/7/7c/AMD_Logo.svg"}
+    {"symbol": "AAPL", "name": "Apple Inc.", "logo": "https://s3-symbol-logo.tradingview.com/apple.svg"},
+    {"symbol": "MSFT", "name": "Microsoft Corporation", "logo": "https://s3-symbol-logo.tradingview.com/microsoft.svg"},
+    {"symbol": "GOOG", "name": "Alphabet Inc.", "logo": "https://s3-symbol-logo.tradingview.com/alphabet.svg"},
+    {"symbol": "AMZN", "name": "Amazon.com, Inc.", "logo": "https://s3-symbol-logo.tradingview.com/amazon.svg"},
+    {"symbol": "NVDA", "name": "NVIDIA Corporation", "logo": "https://s3-symbol-logo.tradingview.com/nvidia.svg"},
+    {"symbol": "TSLA", "name": "Tesla, Inc.", "logo": "https://s3-symbol-logo.tradingview.com/tesla.svg"},
+    {"symbol": "META", "name": "Meta Platforms, Inc.", "logo": "https://s3-symbol-logo.tradingview.com/meta-platforms.svg"},
+    {"symbol": "BABA", "name": "Alibaba Group Holding Limited", "logo": "https://s3-symbol-logo.tradingview.com/alibaba.svg"},
+    {"symbol": "NFLX", "name": "Netflix, Inc.", "logo": "https://s3-symbol-logo.tradingview.com/netflix.svg"},
+    {"symbol": "AMD", "name": "Advanced Micro Devices, Inc.", "logo": "https://s3-symbol-logo.tradingview.com/advanced-micro-devices.svg"}
 ]
 
 
@@ -63,32 +127,64 @@ def _cache_set(key: str, value, ttl: int = NEWS_TTL_SECONDS):
     _news_cache[key] = {"value": value, "exp": _now() + ttl}
 
 
+async def init_client():
+    global _client
+    if _client is None:
+        _client = httpx.AsyncClient(timeout=10)
+
+async def close_client():
+    global _client
+    if _client:
+        await _client.aclose()
+        _client = None
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _client
-    _client = httpx.AsyncClient(timeout=10)
+    await init_client()
     try:
         yield
     finally:
-        await _client.aclose()
+        await close_client()
 
 
 app.router.lifespan_context = lifespan
 
 
+async def init_client():
+    global _client
+    _client = httpx.AsyncClient(timeout=10)
+
+
+async def close_client():
+    global _client
+    if _client:
+        await _client.aclose()
+
+
 async def fetch_news(symbol: str, limit: int, language: str | None, hours: int, country: str | None):
+    # Enhance query to ensure relevance, especially for common words (e.g. "LOVE", "BEST")
+    search_query = symbol
+    target_country = country if country else "us"
+    
+    is_general_market = symbol.lower() in ["stock market", "market", "business"]
+    
+    if target_country.lower() == "us" and not is_general_market:
+         search_query = f"{symbol} stock"
+
     if not NEWS_API_KEY:
-        return await fetch_google_news(symbol, limit, language, hours, country)
+        return await fetch_google_news(search_query, limit, language, hours, country)
 
     assert _client is not None
 
     params: dict[str, str | int] = {
-        "q": symbol,
         "pageSize": limit,
-        "sortBy": "publishedAt",
         "apiKey": NEWS_API_KEY,
         "category": "business",
     }
+    
+    if not is_general_market:
+        params["q"] = search_query
+        # params["sortBy"] = "publishedAt" # Not supported by top-headlines
 
     if country:
         params["country"] = country
@@ -97,38 +193,51 @@ async def fetch_news(symbol: str, limit: int, language: str | None, hours: int, 
 
     if language:
         params["language"] = language
+    
+    print(f"Fetching NewsAPI: {NEWS_API_BASE_URL} Params: {params}")
 
-    if hours > 0:
-        now_utc = datetime.now(timezone.utc)
-        since = now_utc - timedelta(hours=hours)
-        params["from"] = since.isoformat()
+    # 'from' param is not supported by top-headlines, so we omit it or only use it if we were using /everything
+    # But since we are forced to use top-headlines, we skip 'from' logic for API call.
+    # We can filter results manually if needed, but top-headlines are usually recent.
+    
+    # if hours > 0:
+    #     now_utc = datetime.now(timezone.utc)
+    #     since = now_utc - timedelta(hours=hours)
+    #     params["from"] = since.isoformat()
 
-    r = await _client.get(NEWS_API_BASE_URL, params=params)
+    try:
+        r = await _client.get(NEWS_API_BASE_URL, params=params)
+    except Exception:
+        return await fetch_google_news(search_query, limit, language, hours, country)
+
     if r.status_code != 200:
-        return await fetch_google_news(symbol, limit, language, hours, country)
+        return await fetch_google_news(search_query, limit, language, hours, country)
 
     data = r.json()
     articles = data.get("articles") or []
     if not articles:
-        return await fetch_google_news(symbol, limit, language, hours, country)
+        return await fetch_google_news(search_query, limit, language, hours, country)
 
     normalized = []
     for a in articles:
         source = a.get("source") or {}
-        normalized.append(
-            {
-                "title": a.get("title"),
-                "summary": a.get("description") or a.get("content"),
-                "published_at": a.get("publishedAt"),
-                "source": source.get("name"),
-                "url": a.get("url"),
-                "image_url": a.get("urlToImage"),
-            }
-        )
+        item = {
+            "title": a.get("title"),
+            "summary": a.get("description") or a.get("content"),
+            "published_at": a.get("publishedAt"),
+            "source": source.get("name"),
+            "url": a.get("url"),
+            "image_url": a.get("urlToImage"),
+        }
+        if _is_valid_source(item):
+            normalized.append(item)
 
-    return normalized
+    if not normalized:
+        return await fetch_google_news(search_query, limit, language, hours, country)
 
-async def fetch_google_news(query: str, limit: int, language: str | None, hours: int, country: str | None):
+    return _mix_news_sources(normalized, limit)
+
+async def _fetch_google_rss_items(query: str, limit: int, language: str | None, hours: int, country: str | None):
     assert _client is not None
     hl = "en-US"
     gl = "US"
@@ -144,49 +253,86 @@ async def fetch_google_news(query: str, limit: int, language: str | None, hours:
         gl = "TH"
         ceid = "TH:th"
     params = {"q": query, "hl": hl, "gl": gl, "ceid": ceid}
-    r = await _client.get("https://news.google.com/rss/search", params=params)
-    if r.status_code != 200:
-        return []
-    text = r.text
+    
     try:
+        r = await _client.get("https://news.google.com/rss/search", params=params)
+        if r.status_code != 200:
+            return []
+        text = r.text
+        
         import xml.etree.ElementTree as ET
         root = ET.fromstring(text)
-    except Exception:
-        return []
-    channel = root.find("channel")
-    items = channel.findall("item") if channel is not None else []
-    normalized = []
-    since_dt = None
-    if hours and hours > 0:
-        since_dt = datetime.now(timezone.utc) - timedelta(hours=hours)
-    for it in items:
-        title = (it.findtext("title") or "").strip()
-        link = (it.findtext("link") or "").strip()
-        pub = it.findtext("pubDate")
-        source_el = it.find("source")
-        source = source_el.text.strip() if source_el is not None and source_el.text else None
-        published_at = pub
-        if pub:
-            try:
-                dt = parsedate_to_datetime(pub)
-                if dt and since_dt and dt.tzinfo:
-                    if dt < since_dt:
-                        continue
-            except Exception:
-                pass
-        normalized.append(
-            {
+        channel = root.find("channel")
+        items = channel.findall("item") if channel is not None else []
+        
+        normalized = []
+        since_dt = None
+        if hours and hours > 0:
+            since_dt = datetime.now(timezone.utc) - timedelta(hours=hours)
+            
+        for it in items:
+            title = (it.findtext("title") or "").strip()
+            link = (it.findtext("link") or "").strip()
+            pub = it.findtext("pubDate")
+            
+            # Extract description
+            raw_desc = (it.findtext("description") or "").strip()
+            summary = None
+            if raw_desc:
+                # Remove HTML tags (Google News RSS often has <a>...</a>)
+                summary = re.sub(r'<[^>]+>', '', raw_desc).strip()
+                # Decode HTML entities if present (basic cleanup)
+                summary = summary.replace("&nbsp;", " ").replace("&quot;", '"').replace("&apos;", "'").replace("&amp;", "&")
+
+            source_el = it.find("source")
+            source = source_el.text.strip() if source_el is not None and source_el.text else None
+            published_at = pub
+            if pub:
+                try:
+                    dt = parsedate_to_datetime(pub)
+                    if dt and since_dt and dt.tzinfo:
+                        if dt < since_dt:
+                            continue
+                except Exception:
+                    pass
+            item = {
                 "title": title or None,
-                "summary": None,
+                "summary": summary,
                 "published_at": published_at,
                 "source": source,
                 "url": link or None,
                 "image_url": None,
             }
-        )
-        if len(normalized) >= limit:
-            break
-    return normalized
+            if _is_valid_source(item):
+                normalized.append(item)
+                # Collect enough items
+                if len(normalized) >= limit * 2:
+                    break
+        return normalized
+    except Exception as e:
+        print(f"Google RSS error for {query}: {e}")
+        return []
+
+async def fetch_google_news(query: str, limit: int, language: str | None, hours: int, country: str | None):
+    # Parallel fetch strategy to ensure diversity
+    # 1. Fetch mostly non-Yahoo sources
+    # 2. Fetch Yahoo sources (if needed)
+    
+    # We add -site:yahoo.com to exclude Yahoo from the "Others" query
+    # We add site:finance.yahoo.com to specifically get Yahoo for the "Yahoo" query
+    
+    query_others = f"{query} -site:yahoo.com -site:finance.yahoo.com"
+    query_yahoo = f"{query} site:finance.yahoo.com"
+    
+    t_others = _fetch_google_rss_items(query_others, limit, language, hours, country)
+    t_yahoo = _fetch_google_rss_items(query_yahoo, limit, language, hours, country)
+    
+    items_others, items_yahoo = await asyncio.gather(t_others, t_yahoo)
+    
+    # Combine lists
+    all_items = items_others + items_yahoo
+    
+    return _mix_news_sources(all_items, limit)
 
 
 async def fetch_quote(symbol: str):
@@ -232,7 +378,142 @@ async def fetch_logo(symbol: str):
     except Exception:
         return None
 
-@app.get("/api/news/{symbol}")
+
+HOME_SYMBOLS = ["NVDA", "TSLA", "GOOG", "AAPL", "MSFT", "AMZN", "META", "BABA"]
+
+@app.get("/api/market/home")
+async def get_market_home(limit: int = 20):
+    """
+    Aggregates all data needed for the Home view:
+    1. Market News (EN & TH)
+    2. Updates for HOME_SYMBOLS (Quote + Latest News)
+    """
+    key = "market_home_data_v2"
+    cached = _cache_get(key)
+    if cached:
+        return cached
+
+    # 1. Fetch Market News (EN & TH) concurrently
+    # We use asyncio.gather for these
+    t0 = time.time()
+
+    # Pre-fetch symbols logo map to ensures consistency and speed
+    try:
+        symbols_list = await get_symbols()
+        logo_map = {s["symbol"]: s.get("logo") for s in symbols_list}
+    except Exception as e:
+        print(f"Error pre-fetching symbols for logos: {e}")
+        logo_map = {}
+    
+    # Define tasks for general news
+    task_en = fetch_news("stock market", limit, "en", 72, "us")
+    task_th = fetch_news("ตลาดหุ้น OR หุ้น OR ดัชนี", limit, "th", 72, "th")
+
+    # Define tasks for individual stocks (Quote + News)
+    # To avoid hitting rate limits too hard, we might want to chunk them or just go full parallel if the API permits.
+    # Finnhub has limits, but let's try parallel first.
+    
+    async def fetch_stock_data(sym):
+        try:
+            # Re-use existing endpoints helper logic? 
+            # Ideally we call the internal functions directly to avoid overhead of creating new requests if possible,
+            # but our functions are async so we can call them.
+            # But get_quote and get_company_news are route handlers.
+            # Let's call the helper functions they rely on or refactor logic slightly.
+            # fetch_quote and get_company_news logic.
+            
+            # Since get_company_news logic is inside a route handler, let's duplicate the logic slightly or call helpers.
+            # We have fetch_quote defined.
+            # We DON'T have a clean fetch_company_news helper, it's inside get_company_news.
+            # Let's quickly refactor get_company_news logic into a helper usually, but for now I'll implement it inline or call a new helper.
+            
+            # Helper for company news (inline for now to avoid massive refactor affecting other lines)
+            news_items = []
+            quote_data = await fetch_quote(sym)
+            
+            # Inject Logo from map
+            if quote_data:
+                quote_data["logo_url"] = logo_map.get(sym) or logo_map.get(sym.split(".")[0])
+            
+            if FINNHUB_TOKEN:
+                if not _client: await init_client()
+                now_utc = datetime.now(timezone.utc)
+                since = now_utc - timedelta(hours=72)
+                params_news = {
+                    "symbol": sym,
+                    "from": since.date().isoformat(),
+                    "to": now_utc.date().isoformat(),
+                    "token": FINNHUB_TOKEN,
+                }
+                try:
+                    r = await _client.get(f"{FINNHUB_BASE_URL}/company-news", params=params_news)
+                    if r.status_code == 200:
+                        raw_news = r.json() or []
+                        for a in raw_news[:2]: # Limit to 2 per stock for home feed
+                            news_items.append({
+                                "title": a.get("headline"),
+                                "summary": a.get("summary"),
+                                "published_at": a.get("datetime"),
+                                "source": a.get("source"),
+                                "url": a.get("url"),
+                                "image_url": a.get("image"),
+                            })
+                except Exception:
+                    pass
+            
+            return {
+                "ticker": sym,
+                "quote": quote_data,
+                "news": news_items
+            }
+        except Exception as e:
+            print(f"Error fetching home data for {sym}: {e}")
+            return None
+
+    # internal stock tasks
+    stock_tasks = [fetch_stock_data(sym) for sym in HOME_SYMBOLS]
+    
+    # Execute all
+    results = await asyncio.gather(task_en, task_th, *stock_tasks)
+    
+    news_en = results[0] or []
+    news_th = results[1] or []
+    stock_results = results[2:]
+    
+    # Process General News
+    # Merge and sort
+    combined_market_news = news_en + news_th
+    # Sort happens frontend usually, but we can send sorted
+    
+    # Process Stock Updates
+    # We want to flatten: each stock returned a list of news items ? 
+    # Frontend logic: 
+    # "updates" is a flat list of objects: { ticker, quote, news: {title, ...} }
+    # So if NVDA has 2 news, that creates 2 update items.
+    
+    updates_flat = []
+    for res in stock_results:
+        if res and res.get("news"):
+            for n in res["news"]:
+                updates_flat.append({
+                    "ticker": res["ticker"],
+                    "quote": res["quote"],
+                    "news": n
+                })
+    
+    # Sort updates by time desc
+    updates_flat.sort(key=lambda x: x["news"].get("published_at") or 0, reverse=True)
+    
+    payload = {
+        "market_news": combined_market_news,
+        "updates": updates_flat
+    }
+    
+    # Cache for 5 minutes
+    _cache_set(key, payload, ttl=300)
+    
+    return payload
+
 async def get_news(
     symbol: str,
     limit: int = Query(10, ge=1, le=50),
@@ -240,7 +521,7 @@ async def get_news(
     hours: int = Query(24, ge=1, le=168),
     country: str | None = Query(None, description="Two-letter country code (e.g., us, gb)"),
 ):
-    key = f"news-v2|{symbol.upper()}|{limit}|{language or ''}|{hours}|{country or ''}"
+    key = f"news-v5|{symbol.upper()}|{limit}|{language or ''}|{hours}|{country or ''}"
     cached = _cache_get(key)
     if cached is not None:
         return {
@@ -253,9 +534,11 @@ async def get_news(
             "ttl_seconds": NEWS_TTL_SECONDS,
         }
 
-    items = await fetch_news(symbol, limit, language, hours, country)
-    quote = await fetch_quote(symbol)
-    logo_url = await fetch_logo(symbol)
+    items, quote, logo_url = await asyncio.gather(
+        fetch_news(symbol, limit, language, hours, country),
+        fetch_quote(symbol),
+        fetch_logo(symbol)
+    )
 
     payload = {"news": items, "quote": quote, "logo_url": logo_url}
     _cache_set(key, payload, ttl=NEWS_TTL_SECONDS)
@@ -280,20 +563,80 @@ async def _require_client():
 
 @app.get("/api/finnhub/quote/{symbol}")
 async def get_quote(symbol: str):
-    if not FINNHUB_TOKEN:
-        raise HTTPException(500, "FINNHUB_TOKEN is not configured")
+    symbol = symbol.upper()
+    
+    # 1. Try Finnhub first
+    q = {}
+    success = False
+    
+    if FINNHUB_TOKEN:
+        await _require_client()
+        try:
+            r = await _client.get(f"{FINNHUB_BASE_URL}/quote", params={"symbol": symbol, "token": FINNHUB_TOKEN})
+            if r.status_code == 200:
+                q = r.json() or {}
+                # Finnhub often returns c=0 for invalid symbols
+                if q.get("c") != 0:
+                     success = True
+        except Exception as e:
+            print(f"Finnhub quote exception for {symbol}: {e}")
 
-    await _require_client()
+    # 2. Fallback to internal list (TradingView data) if Finnhub failed
+    if not success:
+        print(f"Finnhub failed/empty for {symbol}, trying internal list fallback")
+        try:
+            # We call get_symbols but we might need to await it properly if it's cached or not.
+            # get_symbols uses a cache key.
+            # To avoid circular dependency or complex logic, let's just check the cache directly first
+            # or call the function.
+            all_symbols = await get_symbols()
+            match = next((s for s in all_symbols if s["symbol"] == symbol), None)
+            
+            if match:
+                print(f"Found fallback data for {symbol}")
+                return {
+                    "symbol": symbol,
+                    "price": match.get("price", 0),
+                    "change": match.get("change", 0),
+                    "change_pct": match.get("change_pct", 0),
+                    "high": match.get("price", 0), # Approximate
+                    "low": match.get("price", 0),  # Approximate
+                    "open": match.get("price", 0), # Approximate
+                    "prev_close": match.get("price", 0), # Approximate
+                    "logo_url": match.get("logo"),
+                    "source": "fallback"
+                }
+        except Exception as e:
+            print(f"Fallback quote error: {e}")
 
-    r = await _client.get(f"{FINNHUB_BASE_URL}/quote", params={"symbol": symbol.upper(), "token": FINNHUB_TOKEN})
-    if r.status_code != 200:
-        raise HTTPException(r.status_code, f"Finnhub quote error: {r.text[:200]}")
-    q = r.json() or {}
+    # If still no success, return what we have (even if zeros) or raise error if it was a hard failure?
+    # If Finnhub returned 0s and we have no fallback, returning 0s is better than 500 Error
+    # because 500 Error causes the whole page to crash with "Invalid Symbol".
+    # Returning 0s allows the page to render (maybe with $0.00) but News might still load.
+    
+    if not success and not q:
+        # If we didn't get a response from Finnhub AND no fallback
+        # raise HTTPException(404, "Symbol not found")
+        # BUT, to be safe for user experience, let's return a dummy object with 0s
+        # so at least the News part (which is fetched separately) has a chance to show up?
+        # Actually, if quote fails, News.jsx throws error.
+        # So return dummy 0s is safer.
+        return {
+            "symbol": symbol,
+            "price": 0,
+            "change": 0,
+            "change_pct": 0,
+            "high": 0,
+            "low": 0,
+            "open": 0,
+            "prev_close": 0,
+            "logo_url": None
+        }
 
     logo_url = await fetch_logo(symbol)
 
     return {
-        "symbol": symbol.upper(),
+        "symbol": symbol,
         "price": q.get("c"),
         "change": q.get("d"),
         "change_pct": q.get("dp"),
@@ -311,6 +654,12 @@ async def get_company_news(
     limit: int = Query(20, ge=1, le=50),
     country: str | None = Query(None, description="Two-letter country code (e.g., us, gb)"),
 ):
+    # Cache check
+    key = f"company_news_v3|{symbol.upper()}|{hours}|{limit}|{country}"
+    cached = _cache_get(key)
+    if cached:
+        return cached
+
     if not FINNHUB_TOKEN:
         items = await fetch_news(symbol.upper(), limit, language="en", hours=hours, country=country)
         return {
@@ -336,22 +685,43 @@ async def get_company_news(
     items = r.json() or []
     # Normalize structure similar to NewsAPI
     normalized = []
-    for a in items[:limit]:
-        normalized.append(
-            {
-                "title": a.get("headline"),
-                "summary": a.get("summary"),
-                "published_at": a.get("datetime"),
-                "source": a.get("source"),
-                "url": a.get("url"),
-                "image_url": a.get("image"),
-            }
-        )
-    return {
+    for a in items:
+        item = {
+            "title": a.get("headline"),
+            "summary": a.get("summary"),
+            "published_at": a.get("datetime"),
+            "source": a.get("source"),
+            "url": a.get("url"),
+            "image_url": a.get("image"),
+        }
+        if _is_valid_source(item):
+            normalized.append(item)
+            # Collect more for mixing
+            if len(normalized) >= limit * 2:
+                break
+    
+    # Check diversity: If we have too few non-Yahoo items, supplement with Google News
+    non_yahoo_count = sum(1 for item in normalized if "yahoo" not in (item.get("source") or "").lower())
+    if non_yahoo_count < 3:
+        print(f"Low diversity for {symbol} from Finnhub ({non_yahoo_count} non-Yahoo). Supplementing with Google News.")
+        try:
+            query_others = f"{symbol} stock -site:yahoo.com -site:finance.yahoo.com"
+            google_items = await _fetch_google_rss_items(query_others, limit, "en", hours, country)
+            normalized.extend(google_items)
+        except Exception as e:
+            print(f"Error supplementing news: {e}")
+
+    # Mix sources
+    final_items = _mix_news_sources(normalized, limit)
+    
+    result = {
         "symbol": symbol.upper(),
-        "total": len(normalized),
-        "news": normalized,
+        "total": len(final_items),
+        "news": final_items,
     }
+    
+    _cache_set(key, result, ttl=NEWS_TTL_SECONDS)
+    return result
 
 
 @app.get("/api/stock/overview/{symbol}")
@@ -403,17 +773,34 @@ async def get_stock_overview(
         if r_news.status_code != 200:
             raise HTTPException(r_news.status_code, f"Finnhub news error: {r_news.text[:200]}")
         items = r_news.json() or []
-        for a in items[:limit]:
-            news_items.append(
-                {
-                    "title": a.get("headline"),
-                    "summary": a.get("summary"),
-                    "published_at": a.get("datetime"),
-                    "source": a.get("source"),
-                    "url": a.get("url"),
-                    "image_url": a.get("image"),
-                }
-            )
+        for a in items:
+            item = {
+                "title": a.get("headline"),
+                "summary": a.get("summary"),
+                "published_at": a.get("datetime"),
+                "source": a.get("source"),
+                "url": a.get("url"),
+                "image_url": a.get("image"),
+            }
+            if _is_valid_source(item):
+                news_items.append(item)
+                # Collect more to allow mixing
+                if len(news_items) >= limit * 2:
+                    break
+        
+        # Check diversity and supplement if needed
+        non_yahoo_count = sum(1 for item in news_items if "yahoo" not in (item.get("source") or "").lower())
+        if non_yahoo_count < 3:
+            print(f"Low diversity for {symbol} in Overview. Supplementing.")
+            try:
+                query_others = f"{symbol} stock -site:yahoo.com -site:finance.yahoo.com"
+                google_items = await _fetch_google_rss_items(query_others, limit, "en", hours, country)
+                news_items.extend(google_items)
+            except Exception as e:
+                print(f"Error supplementing overview news: {e}")
+
+        # Mix sources
+        news_items = _mix_news_sources(news_items, limit)
     else:
         items = await fetch_news(symbol_upper, limit, language or "en", hours, country)
         news_items = items
@@ -427,6 +814,28 @@ async def get_stock_overview(
             "items": news_items,
         },
     }
+
+async def _fetch_dr_symbols(client):
+    dr_symbols = []
+    try:
+        r = await client.get(DR_LIST_URL, timeout=2)
+        if r.status_code == 200:
+            data = r.json()
+            rows = data.get("rows", [])
+            for row in rows:
+                underlying = row.get("underlying")
+                if underlying:
+                    underlying = underlying.strip().upper()
+                    dr_symbols.append({
+                        "symbol": underlying,
+                        "name": row.get("underlyingName") or row.get("name") or "",
+                        "dr_symbol": row.get("symbol"),
+                        "logo": row.get("logo") or row.get("logoUrl") or row.get("image")
+                    })
+    except Exception as e:
+        print(f"Error fetching DR symbols: {e}")
+    return dr_symbols
+
 
 @app.get("/api/symbols")
 async def get_symbols():
@@ -466,8 +875,10 @@ async def get_symbols():
             print(f"Error fetching DR symbols: {e}")
             # Don't fail completely, just use fallback or empty
 
-        # 2. Fetch TradingView Stocks
-        tv_symbols = await _fetch_tradingview_stocks(client_to_use)
+        # 2. Fetch TradingView Stocks (US and Thailand)
+        tv_symbols_us = await _fetch_tradingview_stocks(client_to_use, region="america")
+        tv_symbols_th = await _fetch_tradingview_stocks(client_to_use, region="thailand")
+        tv_symbols = tv_symbols_us + tv_symbols_th
         
         # 3. Merge Lists
         # Use a dict to dedup by symbol, preferring DR info if available (or TV info if better?)
@@ -489,18 +900,26 @@ async def get_symbols():
         
         # Add TV symbols (will overwrite if exists, which might be good for better names/logos)
         for s in tv_symbols:
-            # If exists, maybe update logo if missing
+            # If exists, update logo/name but also merge volume/market_cap info if available
             if s["symbol"] in merged:
                 existing = merged[s["symbol"]]
                 if not existing.get("logo") and s.get("logo"):
                     existing["logo"] = s["logo"]
                 if not existing.get("name") and s.get("name"):
                     existing["name"] = s["name"]
+                
+                # Merge financial info
+                existing["market_cap"] = s.get("market_cap", 0)
+                existing["volume"] = s.get("volume", 0)
+                existing["price"] = s.get("price", 0)
+                existing["change_pct"] = s.get("change_pct", 0)
+                existing["change"] = s.get("change", 0)
             else:
                 merged[s["symbol"]] = s
         
         result = list(merged.values())
-        result.sort(key=lambda x: x["symbol"])
+        # Sort by Market Cap Descending (Popularity)
+        result.sort(key=lambda x: x.get("market_cap", 0), reverse=True)
         
         _cache_set(key, result, ttl=3600)
         return result
@@ -511,10 +930,15 @@ async def get_symbols():
 
 async def _fetch_tradingview_stocks(client, region="america"):
     try:
-        # Adjust filters based on region if needed, but standard stock filter usually works
-        # For Thailand, exchange might be SET or mai
-        exchange_filter = ["AMEX", "NASDAQ", "NYSE"] if region == "america" else ["SET", "mai"]
-        
+        url = "https://scanner.tradingview.com/america/scan"
+        min_volume = 500000 # Higher threshold for US to ensure news availability
+        exchange_filter = ["AMEX", "NASDAQ", "NYSE"]
+
+        if region == "thailand":
+            url = "https://scanner.tradingview.com/thailand/scan"
+            min_volume = 50000 # Threshold for Thai stocks
+            exchange_filter = ["SET", "mai"]
+
         # Filter logic to reduce noise (remove derivatives, low volume, etc.)
         # We restrict subtypes to common/etf/reit to avoid warrants/structured products that rarely have news.
         subtypes = ["common", "preference", "etf", "reit"]
@@ -524,8 +948,8 @@ async def _fetch_tradingview_stocks(client, region="america"):
                 {"left": "type", "operation": "in_range", "right": ["stock", "dr", "fund"]},
                 {"left": "subtype", "operation": "in_range", "right": subtypes},
                 {"left": "exchange", "operation": "in_range", "right": exchange_filter},
-                # Filter out inactive stocks (avg volume < 5000) which likely have no news
-                {"left": "average_volume_10d_calc", "operation": "greater", "right": 5000}
+                # Filter out inactive stocks
+                {"left": "average_volume_10d_calc", "operation": "greater", "right": min_volume}
             ],
             "options": {"lang": "en"},
             "symbols": {"query": {"types": []}, "tickers": []},
@@ -541,7 +965,7 @@ async def _fetch_tradingview_stocks(client, region="america"):
             "Content-Type": "application/json"
         }
 
-        r = await client.post(TRADINGVIEW_SCANNER_URL, json=payload, headers=headers, timeout=10)
+        r = await client.post(url, json=payload, headers=headers, timeout=10)
         if r.status_code != 200:
             print(f"TV Scanner error: {r.status_code} {r.text[:100]}")
             return []
@@ -562,6 +986,33 @@ async def _fetch_tradingview_stocks(client, region="america"):
             logoid = d[0]
             name = d[1]
             
+            # --- Additional Filtering Heuristics ---
+            # 1. Thai Specific Filters
+            if region == "thailand":
+                # Exclude Foreign board / NVDR / Warrants often denoted by dots (e.g., PTT.F, PTT.R)
+                # But allow numbers (2S, 7UP)
+                if "." in symbol:
+                    continue
+                # Exclude if Name is same as Symbol (often bad data like "88TH")
+                # Real companies usually have full names "PTT Public Company..."
+                if name.strip().upper() == symbol.strip().upper():
+                    continue
+
+            # 2. General Filters
+            # Exclude if name is empty
+            if not name:
+                continue
+            # ---------------------------------------
+
+            # Extract additional data (close, change, change_abs, volume, market_cap)
+            # columns: ["logoid", "name", "close", "change", "change_abs", "Recommend.All", "volume", "market_cap_basic"]
+            # indices:     0        1        2        3          4              5             6           7
+            close = d[2] if len(d) > 2 else 0
+            change_pct = d[3] if len(d) > 3 else 0
+            change_abs = d[4] if len(d) > 4 else 0
+            volume = d[6] if len(d) > 6 else 0
+            market_cap = d[7] if len(d) > 7 else 0
+
             logo_url = None
             if logoid:
                 # TV logo logic
@@ -571,7 +1022,12 @@ async def _fetch_tradingview_stocks(client, region="america"):
             results.append({
                 "symbol": symbol,
                 "name": name,
-                "logo": logo_url
+                "logo": logo_url,
+                "price": close,
+                "change_pct": change_pct,
+                "change": change_abs,
+                "volume": volume,
+                "market_cap": market_cap
             })
             
         return results

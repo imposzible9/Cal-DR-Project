@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState, useRef } from "react";
+import { trackPageView, trackDRSelection, trackCalculation } from "../utils/tracker";
+import { API_CONFIG } from "../config/api";
 
 // const API_BASE = "http://172.17.1.85:8333";
-const API_BASE = "https://localhost:8003";       // DR snapshot
-const CALC_API_BASE = "http://localhost:8002";      // DR real-time calc
+const API_BASE = "https://api.ideatrade1.com";       // DR snapshot (production)
+const CALC_API_BASE = API_CONFIG.RATINGS_API;      // DR real-time calc (local unified API)
 
 const EXCHANGE_CURRENCY_MAP = {
   "The Nasdaq Global Select Market": "USD",
@@ -114,7 +116,7 @@ export default function DRCal() {
 
 
   const tableRef = useRef(null);
-  const SPREAD_PCT = 0.002; 
+  const SPREAD_PCT = 0.002;
 
   // ================== ดึง DR ทั้งหมด ==================
   useEffect(() => {
@@ -122,7 +124,7 @@ export default function DRCal() {
       try {
         const res = await fetch(
           // `${API_BASE}/dr?fields=` +
-          `${API_BASE}/caldr?fields=`+
+          `${API_BASE}/caldr?fields=` +
           [
             "symbol",
             "name",
@@ -156,7 +158,7 @@ export default function DRCal() {
 
         const data = await res.json();
         setAllDR(data.rows || []);
-        
+
         if (data.updated_at) {
           const date = new Date(data.updated_at * 1000);
           if (!isNaN(date.getTime())) {
@@ -178,7 +180,9 @@ export default function DRCal() {
         console.error(err);
       }
     }
+
     fetchDR();
+    trackPageView('caldr');
   }, []);
 
   // ================== format numbers ==================
@@ -228,6 +232,22 @@ export default function DRCal() {
   const fairAskTHB = fairMidTHB * (1 + SPREAD_PCT / 2);
   const hasInput = underlyingValue && fxTHBPerUnderlying;
 
+  // Track Calculation
+  useEffect(() => {
+    if (selectedDR && hasInput && fairMidTHB > 0) {
+      const timeout = setTimeout(() => {
+        trackCalculation(
+          selectedDR.symbol,
+          underlyingValue,
+          fxTHBPerUnderlying,
+          fairBidTHB.toFixed(2),
+          fairAskTHB.toFixed(2)
+        );
+      }, 2000);
+      return () => clearTimeout(timeout);
+    }
+  }, [selectedDR, hasInput, fairMidTHB, fairBidTHB, fairAskTHB, underlyingValue, fxTHBPerUnderlying]);
+
   // ================== Suggest ==================
   const filteredSuggest = useMemo(() => {
     const q = searchText.trim().toUpperCase();
@@ -259,6 +279,7 @@ export default function DRCal() {
 
     // 🔥 ดึง realtime
     fetchRealtimeUnderlying(dr.symbol);
+    trackDRSelection(dr.symbol);
   };
 
 
@@ -490,138 +511,138 @@ export default function DRCal() {
         </p>
 
         <div className="w-full min-h-[627px] mt-2">
-        <div className="flex w-full">
-          <div className="flex-1 min-h-[427px] bg-[#FFFFFF] rounded-tl-[12px] rounded-bl-[12px] shadow-[0_10px_25px_rgba(0,0,0,0.12)] px-6 pt-10 border border-[#e0e0e0]">
-            <h2 className="font-semibold text-[26px] text-black mb-[14px]">Select DR</h2>
-            <div className="relative w-full h-[48px]">
-              <input
-                type="text"
-                placeholder="Select DR"
-                value={searchText}
-                onChange={handleSearchChange}
-                onKeyDown={handleSearchKeyDown}
-                onFocus={() => setShowSuggest(true)}
-                className="w-full h-full bg-white border border-[#d0d0d0] rounded-[12px] pl-4 pr-12 text-black shadow-lg focus:outline-none"
-              />
-              <svg xmlns="http://www.w3.org/2000/svg" className="absolute right-4 top-1/2 -translate-y-1/2 h-6 w-6 text-black" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-              </svg>
-              {showSuggest && filteredSuggest.length > 0 && (
-                <div className="absolute z-40 mt-1 max-h-64 w-full overflow-y-auto rounded-2xl border border-[#e0e0e0] bg-white shadow-xl">
-                  {filteredSuggest.map((dr, idx) => (
-                    <button
-                      key={dr.symbol}
-                      type="button"
-                      onMouseDown={() => applyDR(dr)}
-                      className={`flex w-full justify-between px-4 py-2 text-left text-sm ${idx === highlightIndex ? "bg-gray-100" : "hover:bg-gray-50"}`}
-                    >
-                      <span className="font-semibold text-black">{dr.symbol}</span>
-                      <span className="text-xs text-gray-500 truncate w-40 text-right">{dr.name}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div className="mt-6">
-              <h3 className="text-[#0046b8] font-extrabold text-[30px] leading-[26px]">{selectedDR?.symbol || "—"}</h3>
-              <p className="font-medium text-[10px] text-[#555] mt-1 truncate">
-                {selectedDR ? `Depositary Receipt on ${selectedDR.underlying || selectedDR.underlyingName} Issued by ${selectedDR.issuer}` : "—"}
-              </p>
-              <div className="w-full h-[175px] bg-white border border-[#e0e0e0] rounded-[12px] shadow-lg mt-4 p-4 relative">
-                <p className="font-bold text-[13px] text-[#6B6B6B]">Ratio (DR : Underlying)</p>
-                <p className="font-bold text-[26px] text-[#111]">{ratioDR ? `${fmtNum(ratioDR, 0)} : 1` : "—"} </p>
-                <div className="w-full h-[1px] bg-[#9A9A9A] mt-2"></div>
-                <div className="flex items-center mt-2">
-                  <div className="w-1/2">
-                    <p className="font-bold text-[13px] text-[#6B6B6B] mt-1">Last Price</p>
-                    <p className="font-bold text-[26px]">{selectedDR?.last ? fmtNum(selectedDR.last) : "—"}</p>
+          <div className="flex w-full">
+            <div className="flex-1 min-h-[427px] bg-[#FFFFFF] rounded-tl-[12px] rounded-bl-[12px] shadow-[0_10px_25px_rgba(0,0,0,0.12)] px-6 pt-10 border border-[#e0e0e0]">
+              <h2 className="font-semibold text-[26px] text-black mb-[14px]">Select DR</h2>
+              <div className="relative w-full h-[48px]">
+                <input
+                  type="text"
+                  placeholder="Select DR"
+                  value={searchText}
+                  onChange={handleSearchChange}
+                  onKeyDown={handleSearchKeyDown}
+                  onFocus={() => setShowSuggest(true)}
+                  className="w-full h-full bg-white border border-[#d0d0d0] rounded-[12px] pl-4 pr-12 text-black shadow-lg focus:outline-none"
+                />
+                <svg xmlns="http://www.w3.org/2000/svg" className="absolute right-4 top-1/2 -translate-y-1/2 h-6 w-6 text-black" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+                {showSuggest && filteredSuggest.length > 0 && (
+                  <div className="absolute z-40 mt-1 max-h-64 w-full overflow-y-auto rounded-2xl border border-[#e0e0e0] bg-white shadow-xl">
+                    {filteredSuggest.map((dr, idx) => (
+                      <button
+                        key={dr.symbol}
+                        type="button"
+                        onMouseDown={() => applyDR(dr)}
+                        className={`flex w-full justify-between px-4 py-2 text-left text-sm ${idx === highlightIndex ? "bg-gray-100" : "hover:bg-gray-50"}`}
+                      >
+                        <span className="font-semibold text-black">{dr.symbol}</span>
+                        <span className="text-xs text-gray-500 truncate w-40 text-right">{dr.name}</span>
+                      </button>
+                    ))}
                   </div>
-                  <div className="absolute left-1/2 -translate-x-1/2 w-[1px] h-[56px] bg-[#9A9A9A]"></div>
-                  <div className="w-1/2 pl-6">
-                    <p className="font-bold text-[13px] text-[#6B6B6B] mt-1">Change</p>
-                    <p className={`font-bold text-[26px] ${changeAbs > 0 ? "text-[#27AE60]" : changeAbs < 0 ? "text-[#EB5757]" : "text-black"}`}>
-                      {`${fmtNum(changeAbs)} (${fmtPct(changePct)})`}
-                    </p>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex-1 bg-[#0B102A] rounded-tr-[16px] rounded-br-[16px] shadow-lg p-6">
-            <div className="w-full h-[253px] bg-white/20 border border-[#9A9A9A] rounded-[12px] shadow-lg p-6">
-              <div className="mb-4">
-                <p className="font-bold text-[13px] text-white mb-1">Underlying Price</p>
-                <div className="w-full h-[46px] bg-white/20 border border-[#9A9A9A] rounded-[12px] flex items-center hover:border-[#4AB6FF] transition-colors duration-150">
-                  <input
-                    type="text"
-                    autoComplete="off"
-                    value={underlyingValue}
-                    readOnly
-                    disabled={loadingRealtime}
-                    style={{ WebkitTextFillColor: "white" }}
-                    className={`flex-1 h-full bg-transparent text-white placeholder-[#9A9A9A] px-4 focus:outline-none ${loadingRealtime ? "opacity-50 cursor-not-allowed" : ""}`}
-                  />
-                  <div className="w-[1px] h-[30px] bg-[#9A9A9A]"></div>
-                  <div className="w-[100px] flex justify-center text-white font-bold text-[13px]">
-                    {underlyingCurrency || "USD"}
-                  </div>
-                </div>
+                )}
               </div>
 
-              <div>
-                <p className="font-bold text-[13px] text-white mb-1">Exchange Rate</p>
-                <div className="w-full h-[46px] bg-white/20 border border-[#9A9A9A] rounded-[12px] flex items-center hover:border-[#4AB6FF] transition-colors duration-150">
-                  <input
-                    type="text"
-                    autoComplete="off"
-                    value={fxTHBPerUnderlying}
-                    readOnly
-                    disabled={loadingRealtime}
-                    style={{ WebkitTextFillColor: "white" }}
-                    className={`flex-1 h-full bg-transparent text-white placeholder-[#9A9A9A] px-4 focus:outline-none ${loadingRealtime ? "opacity-50 cursor-not-allowed" : ""}`}
-                  />
-                  <div className="w-[1px] h-[30px] bg-[#9A9A9A]"></div>
-                  <div className="w-[100px] flex justify-center text-white font-bold text-[13px]">{"THB/" + (underlyingCurrency || "USD")}</div>
-                </div>
-              </div>
-
-              {loadingRealtime && (
-                <span className="text-xs text-blue-300 ml-2">Calculating fair value…</span>
-              )}
-
-
-              <div className="flex justify-center gap-2 mt-4 w-full">
-                <button onClick={onReset} className="w-[139px] h-[38px] bg-white rounded-[8px] flex justify-center items-center gap-2 text-black font-bold text-[12px] hover:bg-gray-200 transition-colors">Clear</button>
-              </div>
-            </div>
-
-            <div className="mt-6 px-4">
-              <h3 className="text-white font-bold text-[20px] mb-4">Calculation Result</h3>
-              <div className="flex justify-between items-center mb-2 px-4">
-                <span className="text-white font-bold text-[16px]">Fair Bid</span>
-                <span className="text-white font-bold text-[18px]">{hasInput ? `${fmtTHB(fairBidTHB)} THB` : "-  THB"}</span>
-              </div>
-              <div className="flex justify-between items-center px-4 mb-4">
-                <span className="text-white font-bold text-[16px]">Fair Ask</span>
-                <span className="text-white font-bold text-[18px]">{hasInput ? `${fmtTHB(fairAskTHB)} THB` : "-  THB"}</span>
-              </div>
-            </div>
-
-            {/* Warning Box */}
-            <div className="mt-0 px-0">
-              <div className="w-full bg-red-500/20 backdrop-blur-sm border border-red-500 rounded-[12px] p-4">
-                <p className="text-red-400 text-[12px] leading-relaxed">
-                  <span className="font-extrabold">หมายเหตุ:</span> ระบบแสดงราคา Fair Bid / Fair Ask เพื่อเป็นข้อมูลประกอบการตัดสินใจเบื้องต้นเท่านั้น โดยประมวลผลจากราคาสินทรัพย์อ้างอิง อัตราแลกเปลี่ยน และ อัตราส่วนต่อสินทรัพย์อ้างอิง ราคาบนกระดานซื้อขายจริงอาจแตกต่างไปตามสภาพคล่องของ DR
+              <div className="mt-6">
+                <h3 className="text-[#0046b8] font-extrabold text-[30px] leading-[26px]">{selectedDR?.symbol || "—"}</h3>
+                <p className="font-medium text-[10px] text-[#555] mt-1 truncate">
+                  {selectedDR ? `Depositary Receipt on ${selectedDR.underlying || selectedDR.underlyingName} Issued by ${selectedDR.issuer}` : "—"}
                 </p>
+                <div className="w-full h-[175px] bg-white border border-[#e0e0e0] rounded-[12px] shadow-lg mt-4 p-4 relative">
+                  <p className="font-bold text-[13px] text-[#6B6B6B]">Ratio (DR : Underlying)</p>
+                  <p className="font-bold text-[26px] text-[#111]">{ratioDR ? `${fmtNum(ratioDR, 0)} : 1` : "—"} </p>
+                  <div className="w-full h-[1px] bg-[#9A9A9A] mt-2"></div>
+                  <div className="flex items-center mt-2">
+                    <div className="w-1/2">
+                      <p className="font-bold text-[13px] text-[#6B6B6B] mt-1">Last Price</p>
+                      <p className="font-bold text-[26px]">{selectedDR?.last ? fmtNum(selectedDR.last) : "—"}</p>
+                    </div>
+                    <div className="absolute left-1/2 -translate-x-1/2 w-[1px] h-[56px] bg-[#9A9A9A]"></div>
+                    <div className="w-1/2 pl-6">
+                      <p className="font-bold text-[13px] text-[#6B6B6B] mt-1">Change</p>
+                      <p className={`font-bold text-[26px] ${changeAbs > 0 ? "text-[#27AE60]" : changeAbs < 0 ? "text-[#EB5757]" : "text-black"}`}>
+                        {`${fmtNum(changeAbs)} (${fmtPct(changePct)})`}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex-1 bg-[#0B102A] rounded-tr-[16px] rounded-br-[16px] shadow-lg p-6">
+              <div className="w-full h-[253px] bg-white/20 border border-[#9A9A9A] rounded-[12px] shadow-lg p-6">
+                <div className="mb-4">
+                  <p className="font-bold text-[13px] text-white mb-1">Underlying Price</p>
+                  <div className="w-full h-[46px] bg-white/20 border border-[#9A9A9A] rounded-[12px] flex items-center hover:border-[#4AB6FF] transition-colors duration-150">
+                    <input
+                      type="text"
+                      autoComplete="off"
+                      value={underlyingValue}
+                      readOnly
+                      disabled={loadingRealtime}
+                      style={{ WebkitTextFillColor: "white" }}
+                      className={`flex-1 h-full bg-transparent text-white placeholder-[#9A9A9A] px-4 focus:outline-none ${loadingRealtime ? "opacity-50 cursor-not-allowed" : ""}`}
+                    />
+                    <div className="w-[1px] h-[30px] bg-[#9A9A9A]"></div>
+                    <div className="w-[100px] flex justify-center text-white font-bold text-[13px]">
+                      {underlyingCurrency || "USD"}
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <p className="font-bold text-[13px] text-white mb-1">Exchange Rate</p>
+                  <div className="w-full h-[46px] bg-white/20 border border-[#9A9A9A] rounded-[12px] flex items-center hover:border-[#4AB6FF] transition-colors duration-150">
+                    <input
+                      type="text"
+                      autoComplete="off"
+                      value={fxTHBPerUnderlying}
+                      readOnly
+                      disabled={loadingRealtime}
+                      style={{ WebkitTextFillColor: "white" }}
+                      className={`flex-1 h-full bg-transparent text-white placeholder-[#9A9A9A] px-4 focus:outline-none ${loadingRealtime ? "opacity-50 cursor-not-allowed" : ""}`}
+                    />
+                    <div className="w-[1px] h-[30px] bg-[#9A9A9A]"></div>
+                    <div className="w-[100px] flex justify-center text-white font-bold text-[13px]">{"THB/" + (underlyingCurrency || "USD")}</div>
+                  </div>
+                </div>
+
+                {loadingRealtime && (
+                  <span className="text-xs text-blue-300 ml-2">Calculating fair value…</span>
+                )}
+
+
+                <div className="flex justify-center gap-2 mt-4 w-full">
+                  <button onClick={onReset} className="w-[139px] h-[38px] bg-white rounded-[8px] flex justify-center items-center gap-2 text-black font-bold text-[12px] hover:bg-gray-200 transition-colors">Clear</button>
+                </div>
+              </div>
+
+              <div className="mt-6 px-4">
+                <h3 className="text-white font-bold text-[20px] mb-4">Calculation Result</h3>
+                <div className="flex justify-between items-center mb-2 px-4">
+                  <span className="text-white font-bold text-[16px]">Fair Bid</span>
+                  <span className="text-white font-bold text-[18px]">{hasInput ? `${fmtTHB(fairBidTHB)} THB` : "-  THB"}</span>
+                </div>
+                <div className="flex justify-between items-center px-4 mb-4">
+                  <span className="text-white font-bold text-[16px]">Fair Ask</span>
+                  <span className="text-white font-bold text-[18px]">{hasInput ? `${fmtTHB(fairAskTHB)} THB` : "-  THB"}</span>
+                </div>
+              </div>
+
+              {/* Warning Box */}
+              <div className="mt-0 px-0">
+                <div className="w-full bg-red-500/20 backdrop-blur-sm border border-red-500 rounded-[12px] p-4">
+                  <p className="text-red-400 text-[12px] leading-relaxed">
+                    <span className="font-extrabold">หมายเหตุ:</span> ระบบแสดงราคา Fair Bid / Fair Ask เพื่อเป็นข้อมูลประกอบการตัดสินใจเบื้องต้นเท่านั้น โดยประมวลผลจากราคาสินทรัพย์อ้างอิง อัตราแลกเปลี่ยน และ อัตราส่วนต่อสินทรัพย์อ้างอิง ราคาบนกระดานซื้อขายจริงอาจแตกต่างไปตามสภาพคล่องของ DR
+                  </p>
+                </div>
               </div>
             </div>
           </div>
-        </div>
 
-        {updatedAt && (
-          <div className="flex flex-col items-end gap-0.5 text-xs text-gray-500 pr-1 mt-4 mb-1">
+          {updatedAt && (
+            <div className="flex flex-col items-end gap-0.5 text-xs text-gray-500 pr-1 mt-4 mb-1">
               <div>
                 Last Updated:{" "}
                 {updatedAt.toLocaleString("en-US", {
@@ -633,10 +654,10 @@ export default function DRCal() {
                   second: "2-digit",
                 })}
               </div>
-          </div>
-        )}
+            </div>
+          )}
 
-        {renderComparisonTable()}
+          {renderComparisonTable()}
         </div>
       </div>
     </div>
