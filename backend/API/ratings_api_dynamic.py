@@ -1,4 +1,5 @@
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Request
+from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import httpx
@@ -6,6 +7,10 @@ import uvicorn
 import asyncio
 import json
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
+print("--- RELOADED RATINGS API (UPDATED) ---")
 import re
 import random
 import sqlite3
@@ -41,6 +46,10 @@ MAX_CONCURRENCY = 4
 REQUEST_TIMEOUT = 15      
 UPDATE_INTERVAL_SECONDS = 180 
 BATCH_SLEEP_SECONDS = 1.0
+
+
+class AuthRequest(BaseModel):
+    password: str
 
 
 
@@ -118,7 +127,7 @@ def init_database():
                not check_table_schema(cur, "rating_main") or \
                not check_table_schema(cur, "rating_history"):
                 needs_recreate = True
-                print("⚠️ Old database schema detected. Recreating tables with new schema...")
+                print("[WARN] Old database schema detected. Recreating tables with new schema...")
         
         if needs_recreate:
             # Drop old tables
@@ -211,7 +220,7 @@ def init_database():
                 if col_name not in existing_cols:
                     cur.execute(f"ALTER TABLE rating_history ADD COLUMN {col_name} {col_type}")
         except Exception as e:
-            print(f"⚠️ Failed to ensure rating_history market-data columns: {e}")
+            print(f"[WARN] Failed to ensure rating_history market-data columns: {e}")
 
         try:
             cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", ("rating_accuracy",))
@@ -219,11 +228,11 @@ def init_database():
                 cur.execute("PRAGMA table_info(rating_accuracy)")
                 columns = [row[1] for row in cur.fetchall()]
                 if "timeframe" in columns or "currency" not in columns or "high" not in columns or "low" not in columns or "price_prev" not in columns:
-                    print("⚠️ Old rating_accuracy schema detected. Dropping and recreating table...")
+                    print("[WARN] Old rating_accuracy schema detected. Dropping and recreating table...")
                     cur.execute("DROP TABLE IF EXISTS rating_accuracy")
                     print("   -> Dropped old rating_accuracy table")
         except Exception as e:
-            print(f"⚠️ Error checking rating_accuracy schema: {e}")
+            print(f"[WARN] Error checking rating_accuracy schema: {e}")
         
         cur.execute("""
             CREATE TABLE IF NOT EXISTS rating_accuracy (
@@ -261,21 +270,113 @@ def init_database():
             ON rating_accuracy(ticker, timestamp DESC)
         """)
 
+        # Check and migrate tracking tables - force recreate to use ip_address schema
+        try:
+            cur.execute("PRAGMA table_info(visitor_stats)")
+            visitor_cols = {row[1] for row in cur.fetchall()}
+            # Force recreate if using old schema (user_id instead of ip_address)
+            if "user_id" in visitor_cols or ("ip_address" not in visitor_cols and len(visitor_cols) > 0):
+                print("[WARN] Old tracking tables schema detected (using user_id). Recreating with ip_address...")
+                cur.execute("DROP TABLE IF EXISTS visitor_stats")
+                cur.execute("DROP TABLE IF EXISTS user_page_analytics")
+                cur.execute("DROP TABLE IF EXISTS user_behavior")
+                print("   -> Dropped old tracking tables")
+        except Exception as e:
+            print(f"[WARN] Error checking tracking tables schema: {e}")
+
+        # Create tracking tables using IP address as primary identifier
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS visitor_stats (
+                ip_address TEXT PRIMARY KEY,
+                visit_count INTEGER DEFAULT 0,
+                last_visit TEXT
+            )
+        """)
+
+        # Check if user_page_analytics has old schema (with total_pages, pages_visited, or last_viewed column)
+        try:
+            cur.execute("PRAGMA table_info(user_page_analytics)")
+            page_cols = {row[1] for row in cur.fetchall()}
+            if "total_pages" in page_cols or "pages_visited" in page_cols or "last_viewed" in page_cols:
+                print("[WARN] Old user_page_analytics schema detected. Recreating...")
+                cur.execute("DROP TABLE IF EXISTS user_page_analytics")
+                print("   -> Dropped old user_page_analytics table")
+        except Exception as e:
+            print(f"[WARN] Error checking user_page_analytics schema: {e}")
+
+        # Page analytics - one row per IP + page combination
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS user_page_analytics (
+                ip_address TEXT,
+                page_path TEXT,
+                view_count INTEGER DEFAULT 0,
+                PRIMARY KEY (ip_address, page_path)
+            )
+        """)
+
+        # User behavior table - stores all tracking events with full details
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS user_behavior (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ip_address TEXT NOT NULL,
+                session_id TEXT,
+                event_type TEXT NOT NULL,
+                event_data TEXT,
+                page_path TEXT,
+                timestamp TEXT NOT NULL,
+                user_agent TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Create indexes for faster queries on user_behavior
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_user_behavior_ip_address 
+            ON user_behavior(ip_address)
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_user_behavior_event_type 
+            ON user_behavior(event_type)
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_user_behavior_timestamp 
+            ON user_behavior(timestamp DESC)
+        """)
+
+        # Auth security table for IP blocking
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS auth_security (
+                ip_address TEXT PRIMARY KEY,
+                failed_attempts INTEGER DEFAULT 0,
+                blocked_until TEXT,
+                last_attempt TEXT
+            )
+        """)
+
+        # Authorized sessions table for IP-based persistence
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS authorized_sessions (
+                ip_address TEXT PRIMARY KEY,
+                expires_at TEXT NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         con.commit()
         con.close()
         if needs_recreate:
-            print("✅ SQLite database recreated with new schema successfully.")
+            print("[OK] SQLite database recreated with new schema successfully.")
         else:
-            print("✅ SQLite database and tables initialized successfully.")
+            print("[OK] SQLite database and tables initialized successfully.")
     except Exception as e:
-        print(f"⚠️ Database initialization failed: {e}")
+        print(f"[ERROR] Database initialization failed: {e}")
         import traceback
         traceback.print_exc()
 
 def migrate_from_json_if_needed():
     """Reads data from old JSON files and loads it into the SQLite database."""
     if not os.path.exists(DB_FILE):
-        print("🤔 New database, migration not possible.")
+        print("[INFO] New database, migration not possible.")
         return
 
     try:
@@ -287,11 +388,11 @@ def migrate_from_json_if_needed():
 
         cur.execute("SELECT COUNT(*) FROM rating_stats")
         if cur.fetchone()[0] > 0:
-            print("✅ Database already contains data. Skipping migration.")
+            print("[OK] Database already contains data. Skipping migration.")
             con.close()
             return
         
-        print("🚚 Starting data migration from JSON to SQLite...")
+        print("[INFO] Starting data migration from JSON to SQLite...")
 
         if os.path.exists(OLD_STATS_FILE):
             print(f"  -> Migrating {OLD_STATS_FILE}...")
@@ -395,10 +496,10 @@ def migrate_from_json_if_needed():
             os.rename(OLD_HISTORY_FILE, f"{OLD_HISTORY_FILE}.migrated")
         
         con.commit()
-        print("🎉 Migration completed successfully!")
+        print("[OK] Migration completed successfully!")
 
     except Exception as e:
-        print(f"❌ Migration Error: {e}")
+        print(f"[ERROR] Migration Error: {e}")
         import traceback
         traceback.print_exc()
     finally:
@@ -2317,10 +2418,10 @@ def populate_accuracy_on_startup():
         con.commit()
         con.close()
         
-        print(f"[Accuracy Startup] ✅ Completed: {populated_count} records populated, {error_count} errors")
+        print(f"[Accuracy Startup] [OK] Completed: {populated_count} records populated, {error_count} errors")
         
     except Exception as e:
-        print(f"[Accuracy Startup] ❌ Fatal error: {e}")
+        print(f"[Accuracy Startup] [ERROR] Fatal error: {e}")
         import traceback
         traceback.print_exc()
         if 'con' in locals() and con:
@@ -2938,7 +3039,7 @@ def get_history_with_accuracy(
         
         # Print timing logs
         total_time = time.time() - start_time
-        print(f"⏱️ [History Accuracy] {ticker.upper()}: connect={connect_time:.3f}s, pragma={pragma_time:.3f}s, query2={query2_time:.3f}s, total={total_time:.3f}s")
+        print(f"[TIME] [History Accuracy] {ticker.upper()}: connect={connect_time:.3f}s, pragma={pragma_time:.3f}s, query2={query2_time:.3f}s, total={total_time:.3f}s")
         
         return {
             "ticker": ticker.upper(),
@@ -2957,7 +3058,7 @@ def get_history_with_accuracy(
     except sqlite3.OperationalError as e:
         error_msg = str(e)
         if "locked" in error_msg.lower():
-            print(f"⚠️ [History Accuracy] Database locked for {ticker.upper()}: {e}")
+            print(f"[LOCKED] [History Accuracy] Database locked for {ticker.upper()}: {e}")
             if 'con' in locals() and con:
                 con.close()
             return {
@@ -2967,7 +3068,7 @@ def get_history_with_accuracy(
                 "accuracy": {"accuracy": 0.0, "correct": 0, "incorrect": 0, "total": 0}
             }
         else:
-            print(f"❌ History with Accuracy API Error (OperationalError): {e}")
+            print(f"[ERROR] History with Accuracy API Error (OperationalError): {e}")
             import traceback
             traceback.print_exc()
             if 'con' in locals() and con:
@@ -2979,7 +3080,7 @@ def get_history_with_accuracy(
                 "accuracy": {"accuracy": 0.0, "correct": 0, "incorrect": 0, "total": 0}
             }
     except Exception as e:
-        print(f"❌ History with Accuracy API Error: {e}")
+        print(f"[ERROR] History with Accuracy API Error: {e}")
         import traceback
         traceback.print_exc()
         if 'con' in locals() and con:
@@ -3038,7 +3139,7 @@ def ratings_from_dr_api():
     # If mock data is enabled, return mock AAPL data
     if USE_MOCK_DATA:
         result = load_mock_aapl_data()
-        print(f"✅ Mock data loaded, returning: {result}")
+        print(f"[MOCK] Mock data loaded, returning: {result}")
         return result
     
     rows = []
@@ -3128,12 +3229,644 @@ def ratings_from_dr_api():
         return {"updated_at": updated_at_str, "count": len(rows), "rows": rows}
     
     except Exception as e:
-        print(f"❌ API Error fetching from DB: {e}")
+        print(f"[ERROR] API Error fetching from DB: {e}")
         import traceback
         traceback.print_exc()
         if 'con' in locals() and con:
             con.close()
         return {"updated_at": updated_at_str, "count": 0, "rows": []}
 
+# --- Tracking API ---
+
+class TrackingEvent(BaseModel):
+    session_id: str
+    user_id: str
+    event_type: str
+    event_data: dict
+    page_path: str
+    timestamp: str
+    user_agent: str
+
+@app.post("/api/track")
+async def track_event(event: TrackingEvent, request: Request):
+    max_retries = 3
+    retry_delay = 0.1  # Start with 100ms
+    
+    for attempt in range(max_retries):
+        con = None
+        try:
+            # Use timeout and WAL mode for better concurrency
+            con = sqlite3.connect(DB_FILE, timeout=10.0)
+            cur = con.cursor()
+            cur.execute("PRAGMA journal_mode=WAL")
+            cur.execute("PRAGMA busy_timeout=10000")  # 10 seconds
+            cur.execute("PRAGMA synchronous=NORMAL")  # Faster writes
+            
+            # Use client IP as the primary identifier
+            client_ip = request.client.host if request.client else "unknown"
+
+            # 1. Insert into user_behavior (detailed event log)
+            cur.execute("""
+                INSERT INTO user_behavior (ip_address, session_id, event_type, event_data, page_path, timestamp, user_agent)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                client_ip,
+                event.session_id,
+                event.event_type,
+                json.dumps(event.event_data),  # Store event_data as JSON string
+                event.page_path,
+                event.timestamp,
+                event.user_agent
+            ))
+
+            # 2. Update visitor_stats (Upsert by IP address)
+            cur.execute("""
+                INSERT INTO visitor_stats (ip_address, visit_count, last_visit)
+                VALUES (?, 1, ?)
+                ON CONFLICT(ip_address) DO UPDATE SET
+                visit_count = visit_count + 1,
+                last_visit = excluded.last_visit
+            """, (client_ip, event.timestamp))
+
+            # 3. If page_view, update user_page_analytics (IP, total_pages, pages_visited with counts)
+            if event.event_type == 'page_view':
+                # Upsert: insert new row or increment view_count
+                cur.execute("""
+                    INSERT INTO user_page_analytics (ip_address, page_path, view_count)
+                    VALUES (?, ?, 1)
+                    ON CONFLICT(ip_address, page_path) DO UPDATE SET
+                    view_count = view_count + 1
+                """, (client_ip, event.page_path))
+
+            con.commit()
+            con.close()
+            
+            print(f"[TRACK] {event.event_type} from {client_ip} at {event.page_path}")
+            return {"status": "success"}
+            
+        except sqlite3.OperationalError as e:
+            if con:
+                con.close()
+            if "locked" in str(e).lower() and attempt < max_retries - 1:
+                # Retry with exponential backoff
+                import asyncio
+                await asyncio.sleep(retry_delay)
+                retry_delay *= 2  # Double the delay each retry
+                print(f"[TRACK] Database locked, retrying... (attempt {attempt + 2}/{max_retries})")
+                continue
+            else:
+                print(f"[ERROR] Track event failed after {attempt + 1} attempts: {e}")
+                return {"status": "error", "message": str(e)}
+                
+        except Exception as e:
+            if con:
+                con.close()
+            print(f"[ERROR] Track event failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return {"status": "error", "message": str(e)}
+    
+    return {"status": "error", "message": "Max retries exceeded"}
+
+
+# Validating request body
+class TrackingEvent(BaseModel):
+    session_id: str
+    user_id: str
+    event_type: str
+    event_data: dict
+    page_path: str
+    timestamp: str
+    user_agent: str = None
+
+@app.post("/api/track")
+async def track_event(event: TrackingEvent, request: Request):
+    try:
+        con = sqlite3.connect(DB_FILE)
+        cur = con.cursor()
+        
+        # Get client IP
+        client_ip = request.client.host
+        x_forwarded_for = request.headers.get("X-Forwarded-For")
+        if x_forwarded_for:
+            client_ip = x_forwarded_for.split(",")[0]
+            
+        # Insert into user_behavior
+        try:
+            # Schema: id, ip_address, session_id, event_type, event_data, page_path, timestamp, user_agent, created_at
+            cur.execute("""
+                INSERT INTO user_behavior (session_id, ip_address, event_type, event_data, page_path, timestamp, user_agent)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                event.session_id,
+                client_ip, # mapped to ip_address column
+                event.event_type,
+                json.dumps(event.event_data),
+                event.page_path,
+                event.timestamp,
+                event.user_agent
+            ))
+            
+            # Update visitor_stats (UPSERT)
+            cur.execute("""
+                INSERT INTO visitor_stats (ip_address, visit_count, last_visit)
+                VALUES (?, 1, ?)
+                ON CONFLICT(ip_address) DO UPDATE SET
+                    visit_count = visit_count + 1,
+                    last_visit = excluded.last_visit
+            """, (client_ip, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+
+            # Update page analytics
+            if event.event_type == "page_view":
+                 cur.execute("""
+                    INSERT INTO user_page_analytics (ip_address, page_path, view_count)
+                    VALUES (?, ?, 1)
+                    ON CONFLICT(ip_address, page_path) DO UPDATE SET
+                        view_count = view_count + 1
+                 """, (client_ip, event.page_path))
+
+            con.commit()
+            return {"status": "success"}
+        except Exception as db_err:
+            print(f"[ERROR] DB Insert Error: {db_err}")
+            return {"status": "error", "message": str(db_err)}
+        finally:
+            con.close()
+            
+    except Exception as e:
+        print(f"[ERROR] Track Event Error: {e}")
+        return {"status": "error", "message": str(e)}
+
+@app.get("/api/analytics/summary")
+def get_analytics_summary():
+    try:
+        con = sqlite3.connect(DB_FILE)
+        con.row_factory = sqlite3.Row
+        cur = con.cursor()
+        
+        # Count total events from user_behavior
+        cur.execute("SELECT COUNT(*) FROM user_behavior")
+        total_events = cur.fetchone()[0]
+        
+        # Count unique visitors (from visitor_stats)
+        cur.execute("SELECT COUNT(*) FROM visitor_stats")
+        total_visitors = cur.fetchone()[0]
+        
+        # Top pages (from user_page_analytics aggregation)
+        cur.execute("""
+            SELECT page_path, SUM(view_count) as total_views 
+            FROM user_page_analytics
+            GROUP BY page_path 
+            ORDER BY total_views DESC 
+        """)
+        top_pages = [dict(row) for row in cur.fetchall()]
+        
+        # Event type breakdown
+        cur.execute("""
+            SELECT event_type, COUNT(*) as count 
+            FROM user_behavior 
+            GROUP BY event_type 
+            ORDER BY count DESC
+        """)
+        event_types = [dict(row) for row in cur.fetchall()]
+        
+        # Count active users (last 5 minutes) based on sessions
+        active_threshold = (datetime.utcnow() - timedelta(minutes=5)).isoformat()
+        cur.execute("""
+            SELECT COUNT(DISTINCT session_id) 
+            FROM user_behavior 
+            WHERE timestamp >= ?
+        """, (active_threshold,))
+        active_users = cur.fetchone()[0]
+
+        con.close()
+        return {
+            "total_events": total_events,
+            "unique_visitors": total_visitors,
+            "active_users": active_users,
+            "top_pages": top_pages,
+            "event_types": event_types
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.get("/api/analytics/events")
+def get_analytics_events(limit: int = 100, event_type: str = None):
+    """Get recent tracking events from user_behavior table"""
+    try:
+        con = sqlite3.connect(DB_FILE)
+        con.row_factory = sqlite3.Row
+        cur = con.cursor()
+        
+        if event_type:
+            cur.execute("""
+                SELECT id, session_id, user_id, event_type, event_data, page_path, timestamp, client_ip
+                FROM user_behavior 
+                WHERE event_type = ?
+                ORDER BY timestamp DESC 
+                LIMIT ?
+            """, (event_type, limit))
+        else:
+            cur.execute("""
+                SELECT id, session_id, user_id, event_type, event_data, page_path, timestamp, client_ip
+                FROM user_behavior 
+                ORDER BY timestamp DESC 
+                LIMIT ?
+            """, (limit,))
+        
+        events = []
+        for row in cur.fetchall():
+            event = dict(row)
+            # Parse event_data back from JSON
+            if event.get("event_data"):
+                try:
+                    event["event_data"] = json.loads(event["event_data"])
+                except:
+                    pass
+            events.append(event)
+        
+        con.close()
+        return {"count": len(events), "events": events}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.get("/api/analytics/event-stats")
+def get_event_stats():
+    """Get statistics breakdown by event type"""
+    try:
+        con = sqlite3.connect(DB_FILE)
+        con.row_factory = sqlite3.Row
+        cur = con.cursor()
+        
+        # Event counts by type
+        cur.execute("""
+            SELECT event_type, COUNT(*) as count 
+            FROM user_behavior 
+            GROUP BY event_type 
+            ORDER BY count DESC
+        """)
+        event_types = [dict(row) for row in cur.fetchall()]
+        
+        # Top stock views
+        cur.execute("""
+            SELECT event_data, COUNT(*) as count 
+            FROM user_behavior 
+            WHERE event_type = 'stock_view'
+            GROUP BY event_data 
+            ORDER BY count DESC 
+            LIMIT 10
+        """)
+        top_stocks_raw = cur.fetchall()
+        top_stocks = []
+        for row in top_stocks_raw:
+            try:
+                data = json.loads(row["event_data"])
+                top_stocks.append({
+                    "ticker": data.get("ticker", "Unknown"),
+                    "stock_name": data.get("stock_name", ""),
+                    "count": row["count"]
+                })
+            except:
+                pass
+        
+        # Top searches
+        cur.execute("""
+            SELECT event_data, COUNT(*) as count 
+            FROM user_behavior 
+            WHERE event_type = 'search'
+            GROUP BY event_data 
+            ORDER BY count DESC 
+            LIMIT 10
+        """)
+        top_searches_raw = cur.fetchall()
+        top_searches = []
+        for row in top_searches_raw:
+            try:
+                data = json.loads(row["event_data"])
+                top_searches.append({
+                    "query": data.get("query", "Unknown"),
+                    "count": row["count"]
+                })
+            except:
+                pass
+        
+        con.close()
+        return {
+            "event_types": event_types,
+            "top_stocks": top_stocks,
+            "top_searches": top_searches
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.get("/api/analytics/weekly-trend")
+def get_weekly_trend(weeks: int = 12):
+    try:
+        con = sqlite3.connect(DB_FILE)
+        con.row_factory = sqlite3.Row
+        cur = con.cursor()
+        
+        # Calculate start date (Align to previous Sunday)
+        today = datetime.now()
+        # weekday(): Mon=0, Sun=6. We want to subtract enough to get to last Sunday.
+        # If today is Sun(6), -0. If Mon(0), -1. 
+        # Actually in python weekday(): Mon=0 ... Sun=6.
+        # To get to Sunday: (today.weekday() + 1) % 7 is days since Sunday.
+        days_since_sunday = (today.weekday() + 1) % 7
+        this_sunday = today - timedelta(days=days_since_sunday)
+        start_date_dt = this_sunday - timedelta(weeks=weeks)
+        start_date = start_date_dt.strftime("%Y-%m-%d")
+        
+        # Query: Group by Week Start (Sunday)
+        # strftime('%w', timestamp) returns 0 for Sunday, 6 for Saturday
+        cur.execute("""
+            SELECT date(timestamp, '-' || strftime('%w', timestamp) || ' days') as week_start,
+                   page_path,
+                   COUNT(DISTINCT session_id) as users
+            FROM user_behavior
+            WHERE substr(timestamp, 1, 10) >= ?
+              AND page_path NOT LIKE '%stats%'
+            GROUP BY week_start, page_path
+            ORDER BY week_start ASC
+        """, (start_date,))
+        
+        rows = cur.fetchall()
+        
+        # Process data to pivot by page
+        weeks_data = {}
+        
+        for row in rows:
+            week_start = row["week_start"]
+            if week_start not in weeks_data:
+                # Format date
+                try:
+                    dt = datetime.strptime(week_start, "%Y-%m-%d")
+                    end_dt = dt + timedelta(days=6)
+                    
+                    # If current week, max display date is today
+                    today_now = datetime.now()
+                    if dt.date() <= today_now.date() <= end_dt.date():
+                        display_end = today_now
+                    else:
+                        display_end = end_dt
+                        
+                    # Format: 25 Jan - 31 Jan 26
+                    display_date = f"{dt.strftime('%d %b')} - {display_end.strftime('%d %b %y')}"
+                except:
+                    display_date = week_start
+                    
+                weeks_data[week_start] = {
+                    "date": display_date,
+                    "full_date": week_start,
+                    "total_users": 0
+                }
+            
+            # Normalize Page Name
+            path = row["page_path"].lower().rstrip('/')
+            if not path.startswith('/'): path = '/' + path
+            
+            # Simple Mapping (Keep generic fallbacks mostly)
+            if path in ['/', '/home']: page_name = 'Home'
+            elif path == '/news': page_name = 'News'
+            elif 'drlist' in path: page_name = 'DR List'
+            elif 'caldr' in path: page_name = 'CalDR'
+            elif 'suggestion' in path: page_name = 'Suggestion'
+            elif 'calendar' in path: page_name = 'Calendar'
+            elif 'view-docs' in path: page_name = 'Documentation'
+            else:
+                # Fallback
+                parts = path.split('/')
+                page_name = parts[-1].capitalize() if parts else 'Unknown'
+
+            # Add to week data
+            if page_name not in weeks_data[week_start]:
+                weeks_data[week_start][page_name] = 0
+            
+            weeks_data[week_start][page_name] += row["users"]
+            weeks_data[week_start]["total_users"] += row["users"]
+
+        con.close()
+        return list(weeks_data.values())
+
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.get("/api/analytics/monthly-trend")
+def get_monthly_trend(months: int = 6):
+    try:
+        con = sqlite3.connect(DB_FILE)
+        con.row_factory = sqlite3.Row
+        cur = con.cursor()
+        
+        # Calculate start date - 6 months ago (approx)
+        # Using 30 days * months as approximation, or use dateutil if available (not standard lib)
+        # Standard lib simple way:
+        start_date = (datetime.now() - timedelta(days=months*30)).strftime("%Y-%m-%d")
+        
+        # Query: Group by Month (YYYY-MM)
+        cur.execute("""
+            SELECT strftime('%Y-%m', timestamp) as month_id,
+                   page_path,
+                   COUNT(DISTINCT session_id) as users
+            FROM user_behavior
+            WHERE substr(timestamp, 1, 10) >= ?
+              AND page_path NOT LIKE '%stats%'
+            GROUP BY month_id, page_path
+            ORDER BY month_id ASC
+        """, (start_date,))
+        
+        rows = cur.fetchall()
+        
+        months_data = {}
+        
+        for row in rows:
+            month_id = row["month_id"] # YYYY-MM
+            if month_id not in months_data:
+                # Format: "Jan 2026"
+                try:
+                    dt = datetime.strptime(month_id, "%Y-%m")
+                    display_date = dt.strftime("%b %Y")
+                except:
+                    display_date = month_id
+                
+                months_data[month_id] = {
+                    "date": display_date,
+                    "full_date": month_id,
+                    "total_users": 0
+                }
+                
+            # Page name normalization (Same logic)
+            path = row["page_path"].lower().rstrip('/')
+            if not path.startswith('/'): path = '/' + path
+            
+            if path in ['/', '/home']: page_name = 'Home'
+            elif path == '/news': page_name = 'News'
+            elif 'drlist' in path: page_name = 'DR List'
+            elif 'caldr' in path: page_name = 'CalDR'
+            elif 'suggestion' in path: page_name = 'Suggestion'
+            elif 'calendar' in path: page_name = 'Calendar'
+            elif 'view-docs' in path: page_name = 'Documentation'
+            else:
+                parts = path.split('/')
+                page_name = parts[-1].capitalize() if parts else 'Unknown'
+
+            if page_name not in months_data[month_id]:
+                months_data[month_id][page_name] = 0
+                
+            months_data[month_id][page_name] += row["users"]
+            months_data[month_id]["total_users"] += row["users"]
+            
+        con.close()
+        return list(months_data.values())
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.get("/api/analytics/daily-trend")
+def get_daily_trend(days: int = 30):
+    try:
+        con = sqlite3.connect(DB_FILE)
+        con.row_factory = sqlite3.Row
+        cur = con.cursor()
+        
+        # Calculate start date
+        start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+        
+        cur.execute("""
+            SELECT substr(timestamp, 1, 10) as date, COUNT(DISTINCT session_id) as sessions, COUNT(*) as events
+            FROM user_behavior
+            WHERE substr(timestamp, 1, 10) >= ?
+            GROUP BY date
+            ORDER BY date ASC
+        """, (start_date,))
+        
+        rows = cur.fetchall()
+        data = []
+        for row in rows:
+             # Format date for display
+            try:
+                dt = datetime.strptime(row["date"], "%Y-%m-%d")
+                display_date = dt.strftime("%b %d")
+            except:
+                display_date = row["date"]
+
+            data.append({
+                "date": display_date,
+                "full_date": row["date"],
+                "sessions": row["sessions"],
+                "events": row["events"]
+            })
+            
+        con.close()
+        return data
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.get("/api/auth/check")
+def check_auth_status(request: Request):
+    client_ip = request.client.host
+    try:
+        con = sqlite3.connect(DB_FILE)
+        cur = con.cursor()
+        
+        # Check if IP has valid session
+        cur.execute("SELECT expires_at FROM authorized_sessions WHERE ip_address = ?", (client_ip,))
+        row = cur.fetchone()
+        con.close()
+        
+        if row:
+            expires_at = datetime.fromisoformat(row[0])
+            if datetime.now() < expires_at:
+                return {"authenticated": True}
+        
+        return {"authenticated": False}
+    except Exception as e:
+        print(f"Auth Check Error: {e}")
+        return {"authenticated": False}
+
+@app.post("/api/auth/verify")
+def verify_password(req: AuthRequest, request: Request):
+    client_ip = request.client.host
+    
+    try:
+        con = sqlite3.connect(DB_FILE)
+        cur = con.cursor()
+        
+        # Check if IP is blocked
+        cur.execute("SELECT failed_attempts, blocked_until FROM auth_security WHERE ip_address = ?", (client_ip,))
+        row = cur.fetchone()
+        
+        if row:
+            failed = row[0]
+            blocked_until = row[1]
+            
+            if blocked_until:
+                block_time = datetime.fromisoformat(blocked_until)
+                if datetime.now() < block_time:
+                    remaining = block_time - datetime.now()
+                    days = remaining.days
+                    return {
+                        "success": False, 
+                        "message": f"Too many failed attempts. You are blocked. Please try again in {days + 1} days."
+                    }
+                else:
+                    # Block expired, reset (implicitly handled below or explicitly here)
+                    # Let's reset explicitly if expired
+                    cur.execute("UPDATE auth_security SET failed_attempts = 0, blocked_until = NULL WHERE ip_address = ?", (client_ip,))
+                    con.commit()
+                    failed = 0
+                    
+        secret = os.getenv("STATS_PASSWORD", "ideatrade")
+        if req.password == secret:
+            # Success: Reset failed attempts
+            cur.execute("DELETE FROM auth_security WHERE ip_address = ?", (client_ip,))
+            
+            # Create Session (2 hours)
+            expiry = (datetime.now() + timedelta(hours=2)).isoformat()
+            cur.execute("""
+                INSERT OR REPLACE INTO authorized_sessions (ip_address, expires_at)
+                VALUES (?, ?)
+            """, (client_ip, expiry))
+            
+            con.commit()
+            con.close()
+            return {"success": True}
+        else:
+            # Failed
+            cur.execute("SELECT failed_attempts FROM auth_security WHERE ip_address = ?", (client_ip,))
+            row = cur.fetchone()
+            current_failed = (row[0] if row else 0) + 1
+            
+            blocked_until_val = None
+            msg = f"Incorrect password. {3 - current_failed} attempts remaining."
+            
+            if current_failed >= 3:
+                blocked_until_val = (datetime.now() + timedelta(days=7)).isoformat()
+                msg = "Too many failed attempts. You are blocked for 7 days."
+            
+            now_str = datetime.now().isoformat()
+            
+            if row:
+                cur.execute("""
+                    UPDATE auth_security 
+                    SET failed_attempts = ?, blocked_until = ?, last_attempt = ? 
+                    WHERE ip_address = ?
+                """, (current_failed, blocked_until_val, now_str, client_ip))
+            else:
+                cur.execute("""
+                    INSERT INTO auth_security (ip_address, failed_attempts, blocked_until, last_attempt) 
+                    VALUES (?, ?, ?, ?)
+                """, (client_ip, current_failed, blocked_until_val, now_str))
+                
+            con.commit()
+            con.close()
+            return {"success": False, "message": msg}
+            
+    except Exception as e:
+        print(f"Auth Block Error: {e}")
+        # Fail open or closed? Here fail safe to deny if DB error, but ideally just check pwd
+        # If DB fails, fallback to simple check but warn
+        return {"success": False, "message": "Authentication system error"}
+
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8335)
+

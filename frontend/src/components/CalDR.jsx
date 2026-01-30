@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, useRef } from "react";
 
 // const API_BASE = "http://172.17.1.85:8333";
 const API_BASE = "https://api.ideatrade1.com";       // DR snapshot
-const CALC_API_BASE = "http://localhost:8002";      // DR real-time calc
+const CALC_API_BASE = "http://172.17.1.66:8002";
 
 const EXCHANGE_CURRENCY_MAP = {
   "The Nasdaq Global Select Market": "USD",
@@ -21,6 +21,23 @@ const EXCHANGE_CURRENCY_MAP = {
   "Hochiminh Stock Exchange": "VND",
 };
 
+const EXCHANGE_SHORT_NAME_MAP = {
+  "The Nasdaq Global Select Market": "NASDAQ",
+  "The Nasdaq Stock Market": "NASDAQ",
+  "The New York Stock Exchange": "NYSE",
+  "The New York Stock Exchange Archipelago": "NYSE Arca",
+  "The Stock Exchange of Hong Kong Limited": "HKEX",
+  "Nasdaq Copenhagen": "Nasdaq Copenhagen",
+  "Euronext Amsterdam": "EURONEXT",
+  "Euronext Paris": "EURONEXT",
+  "Euronext Milan": "Mil",
+  "Tokyo Stock Exchange": "TSE",
+  "Singapore Exchange": "SGX",
+  "Shanghai Stock Exchange" : "SSE",
+  "Taiwan Stock Exchange": "TWSE",
+  "Shenzhen Stock Exchange": "SZSE",
+  "Hochiminh Stock Exchange": "HOSE",
+};
 
 // Helper functions for table formatting
 const formatNum = (n) => {
@@ -35,6 +52,13 @@ const formatInt = (n) => {
   return Math.round(num).toLocaleString();
 };
 
+const formatInputNum = (n, d = 2) => {
+  const num = Number(n);
+  if (!Number.isFinite(num)) return "";
+  return num.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+};
+
+
 const formatRatio = (raw) => {
   if (!raw) return "0:1";
   const s = String(raw);
@@ -45,11 +69,43 @@ const formatRatio = (raw) => {
   return `${Math.round(leftNum).toLocaleString()}:${right}`;
 };
 
+const formatExchangeShortName = (ex) => {
+  if (!ex) return "";
+  return EXCHANGE_SHORT_NAME_MAP[ex] || ex.replace(/^The\s+/i, "");
+};
+
 const extractSymbol = (str) => {
   if (!str) return "-";
   const match = String(str).match(/\(([^)]+)\)$/);
   return match ? match[1] : str;
 };
+
+const formatUnderlyingDisplayName = (dr) => {
+  if (!dr) return "";
+
+  const s = String(dr.underlyingName || dr.name || "")
+    .replace(/^หุ้นสามัญของบริษัท\s*/g, "")
+    .replace(/^โครงการจัดการลงทุนต่างประเทศ\s*/g, "")
+    .replace(/^บริษัทหลักทรัพย์\s*/g, "")
+    .replace(/^บริษัท\s*/g, "")
+    .replace(/\s*บริษัท$/g, "")
+    .trim();
+
+  // ✅ เอาให้เหลือ "ชื่ออังกฤษ + (TICKER)" ถ้ามีวงเล็บท้าย
+  // 1) ถ้ามี "(...)" ท้าย ให้เก็บไว้
+  const m = s.match(/\(([^)]+)\)\s*$/);
+  const paren = m ? ` (${m[1]})` : "";
+
+  // 2) ตัดเอาเฉพาะอักษรอังกฤษ/ตัวเลข/ช่องว่าง/.,-&
+  const englishOnly = s
+    .replace(/\s*\([^)]+\)\s*$/g, "")         // ตัดวงเล็บออกก่อน
+    .replace(/[^A-Za-z0-9\s.\-&]/g, " ")      // เก็บเฉพาะอังกฤษ
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return (englishOnly + paren).trim();
+};
+
 
 const fxDecimalsByCcy = (ccy) => {
   if (!ccy) return 2;
@@ -57,6 +113,11 @@ const fxDecimalsByCcy = (ccy) => {
   if (u === "JPY" || u === "CNY" || u === "TWD" || u === "SGD" || u === "DKK") return 4;
   if (u === "VND") return 6;
   return 2; // USD/HKD/EUR ปกติ
+};
+
+const roundToTick = (p) => {
+  const tick = 0.01; // SET DR ส่วนใหญ่ใช้ 0.01
+  return Math.round(Number(p) / tick) * tick;
 };
 
 
@@ -72,46 +133,158 @@ export default function DRCal() {
 
   const [sortConfig, setSortConfig] = useState({ key: null, direction: "asc" });
 
+  // ================== refs ==================
+  const inflightRef = useRef(false);
+  const lastReqKeyRef = useRef("");
+  const lastGoodRef = useRef({ undRaw: null, fx: null, ccy: "USD"});
+
   // ================== state สำหรับการคำนวณ ==================
-  const [underlyingValue, setUnderlyingValue] = useState("");
-  const [fxTHBPerUnderlying, setFxTHBPerUnderlying] = useState("");
+  const [underlyingValue, setUnderlyingValue] = useState(null);              // ✅ ใช้แสดงผล (ปัดแล้ว)
+  const [underlyingValueRaw, setUnderlyingValueRaw] = useState(null);        // ✅ ค่าดิบจาก backend (ไว้คำนวณ)
+  const [fxTHBPerUnderlying, setFxTHBPerUnderlying] = useState(null);
   const [underlyingCurrency, setUnderlyingCurrency] = useState("USD");
 
   const [loadingRealtime, setLoadingRealtime] = useState(false);
-
   const [defaultDR, setDefaultDR] = useState(null);
+    // ✅ กันยิงซ้ำ + ยกเลิก request เก่าเวลาเปลี่ยน DR
+  const realtimeCtrlRef = useRef({
+    key: null,
+    ts: 0,
+    abort: null,
+    inFlight: false,
+  });
+
+    // ✅ กันยิงถี่เกิน (ms)
+  const REALTIME_MIN_INTERVAL_MS = 30000; // ปรับได้ เช่น 5000-15000
 
   const fetchRealtimeUnderlying = async (drSymbol) => {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
     try {
+      if (!drSymbol) return;
+
+      // ✅ 0) กันยิงซ้ำถี่ ๆ
+      const now = Date.now();
+      const key = String(drSymbol || "");
+      const prev = realtimeCtrlRef.current;
+
+      // กันกรณียิงซ้ำระหว่าง request ยังไม่จบ (ตัวเดิม)
+      if (prev.inFlight && prev.key === key) return;
+
+      // กันถี่เกิน (ตัวเดิม)
+      if (prev.key === key && now - prev.ts < REALTIME_MIN_INTERVAL_MS) return;
+
+      // กันด้วย ref อีกชั้น (เผื่อ logic อื่นเรียกซ้อน)
+      if (inflightRef.current && lastReqKeyRef.current === key) return;
+
       setLoadingRealtime(true);
 
-      const res = await fetch(`${CALC_API_BASE}/api/calc/dr/${drSymbol}`);
-      if (!res.ok) throw new Error("Failed realtime calc");
+      // ✅ 1) ถ้ามี request เก่าอยู่ ยกเลิกก่อน
+      if (prev.abort) {
+        try { prev.abort.abort(); } catch {}
+      }
+
+      const ac = new AbortController();
+      realtimeCtrlRef.current = { key, ts: now, abort: ac, inFlight: true };
+      inflightRef.current = true;
+      lastReqKeyRef.current = key;
+
+      // ✅ 2) ยิงครั้งเดียวพอ (backend ทำ stale ให้แล้ว)
+      const res = await fetch(
+        `${CALC_API_BASE}/api/calc/dr/${encodeURIComponent(drSymbol)}`,
+        { signal: ac.signal }
+      );
+
+      // ✅ 3) จัดการกรณีโดนลิมิต / cooldown
+      if (!res.ok) {
+        const status = res.status;
+
+        // 429/503 = อย่า retry ถี่ ให้ค้างค่าเดิม + หน่วงรอบถัดไป
+        if (status === 429 || status === 503) {
+          // ถ้ามี Retry-After (วินาที) ให้เคารพมัน
+          const ra = res.headers.get("Retry-After");
+          const retryAfterMs = ra ? Math.max(1, Number(ra)) * 1000 : 30000;
+
+          // ✅ หน่วง timestamp เพื่อกันยิงซ้ำถี่ (UI cooldown)
+          realtimeCtrlRef.current = {
+            ...realtimeCtrlRef.current,
+            ts: Date.now() + retryAfterMs,
+          };
+
+          // ✅ ใช้ค่าล่าสุดที่สำเร็จ (ไม่กระพริบ/ไม่ว่าง)
+          const last = lastGoodRef.current;
+          if (last) {
+            setUnderlyingCurrency(last.ccy || "USD");
+            setUnderlyingValueRaw(last.undRaw);
+
+            const undRounded =
+              Number.isFinite(last.undRaw) ? Math.round(last.undRaw * 100) / 100 : null;
+
+            setUnderlyingValue(undRounded);
+            setFxTHBPerUnderlying(last.fx);
+          }
+
+          // จบแบบไม่ throw เพื่อไม่ spam console
+          console.warn(`Realtime calc blocked (status=${status}) -> using lastGood`);
+          return;
+        }
+
+        // status อื่น ๆ ค่อย throw
+        throw new Error(`Failed realtime calc (status=${status})`);
+      }
 
       const data = await res.json();
 
+      // ✅ 4) set currency
       const ccy = String(data.currency ?? "USD");
       setUnderlyingCurrency(ccy);
 
-      setUnderlyingValue(
-        data.underlying_price != null
-          ? Number(data.underlying_price).toFixed(2)
-          : ""
-      );
+      // ✅ 5) set underlying raw + rounded
+      const undRaw =
+        data.underlying_price_raw != null
+          ? Number(data.underlying_price_raw)
+          : (data.underlying_price != null ? Number(data.underlying_price) : null);
 
-      const dec = fxDecimalsByCcy(ccy);
-      setFxTHBPerUnderlying(
-        data.fx_rate != null
-          ? Number(data.fx_rate).toFixed(dec)
-          : ""
-      );
+      setUnderlyingValueRaw(undRaw);
+
+      const undRounded =
+        Number.isFinite(undRaw) ? Math.round(undRaw * 100) / 100 : null;
+
+      setUnderlyingValue(undRounded);
+
+      // ✅ 6) set fx
+      const fx = data.fx_rate != null ? Number(data.fx_rate) : null;
+      setFxTHBPerUnderlying(fx);
+
+      // ✅ 7) เก็บค่าล่าสุดที่สำเร็จ (ไว้ fallback ตอนโดนลิมิต)
+      lastGoodRef.current = { undRaw, fx, ccy};
+
     } catch (err) {
+      if (err?.name === "AbortError") return;
+
       console.error("Realtime calc error:", err);
+
+      // ✅ fallback ใช้ค่าล่าสุดที่สำเร็จ
+      const last = lastGoodRef.current;
+      if (last) {
+        setUnderlyingCurrency(last.ccy || "USD");
+        setUnderlyingValueRaw(last.undRaw);
+
+        const undRounded =
+          Number.isFinite(last.undRaw) ? Math.round(last.undRaw * 100) / 100 : null;
+
+        setUnderlyingValue(undRounded);
+        setFxTHBPerUnderlying(last.fx);
+      }
     } finally {
+      const cur = realtimeCtrlRef.current;
+      if (cur && cur.key === String(drSymbol || "")) {
+        realtimeCtrlRef.current = { ...cur, inFlight: false, abort: null };
+      }
+      inflightRef.current = false;
       setLoadingRealtime(false);
     }
   };
-
 
   const tableRef = useRef(null);
   const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
@@ -208,68 +381,95 @@ export default function DRCal() {
   }, [selectedDR]);*/
 
   // ================== ratio ==================
-  const ratioDR = useMemo(() => {
-    if (!selectedDR) return 0;
-    if (selectedDR?.conversionRatioR) return 1 / Number(selectedDR.conversionRatioR);
-    if (selectedDR?.conversionRatio) {
-      const m = String(selectedDR.conversionRatio).split(":")[0];
-      return Number(m.replace(/[^\d.]/g, "")) || 0;
-    }
-    return 0;
-  }, [selectedDR]);
+// ================== ratio ==================
+const ratioDR = useMemo(() => {
+  if (!selectedDR) return 0;
 
-  const dynamicSpreadPct = useMemo(() => {
-  if (!selectedDR) return 0.002; // fallback สุดท้าย 0.2%
+  if (selectedDR?.conversionRatio) {
+    const left = String(selectedDR.conversionRatio).split(":")[0];
+    const n = Number(left.replace(/[^\d.]/g, ""));
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  if (selectedDR?.conversionRatioR) {
+    const r = Number(selectedDR.conversionRatioR);
+    return r > 0 ? (1 / r) : 0;
+  }
+
+  return 0;
+}, [selectedDR]);
+
+// ================== dynamic spread ==================
+const dynamicSpreadPct = useMemo(() => {
+  if (!selectedDR) return 0.002;
 
   const bid = Number(selectedDR.bidPrice || 0);
   const ask = Number(selectedDR.offerPrice || 0);
 
   let spread = null;
 
-  // (A) ใช้ spread จริงจากกระดาน DR ก่อน
   if (bid > 0 && ask > 0 && ask > bid) {
     const mid = (bid + ask) / 2;
-    if (mid > 0) {
-      spread = (ask - bid) / mid; // เช่น 0.004 = 0.4%
-    }
+    if (mid > 0) spread = (ask - bid) / mid;
   }
 
-  // (B) fallback → ใช้ liquidity
   if (spread == null) {
-    const value = Number(selectedDR.totalValue || 0); // ตรวจหน่วยตาม API
+    const value = Number(selectedDR.totalValue || 0);
     spread =
-      value >= 50_000_000 ? 0.001 : // 0.10%
-      value >= 10_000_000 ? 0.002 : // 0.20%
-      value >= 2_000_000  ? 0.004 : // 0.40%
-                           0.008;  // 0.80%
+      value >= 50_000_000 ? 0.001 :
+      value >= 10_000_000 ? 0.002 :
+      value >= 2_000_000  ? 0.004 :
+                           0.008;
   }
 
-  // clamp กันตลาดบาง/ข้อมูลเพี้ยน
-  return clamp(spread, 0.001, 0.02); // 0.10% – 2.00%
+  return clamp(spread, 0.001, 0.02);
 }, [selectedDR]);
+
 
 
   // ================== fair value ==================
   const fairMidTHB = useMemo(() => {
-    const und = Number(underlyingValue || 0);
+    const und = Number(underlyingValueRaw ?? underlyingValue ?? 0);
     const fx = Number(fxTHBPerUnderlying || 0);
     if (!und || !fx || !ratioDR) return 0;
     return (und * fx) / ratioDR;
   }, [underlyingValue, fxTHBPerUnderlying, ratioDR]);
 
-  const fairBidTHB = fairMidTHB * (1 - dynamicSpreadPct / 2);
-  const fairAskTHB = fairMidTHB * (1 + dynamicSpreadPct / 2);
-  const hasInput = underlyingValue && fxTHBPerUnderlying;
+  const fairBidTHB = useMemo(
+    () => roundToTick(fairMidTHB * (1 - dynamicSpreadPct / 2)),
+    [fairMidTHB, dynamicSpreadPct]
+  );
+
+  const fairAskTHB = useMemo(
+    () => roundToTick(fairMidTHB * (1 + dynamicSpreadPct / 2)),
+    [fairMidTHB, dynamicSpreadPct]
+  );
+  
+  const hasInput = Number(underlyingValue) > 0 && Number(fxTHBPerUnderlying) > 0 && ratioDR > 0;
 
   // ================== Suggest ==================
   const filteredSuggest = useMemo(() => {
     const q = searchText.trim().toUpperCase();
     if (!q) return [];
+
     return allDR
       .filter((dr) => {
-        const sym = dr.symbol?.toUpperCase() || "";
-        const nm = dr.name?.toUpperCase() || "";
-        return sym.includes(q) || nm.includes(q);
+        const sym = (dr.symbol || "").toUpperCase();                 // DR
+        const nm = (dr.name || "").toUpperCase();                    // ชื่อ DR
+        const und = (dr.underlying || "").toUpperCase();             // underlying (บางทีเป็นชื่อสั้น)
+        const undName = (formatUnderlyingDisplayName(dr) || "").toUpperCase();
+        const issuer = (dr.issuer || "").toUpperCase();              // ผู้ออก (KTB/FSS)
+        const issuerName = (dr.issuerName || "").toUpperCase();      // ชื่อผู้ออก
+
+        // ✅ เพิ่มค้นหา “ชื่อบริษัท” ได้จาก underlyingName
+        return (
+          sym.includes(q) ||
+          nm.includes(q) ||
+          und.includes(q) ||
+          undName.includes(q) ||
+          issuer.includes(q) ||
+          issuerName.includes(q)
+        );
       })
       .slice(0, 8);
   }, [searchText, allDR]);
@@ -280,20 +480,12 @@ export default function DRCal() {
     setShowSuggest(false);
     setHighlightIndex(-1);
 
-    // ไม่ต้อง clear
-    setUnderlyingCurrency(
-      EXCHANGE_CURRENCY_MAP[dr.underlyingExchange] || "USD"
-    );
+    // fallback ระหว่างรอ realtime
+    setUnderlyingCurrency(EXCHANGE_CURRENCY_MAP[dr.underlyingExchange] || "USD");
 
-    // fetch realtime
-    fetchRealtimeUnderlying(dr.symbol);
-
-    setUnderlyingCurrency(EXCHANGE_CURRENCY_MAP[dr.underlyingExchange] || "USD"); // ✅ fallback ระหว่างรอ realtime
-
-    // 🔥 ดึง realtime
+    // ยิง realtime ครั้งเดียวพอ
     fetchRealtimeUnderlying(dr.symbol);
   };
-
 
   const handleSearchChange = (e) => {
     setSearchText(e.target.value.toUpperCase());
@@ -550,7 +742,9 @@ export default function DRCal() {
                       className={`flex w-full justify-between px-4 py-2 text-left text-sm ${idx === highlightIndex ? "bg-gray-100" : "hover:bg-gray-50"}`}
                     >
                       <span className="font-semibold text-black">{dr.symbol}</span>
-                      <span className="text-xs text-gray-500 truncate w-40 text-right">{dr.name}</span>
+                      <span className="text-xs text-gray-500 truncate w-40 text-right">
+                        {formatUnderlyingDisplayName(dr)}
+                      </span>
                     </button>
                   ))}
                 </div>
@@ -559,6 +753,18 @@ export default function DRCal() {
 
             <div className="mt-6">
               <h3 className="text-[#0046b8] font-extrabold text-[30px] leading-[26px]">{selectedDR?.symbol || "—"}</h3>
+              <p className="text-[12px] font-semibold text-[#111] mt-1 truncate flex items-center gap-1">
+                <span>{formatUnderlyingDisplayName(selectedDR)}</span>
+
+                {selectedDR?.underlyingExchange && (
+                  <>
+                    <span className="mx-2 text-[#111]">•</span>
+                    <span className="text-[#111] text-[12px] truncate">
+                      {formatExchangeShortName(selectedDR?.underlyingExchange)}
+                    </span>
+                  </>
+                )}
+              </p>
               <p className="font-medium text-[10px] text-[#555] mt-1 truncate">
                 {selectedDR ? `Depositary Receipt on ${selectedDR.underlying || selectedDR.underlyingName} Issued by ${selectedDR.issuer}` : "—"}
               </p>
@@ -591,7 +797,7 @@ export default function DRCal() {
                   <input
                     type="text"
                     autoComplete="off"
-                    value={underlyingValue}
+                    value={formatInputNum(underlyingValue, 2)}
                     readOnly
                     disabled={loadingRealtime}
                     style={{ WebkitTextFillColor: "white" }}
@@ -610,7 +816,7 @@ export default function DRCal() {
                   <input
                     type="text"
                     autoComplete="off"
-                    value={fxTHBPerUnderlying}
+                    value={formatInputNum(fxTHBPerUnderlying, fxDecimalsByCcy(underlyingCurrency))}
                     readOnly
                     disabled={loadingRealtime}
                     style={{ WebkitTextFillColor: "white" }}
