@@ -3536,7 +3536,7 @@ def get_mock_aapl_history_formatted(timeframe="1D", filter_rating=None):
                         "change_abs": h.get("change_abs", 0)
                     })
 
-        accuracy_result = calculate_accuracy_from_frontend_logic(history, filter_rating)
+        accuracy_result = calculate_accuracy_matching_frontend(history, filter_rating)
         
         return {
             "ticker": "AAPL",
@@ -3827,112 +3827,9 @@ def get_history_with_accuracy(
 
             history_items.append(item)
 
-        # คำนวณ accuracy จาก history_items (รองรับ filter_rating)
-        filtered_items = history_items
-        if filter_rating:
-            filtered_items = [item for item in history_items if (item.get("rating") or "").lower() == filter_rating.lower()]
-
-        # คำนวณ accuracy จากรายการที่กรองแล้ว
-        correct = 0
-        incorrect = 0
-
-        # ใช้ threshold เดียวกันกับการคำนวณตอนบันทึก (CHANGE_THRESHOLD = 2.0%)
-        CHANGE_THRESHOLD = 2.0
-
-        for item in filtered_items:
-            # If already skipped, don't count
-            if item.get("skipped"):
-                item["counted"] = False
-                item["is_correct"] = None
-                continue
-
-            rating_curr = (item["rating"] or "").lower()
-            rating_prev = (item["prev"] or "").lower()
-            change_pct = item.get("change_pct", 0)
-
-            # ข้ามถ้า rating ไม่เปลี่ยนและ price ไม่เปลี่ยน
-            rating_not_changed = (rating_curr == rating_prev)
-            price_not_changed = (abs(change_pct) < 0.01)
-
-            if rating_not_changed and price_not_changed:
-                item["skipped"] = True
-                item["skip_reason"] = "rating not changed and price not changed"
-                item["counted"] = False
-                item["is_correct"] = None
-                continue
-
-            # ตรวจสอบความถูกต้อง โดยใช้ threshold และความรุนแรงของเรตติ้ง
-            # Define local strength mapping
-            strength_map_local = {
-                "strong sell": -2,
-                "sell": -1,
-                "neutral": 0,
-                "buy": 1,
-                "strong buy": 2
-            }
-
-            def rating_strength_local(rtext):
-                if not rtext:
-                    return None
-                rl = rtext.lower().strip()
-                if rl in strength_map_local:
-                    return strength_map_local[rl]
-                if "strong" in rl and "sell" in rl:
-                    return strength_map_local["strong sell"]
-                if "strong" in rl and "buy" in rl:
-                    return strength_map_local["strong buy"]
-                if "sell" in rl:
-                    return strength_map_local["sell"]
-                if "buy" in rl:
-                    return strength_map_local["buy"]
-                if "neutral" in rl:
-                    return strength_map_local["neutral"]
-                return None
-
-            is_correct = False
-            str_now = rating_strength_local(rating_curr)
-            str_prev = rating_strength_local(rating_prev)
-
-            if str_now is None or str_prev is None:
-                # if cannot determine strength, default to previous logic based on signs
-                if rating_prev in ["sell", "strong sell"] and rating_curr in ["buy", "strong buy"]:
-                    is_correct = (change_pct >= CHANGE_THRESHOLD)
-                elif rating_prev in ["buy", "strong buy"] and rating_curr in ["sell", "strong sell"]:
-                    is_correct = (change_pct <= -CHANGE_THRESHOLD)
-                elif rating_not_changed:
-                    if rating_curr in ["buy", "strong buy"]:
-                        is_correct = (change_pct >= CHANGE_THRESHOLD)
-                    elif rating_curr in ["sell", "strong sell"]:
-                        is_correct = (change_pct <= -CHANGE_THRESHOLD)
-            else:
-                delta = str_now - str_prev
-                if delta > 0:
-                    is_correct = (change_pct >= CHANGE_THRESHOLD)
-                elif delta < 0:
-                    is_correct = (change_pct <= -CHANGE_THRESHOLD)
-                else:
-                    if str_now > 0:
-                        is_correct = (change_pct >= CHANGE_THRESHOLD)
-                    elif str_now < 0:
-                        is_correct = (change_pct <= -CHANGE_THRESHOLD)
-
-            item["is_correct"] = bool(is_correct)
-            item["counted"] = True
-
-            if is_correct:
-                correct += 1
-            else:
-                incorrect += 1
-        
-        total = correct + incorrect
-        accuracy_pct = (correct / total * 100) if total > 0 else 0.0
-        
-        accuracy_result = {
-            "accuracy": round(accuracy_pct, 2),
-            "correct": correct,
-            "incorrect": incorrect,
-            "total": total
-        }
+        # คำนวณ accuracy โดยรองรับ filter_rating
+        # ใช้ฟังก์ชันกลางที่มีอยู่แล้ว (เหมือนกับที่ใช้ใน endpoint อื่น)
+        accuracy_result = calculate_accuracy_matching_frontend(history_items, filter_rating)
         
         # Get current rating from latest accuracy record (direct access - faster)
         current_rating = acc_row_latest[rating_key] or "Unknown"

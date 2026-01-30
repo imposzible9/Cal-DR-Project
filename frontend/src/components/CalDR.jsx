@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, useRef } from "react";
+import { trackPageView, trackDRSelection, trackCalculation } from "../utils/tracker";
 
 // const API_BASE = "http://172.17.1.85:8333";
 const API_BASE = import.meta.env.VITE_DR_LIST_BASE_API; // DR snapshot (use same as DRList)
@@ -84,53 +85,53 @@ export default function DRCal() {
 
   const [sortConfig, setSortConfig] = useState({ key: null, direction: "asc" });
 
-// ================== state สำหรับการคำนวณ ==================
-const [underlyingValue, setUnderlyingValue] = useState(null);              // ✅ ใช้แสดงผล (ปัดแล้ว)
-const [underlyingValueRaw, setUnderlyingValueRaw] = useState(null);        // ✅ ค่าดิบจาก backend (ไว้คำนวณ)
-const [fxTHBPerUnderlying, setFxTHBPerUnderlying] = useState(null);
-const [underlyingCurrency, setUnderlyingCurrency] = useState("USD");
+  // ================== state สำหรับการคำนวณ ==================
+  const [underlyingValue, setUnderlyingValue] = useState(null);              // ✅ ใช้แสดงผล (ปัดแล้ว)
+  const [underlyingValueRaw, setUnderlyingValueRaw] = useState(null);        // ✅ ค่าดิบจาก backend (ไว้คำนวณ)
+  const [fxTHBPerUnderlying, setFxTHBPerUnderlying] = useState(null);
+  const [underlyingCurrency, setUnderlyingCurrency] = useState("USD");
 
-const [loadingRealtime, setLoadingRealtime] = useState(false);
-const [defaultDR, setDefaultDR] = useState(null);
+  const [loadingRealtime, setLoadingRealtime] = useState(false);
+  const [defaultDR, setDefaultDR] = useState(null);
 
-const fetchRealtimeUnderlying = async (drSymbol) => {
-  try {
-    setLoadingRealtime(true);
+  const fetchRealtimeUnderlying = async (drSymbol) => {
+    try {
+      setLoadingRealtime(true);
 
-const res = await fetch(
-  `${CALC_API_BASE}/api/calc/dr/${encodeURIComponent(drSymbol)}`
-);
-    if (!res.ok) throw new Error("Failed realtime calc");
+      const res = await fetch(
+        `${CALC_API_BASE}/api/calc/dr/${encodeURIComponent(drSymbol)}`
+      );
+      if (!res.ok) throw new Error("Failed realtime calc");
 
-    const data = await res.json();
+      const data = await res.json();
 
-    const ccy = String(data.currency ?? "USD");
-    setUnderlyingCurrency(ccy);
+      const ccy = String(data.currency ?? "USD");
+      setUnderlyingCurrency(ccy);
 
-    // ✅ 1) รับค่าดิบก่อน (ถ้า backend ส่ง underlying_price_raw มา)
-    const undRaw =
-      data.underlying_price_raw != null
-        ? Number(data.underlying_price_raw)
-        : (data.underlying_price != null ? Number(data.underlying_price) : null);
+      // ✅ 1) รับค่าดิบก่อน (ถ้า backend ส่ง underlying_price_raw มา)
+      const undRaw =
+        data.underlying_price_raw != null
+          ? Number(data.underlying_price_raw)
+          : (data.underlying_price != null ? Number(data.underlying_price) : null);
 
-    setUnderlyingValueRaw(undRaw);
-    setUnderlyingValue(undRaw != null ? Math.round((undRaw + 1e-10) * 100) / 100 : null);
+      setUnderlyingValueRaw(undRaw);
+      setUnderlyingValue(undRaw != null ? Math.round((undRaw + 1e-10) * 100) / 100 : null);
 
-    // ✅ 2) ปัด 2 ตำแหน่งเพื่อแสดงผลในหน้าเว็บ
-    const undRounded =
-      Number.isFinite(undRaw) ? Math.round(undRaw * 100) / 100 : null;
+      // ✅ 2) ปัด 2 ตำแหน่งเพื่อแสดงผลในหน้าเว็บ
+      const undRounded =
+        Number.isFinite(undRaw) ? Math.round(undRaw * 100) / 100 : null;
 
-    setUnderlyingValue(undRounded);
+      setUnderlyingValue(undRounded);
 
-    setFxTHBPerUnderlying(
-      data.fx_rate != null ? Number(data.fx_rate) : null
-    );
-  } catch (err) {
-    console.error("Realtime calc error:", err);
-  } finally {
-    setLoadingRealtime(false);
-  }
-};
+      setFxTHBPerUnderlying(
+        data.fx_rate != null ? Number(data.fx_rate) : null
+      );
+    } catch (err) {
+      console.error("Realtime calc error:", err);
+    } finally {
+      setLoadingRealtime(false);
+    }
+  };
 
   const tableRef = useRef(null);
   const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
@@ -143,7 +144,7 @@ const res = await fetch(
       try {
         const res = await fetch(
           // `${API_BASE}/dr?fields=` +
-          `${API_BASE}/caldr?fields=`+
+          `${API_BASE}/caldr?fields=` +
           [
             "symbol",
             "name",
@@ -177,7 +178,7 @@ const res = await fetch(
 
         const data = await res.json();
         setAllDR(data.rows || []);
-        
+
         if (data.updated_at) {
           const date = new Date(data.updated_at * 1000);
           if (!isNaN(date.getTime())) {
@@ -200,7 +201,24 @@ const res = await fetch(
       }
     }
     fetchDR();
+    trackPageView('caldr');
   }, []);
+
+  // Track Calculation
+  useEffect(() => {
+    if (selectedDR && hasInput && fairMidTHB > 0) {
+      const timeout = setTimeout(() => {
+        trackCalculation(
+          selectedDR.symbol,
+          underlyingValue,
+          fxTHBPerUnderlying,
+          fairBidTHB.toFixed(2),
+          fairAskTHB.toFixed(2)
+        );
+      }, 2000);
+      return () => clearTimeout(timeout);
+    }
+  }, [selectedDR, hasInput, fairMidTHB, fairBidTHB, fairAskTHB, underlyingValue, fxTHBPerUnderlying]);
 
   // ================== format numbers ==================
   const fmtNum = (n, d = 2) =>
@@ -227,49 +245,49 @@ const res = await fetch(
   }, [selectedDR]);*/
 
   // ================== ratio ==================
-// ================== ratio ==================
-const ratioDR = useMemo(() => {
-  if (!selectedDR) return 0;
+  // ================== ratio ==================
+  const ratioDR = useMemo(() => {
+    if (!selectedDR) return 0;
 
-  if (selectedDR?.conversionRatio) {
-    const left = String(selectedDR.conversionRatio).split(":")[0];
-    const n = Number(left.replace(/[^\d.]/g, ""));
-    return Number.isFinite(n) ? n : 0;
-  }
+    if (selectedDR?.conversionRatio) {
+      const left = String(selectedDR.conversionRatio).split(":")[0];
+      const n = Number(left.replace(/[^\d.]/g, ""));
+      return Number.isFinite(n) ? n : 0;
+    }
 
-  if (selectedDR?.conversionRatioR) {
-    const r = Number(selectedDR.conversionRatioR);
-    return r > 0 ? (1 / r) : 0;
-  }
+    if (selectedDR?.conversionRatioR) {
+      const r = Number(selectedDR.conversionRatioR);
+      return r > 0 ? (1 / r) : 0;
+    }
 
-  return 0;
-}, [selectedDR]);
+    return 0;
+  }, [selectedDR]);
 
-// ================== dynamic spread ==================
-const dynamicSpreadPct = useMemo(() => {
-  if (!selectedDR) return 0.002;
+  // ================== dynamic spread ==================
+  const dynamicSpreadPct = useMemo(() => {
+    if (!selectedDR) return 0.002;
 
-  const bid = Number(selectedDR.bidPrice || 0);
-  const ask = Number(selectedDR.offerPrice || 0);
+    const bid = Number(selectedDR.bidPrice || 0);
+    const ask = Number(selectedDR.offerPrice || 0);
 
-  let spread = null;
+    let spread = null;
 
-  if (bid > 0 && ask > 0 && ask > bid) {
-    const mid = (bid + ask) / 2;
-    if (mid > 0) spread = (ask - bid) / mid;
-  }
+    if (bid > 0 && ask > 0 && ask > bid) {
+      const mid = (bid + ask) / 2;
+      if (mid > 0) spread = (ask - bid) / mid;
+    }
 
-  if (spread == null) {
-    const value = Number(selectedDR.totalValue || 0);
-    spread =
-      value >= 50_000_000 ? 0.001 :
-      value >= 10_000_000 ? 0.002 :
-      value >= 2_000_000  ? 0.004 :
-                           0.008;
-  }
+    if (spread == null) {
+      const value = Number(selectedDR.totalValue || 0);
+      spread =
+        value >= 50_000_000 ? 0.001 :
+          value >= 10_000_000 ? 0.002 :
+            value >= 2_000_000 ? 0.004 :
+              0.008;
+    }
 
-  return clamp(spread, 0.001, 0.02);
-}, [selectedDR]);
+    return clamp(spread, 0.001, 0.02);
+  }, [selectedDR]);
 
 
 
@@ -290,7 +308,7 @@ const dynamicSpreadPct = useMemo(() => {
     () => roundToTick(fairMidTHB * (1 + dynamicSpreadPct / 2)),
     [fairMidTHB, dynamicSpreadPct]
   );
-  
+
   const hasInput = Number(underlyingValue) > 0 && Number(fxTHBPerUnderlying) > 0 && ratioDR > 0;
 
   // ================== Suggest ==================
@@ -331,6 +349,7 @@ const dynamicSpreadPct = useMemo(() => {
 
     // ยิง realtime ครั้งเดียวพอ
     fetchRealtimeUnderlying(dr.symbol);
+    trackDRSelection(dr.symbol);
   };
 
   const handleSearchChange = (e) => {
@@ -560,155 +579,155 @@ const dynamicSpreadPct = useMemo(() => {
           Calculate DR Fair Value based on Underlying Price, Exchange Rate, and Conversion Ratio.
         </p>
 
-      <div className="w-full min-h-auto lg:min-h-[627px] mt-2 font-sarabun">
-        <div className="flex flex-col lg:flex-row w-full gap-3 sm:gap-4 lg:gap-0">
-          <div className="flex-1 min-h-auto md:min-h-[427px] bg-[#FFFFFF] rounded-t-[12px] md:rounded-tl-[12px] md:rounded-tr-none md:rounded-bl-[12px] md:rounded-br-none shadow-[0_10px_25px_rgba(0,0,0,0.12)] px-4 sm:px-6 pt-6 md:pt-10 pb-6 md:pb-0 border border-[#e0e0e0]">
-            <h2 className="font-semibold text-lg sm:text-xl md:text-[26px] text-black mb-3 md:mb-[14px]">Select DR</h2>
-            <div className="relative w-full h-[42px] sm:h-[46px] md:h-[48px]">
-              <input
-                ref={searchInputRef}
-                type="text"
-                placeholder="Select DR"
-                value={searchText}
-                onChange={handleSearchChange}
-                onKeyDown={handleSearchKeyDown}
-                onClick={(e) => { e.target.select(); setShowSuggest(true); }}
-                className="w-full h-full bg-white border border-[#d0d0d0] rounded-[12px] pl-3 sm:pl-4 pr-10 sm:pr-12 text-xs sm:text-sm text-black shadow-lg focus:outline-none"
-              />
-              <svg xmlns="http://www.w3.org/2000/svg" className="absolute right-3 sm:right-4 top-1/2 -translate-y-1/2 h-5 sm:h-6 w-5 sm:w-6 text-black" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-              </svg>
-              {showSuggest && filteredSuggest.length > 0 && (
-                <div className="absolute z-40 mt-1 max-h-48 sm:max-h-64 w-full overflow-y-auto rounded-2xl border border-[#e0e0e0] bg-white shadow-xl">
-                  {filteredSuggest.map((dr, idx) => (
-                    <button
-                      key={dr.symbol}
-                      type="button"
-                      onMouseDown={() => applyDR(dr)}
-                      className={`flex w-full justify-between px-3 sm:px-4 py-2 text-left text-xs sm:text-sm ${idx === highlightIndex ? "bg-gray-100" : "hover:bg-gray-50"}`}
-                    >
-                      <span className="font-semibold text-black">{dr.symbol}</span>
-                      <span className="text-[10px] sm:text-xs text-gray-500 truncate w-20 sm:w-40 text-right">
-                        {(dr.underlyingName || dr.name)
-                          ?.replace(/^โครงการจัดการลงทุนต่างประเทศ\s*/g, "")
-                          ?.replace(/^บริษัทหลักทรัพย์\s*/g, "")
-                          ?.replace(/^บริษัท\s*/g, "")
-                          ?.replace(/\s*บริษัท$/g, "")
-                          ?.trim()}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div className="mt-4 lg:mt-6">
-              <h3 className="text-[#0046b8] font-extrabold text-xl sm:text-2xl lg:text-3xl leading-snug break-words">{selectedDR?.symbol || "—"}</h3>
-              <p className="font-medium text-[9px] sm:text-[10px] text-[#555] mt-1 line-clamp-2 break-words">
-                {selectedDR ? `Depositary Receipt on ${selectedDR.underlying || selectedDR.underlyingName} Issued by ${selectedDR.issuer}` : "—"}
-              </p>
-              <div className="w-full min-h-auto lg:h-[175px] bg-white border border-[#e0e0e0] rounded-[12px] shadow-lg mt-4 p-3 sm:p-4 relative">
-                <p className="font-bold text-[11px] sm:text-[12px] lg:text-[13px] text-[#6B6B6B] break-words">Ratio (DR : Underlying)</p>
-                <p className="font-bold text-lg sm:text-xl lg:text-2xl text-[#111] mt-1">{ratioDR ? `${fmtNum(ratioDR, 0)} : 1` : "—"} </p>
-                <div className="w-full h-[1px] bg-[#9A9A9A] mt-2"></div>
-                <div className="flex flex-col lg:flex-row items-center mt-3 gap-3 lg:gap-0">
-                  <div className="flex flex-row items-center w-full">
-                    <div className="flex-1 min-w-0">
-                      <p className="font-bold text-[11px] sm:text-[12px] lg:text-[13px] text-[#6B6B6B] mt-1 break-words">Last Price</p>
-                      <p className="font-bold text-lg sm:text-xl lg:text-2xl mt-1 whitespace-nowrap">{selectedDR?.last ? fmtNum(selectedDR.last) : "—"}</p>
-                    </div>
-                    <div className="mx-3 w-[1px] h-8 bg-[#9A9A9A]"></div>
-                    <div className="flex-1 min-w-0">
-                      <p className="font-bold text-[11px] sm:text-[12px] lg:text-[13px] text-[#6B6B6B] mt-1 break-words">Change</p>
-                      <p className={`font-bold text-lg sm:text-xl lg:text-2xl mt-1 whitespace-nowrap ${changeAbs > 0 ? "text-[#27AE60]" : changeAbs < 0 ? "text-[#EB5757]" : "text-black"}`}>
-                        {`${fmtNum(changeAbs)} (${fmtPct(changePct)})`}
-                      </p>
-                    </div>
+        <div className="w-full min-h-auto lg:min-h-[627px] mt-2 font-sarabun">
+          <div className="flex flex-col lg:flex-row w-full gap-3 sm:gap-4 lg:gap-0">
+            <div className="flex-1 min-h-auto md:min-h-[427px] bg-[#FFFFFF] rounded-t-[12px] md:rounded-tl-[12px] md:rounded-tr-none md:rounded-bl-[12px] md:rounded-br-none shadow-[0_10px_25px_rgba(0,0,0,0.12)] px-4 sm:px-6 pt-6 md:pt-10 pb-6 md:pb-0 border border-[#e0e0e0]">
+              <h2 className="font-semibold text-lg sm:text-xl md:text-[26px] text-black mb-3 md:mb-[14px]">Select DR</h2>
+              <div className="relative w-full h-[42px] sm:h-[46px] md:h-[48px]">
+                <input
+                  ref={searchInputRef}
+                  type="text"
+                  placeholder="Select DR"
+                  value={searchText}
+                  onChange={handleSearchChange}
+                  onKeyDown={handleSearchKeyDown}
+                  onClick={(e) => { e.target.select(); setShowSuggest(true); }}
+                  className="w-full h-full bg-white border border-[#d0d0d0] rounded-[12px] pl-3 sm:pl-4 pr-10 sm:pr-12 text-xs sm:text-sm text-black shadow-lg focus:outline-none"
+                />
+                <svg xmlns="http://www.w3.org/2000/svg" className="absolute right-3 sm:right-4 top-1/2 -translate-y-1/2 h-5 sm:h-6 w-5 sm:w-6 text-black" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+                {showSuggest && filteredSuggest.length > 0 && (
+                  <div className="absolute z-40 mt-1 max-h-48 sm:max-h-64 w-full overflow-y-auto rounded-2xl border border-[#e0e0e0] bg-white shadow-xl">
+                    {filteredSuggest.map((dr, idx) => (
+                      <button
+                        key={dr.symbol}
+                        type="button"
+                        onMouseDown={() => applyDR(dr)}
+                        className={`flex w-full justify-between px-3 sm:px-4 py-2 text-left text-xs sm:text-sm ${idx === highlightIndex ? "bg-gray-100" : "hover:bg-gray-50"}`}
+                      >
+                        <span className="font-semibold text-black">{dr.symbol}</span>
+                        <span className="text-[10px] sm:text-xs text-gray-500 truncate w-20 sm:w-40 text-right">
+                          {(dr.underlyingName || dr.name)
+                            ?.replace(/^โครงการจัดการลงทุนต่างประเทศ\s*/g, "")
+                            ?.replace(/^บริษัทหลักทรัพย์\s*/g, "")
+                            ?.replace(/^บริษัท\s*/g, "")
+                            ?.replace(/\s*บริษัท$/g, "")
+                            ?.trim()}
+                        </span>
+                      </button>
+                    ))}
                   </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex-1 bg-[#0B102A] rounded-b-[16px] lg:rounded-b-none lg:rounded-tr-[16px] lg:rounded-br-[16px] shadow-lg p-4 sm:p-5 lg:p-6">
-            <div className="w-full min-h-auto lg:h-[253px] bg-white/20 border border-[#9A9A9A] rounded-[12px] shadow-lg p-3 sm:p-6 flex flex-col">
-              <div className="mb-3 sm:mb-4">
-                <p className="font-bold text-[11px] sm:text-[13px] text-white mb-1">Underlying Price</p>
-                <div className="w-full h-[40px] sm:h-[46px] bg-white/20 border border-[#9A9A9A] rounded-[12px] flex items-center hover:border-[#4AB6FF] transition-colors duration-150">
-                  <input
-                    type="text"
-                    autoComplete="off"
-                    value={formatInputNum(underlyingValue, 2)}
-                    readOnly
-                    disabled={loadingRealtime}
-                    style={{ WebkitTextFillColor: "white" }}
-                    className={`flex-1 h-full bg-transparent text-xs sm:text-sm text-white placeholder-[#9A9A9A] px-3 sm:px-4 focus:outline-none ${loadingRealtime ? "opacity-50 cursor-not-allowed" : ""}`}
-                  />
-                  <div className="w-[1px] h-[25px] sm:h-[30px] bg-[#9A9A9A]"></div>
-                  <div className="w-[80px] sm:w-[100px] flex justify-center text-white font-bold text-[11px] sm:text-[13px]">
-                    {underlyingCurrency || "USD"}
-                  </div>
-                </div>
+                )}
               </div>
 
-              <div className="mb-3 sm:mb-4">
-                <p className="font-bold text-[11px] sm:text-[13px] text-white mb-1">Exchange Rate</p>
-                <div className="w-full h-[40px] sm:h-[46px] bg-white/20 border border-[#9A9A9A] rounded-[12px] flex items-center hover:border-[#4AB6FF] transition-colors duration-150">
-                  <input
-                    type="text"
-                    autoComplete="off"
-                    value={formatInputNum(fxTHBPerUnderlying, fxDecimalsByCcy(underlyingCurrency))}
-                    readOnly
-                    disabled={loadingRealtime}
-                    style={{ WebkitTextFillColor: "white" }}
-                    className={`flex-1 h-full bg-transparent text-xs sm:text-sm text-white placeholder-[#9A9A9A] px-3 sm:px-4 focus:outline-none ${loadingRealtime ? "opacity-50 cursor-not-allowed" : ""}`}
-                  />
-                  <div className="w-[1px] h-[25px] sm:h-[30px] bg-[#9A9A9A]"></div>
-                  <div className="w-[80px] sm:w-[100px] flex justify-center text-white font-bold text-[11px] sm:text-[13px]">{"THB/" + (underlyingCurrency || "USD")}</div>
-                </div>
-              </div>
-
-              {loadingRealtime && (
-                <span className="text-[10px] sm:text-xs text-blue-300 ml-2 mb-2">
-                  Calculating fair value…
-                </span>
-              )}
-
-              <div className="flex justify-center gap-2 mt-0 sm:mt-0.5 w-full">
-                <button
-                  onClick={onReset}
-                  className="w-[120px] sm:w-[139px] h-[36px] sm:h-[38px] bg-white rounded-[8px] flex justify-center items-center gap-2 text-black font-bold text-[11px] sm:text-[12px] hover:bg-gray-200 transition-colors"
-                >
-                  Clear
-                </button>
-              </div>
-            </div>
-
-            <div className="mt-4 sm:mt-6 px-2 sm:px-4">
-              <h3 className="text-white font-bold text-base sm:text-[20px] mb-3 sm:mb-4">Calculation Result</h3>
-              <div className="flex justify-between items-center mb-2 px-3 sm:px-4">
-                <span className="text-white font-bold text-sm sm:text-[16px]">Fair Bid</span>
-                <span className="text-white font-bold text-base sm:text-[18px]">{hasInput ? `${fmtTHB(fairBidTHB)} THB` : "-  THB"}</span>
-              </div>
-              <div className="flex justify-between items-center px-3 sm:px-4 mb-4">
-                <span className="text-white font-bold text-sm sm:text-[16px]">Fair Ask</span>
-                <span className="text-white font-bold text-base sm:text-[18px]">{hasInput ? `${fmtTHB(fairAskTHB)} THB` : "-  THB"}</span>
-              </div>
-            </div>
-
-            {/* Warning Box */}
-            <div className="mt-0 px-0">
-              <div className="w-full bg-red-500/20 backdrop-blur-sm border border-red-500 rounded-[12px] p-3 sm:p-4">
-                <p className="text-red-400 text-[11px] sm:text-[12px] leading-relaxed">
-                  <span className="font-extrabold">หมายเหตุ:</span> ระบบแสดงราคา Fair Bid / Fair Ask เพื่อเป็นข้อมูลประกอบการตัดสินใจเบื้องต้นเท่านั้น โดยประมวลผลจากราคาสินทรัพย์อ้างอิง อัตราแลกเปลี่ยน และ อัตราส่วนต่อสินทรัพย์อ้างอิง ราคาบนกระดานซื้อขายจริงอาจแตกต่างไปตามสภาพคล่องของ DR
+              <div className="mt-4 lg:mt-6">
+                <h3 className="text-[#0046b8] font-extrabold text-xl sm:text-2xl lg:text-3xl leading-snug break-words">{selectedDR?.symbol || "—"}</h3>
+                <p className="font-medium text-[9px] sm:text-[10px] text-[#555] mt-1 line-clamp-2 break-words">
+                  {selectedDR ? `Depositary Receipt on ${selectedDR.underlying || selectedDR.underlyingName} Issued by ${selectedDR.issuer}` : "—"}
                 </p>
+                <div className="w-full min-h-auto lg:h-[175px] bg-white border border-[#e0e0e0] rounded-[12px] shadow-lg mt-4 p-3 sm:p-4 relative">
+                  <p className="font-bold text-[11px] sm:text-[12px] lg:text-[13px] text-[#6B6B6B] break-words">Ratio (DR : Underlying)</p>
+                  <p className="font-bold text-lg sm:text-xl lg:text-2xl text-[#111] mt-1">{ratioDR ? `${fmtNum(ratioDR, 0)} : 1` : "—"} </p>
+                  <div className="w-full h-px bg-[#9A9A9A] mt-2"></div>
+                  <div className="flex flex-col lg:flex-row items-center mt-3 gap-3 lg:gap-0">
+                    <div className="flex flex-row items-center w-full">
+                      <div className="flex-1 min-w-0">
+                        <p className="font-bold text-[11px] sm:text-[12px] lg:text-[13px] text-[#6B6B6B] mt-1 break-words">Last Price</p>
+                        <p className="font-bold text-lg sm:text-xl lg:text-2xl mt-1 whitespace-nowrap">{selectedDR?.last ? fmtNum(selectedDR.last) : "—"}</p>
+                      </div>
+                      <div className="mx-3 w-px h-8 bg-[#9A9A9A]"></div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-bold text-[11px] sm:text-[12px] lg:text-[13px] text-[#6B6B6B] mt-1 break-words">Change</p>
+                        <p className={`font-bold text-lg sm:text-xl lg:text-2xl mt-1 whitespace-nowrap ${changeAbs > 0 ? "text-[#27AE60]" : changeAbs < 0 ? "text-[#EB5757]" : "text-black"}`}>
+                          {`${fmtNum(changeAbs)} (${fmtPct(changePct)})`}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex-1 bg-[#0B102A] rounded-b-[16px] lg:rounded-b-none lg:rounded-tr-[16px] lg:rounded-br-[16px] shadow-lg p-4 sm:p-5 lg:p-6">
+              <div className="w-full min-h-auto lg:h-[253px] bg-white/20 border border-[#9A9A9A] rounded-[12px] shadow-lg p-3 sm:p-6 flex flex-col">
+                <div className="mb-3 sm:mb-4">
+                  <p className="font-bold text-[11px] sm:text-[13px] text-white mb-1">Underlying Price</p>
+                  <div className="w-full h-[40px] sm:h-[46px] bg-white/20 border border-[#9A9A9A] rounded-[12px] flex items-center hover:border-[#4AB6FF] transition-colors duration-150">
+                    <input
+                      type="text"
+                      autoComplete="off"
+                      value={formatInputNum(underlyingValue, 2)}
+                      readOnly
+                      disabled={loadingRealtime}
+                      style={{ WebkitTextFillColor: "white" }}
+                      className={`flex-1 h-full bg-transparent text-xs sm:text-sm text-white placeholder-[#9A9A9A] px-3 sm:px-4 focus:outline-none ${loadingRealtime ? "opacity-50 cursor-not-allowed" : ""}`}
+                    />
+                    <div className="w-px h-[25px] sm:h-[30px] bg-[#9A9A9A]"></div>
+                    <div className="w-[80px] sm:w-[100px] flex justify-center text-white font-bold text-[11px] sm:text-[13px]">
+                      {underlyingCurrency || "USD"}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mb-3 sm:mb-4">
+                  <p className="font-bold text-[11px] sm:text-[13px] text-white mb-1">Exchange Rate</p>
+                  <div className="w-full h-[40px] sm:h-[46px] bg-white/20 border border-[#9A9A9A] rounded-[12px] flex items-center hover:border-[#4AB6FF] transition-colors duration-150">
+                    <input
+                      type="text"
+                      autoComplete="off"
+                      value={formatInputNum(fxTHBPerUnderlying, fxDecimalsByCcy(underlyingCurrency))}
+                      readOnly
+                      disabled={loadingRealtime}
+                      style={{ WebkitTextFillColor: "white" }}
+                      className={`flex-1 h-full bg-transparent text-xs sm:text-sm text-white placeholder-[#9A9A9A] px-3 sm:px-4 focus:outline-none ${loadingRealtime ? "opacity-50 cursor-not-allowed" : ""}`}
+                    />
+                    <div className="w-px h-[25px] sm:h-[30px] bg-[#9A9A9A]"></div>
+                    <div className="w-[80px] sm:w-[100px] flex justify-center text-white font-bold text-[11px] sm:text-[13px]">{"THB/" + (underlyingCurrency || "USD")}</div>
+                  </div>
+                </div>
+
+                {loadingRealtime && (
+                  <span className="text-[10px] sm:text-xs text-blue-300 ml-2 mb-2">
+                    Calculating fair value…
+                  </span>
+                )}
+
+                <div className="flex justify-center gap-2 mt-0 sm:mt-0.5 w-full">
+                  <button
+                    onClick={onReset}
+                    className="w-[120px] sm:w-[139px] h-[36px] sm:h-[38px] bg-white rounded-[8px] flex justify-center items-center gap-2 text-black font-bold text-[11px] sm:text-[12px] hover:bg-gray-200 transition-colors"
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+
+              <div className="mt-4 sm:mt-6 px-2 sm:px-4">
+                <h3 className="text-white font-bold text-base sm:text-[20px] mb-3 sm:mb-4">Calculation Result</h3>
+                <div className="flex justify-between items-center mb-2 px-3 sm:px-4">
+                  <span className="text-white font-bold text-sm sm:text-[16px]">Fair Bid</span>
+                  <span className="text-white font-bold text-base sm:text-[18px]">{hasInput ? `${fmtTHB(fairBidTHB)} THB` : "-  THB"}</span>
+                </div>
+                <div className="flex justify-between items-center px-3 sm:px-4 mb-4">
+                  <span className="text-white font-bold text-sm sm:text-[16px]">Fair Ask</span>
+                  <span className="text-white font-bold text-base sm:text-[18px]">{hasInput ? `${fmtTHB(fairAskTHB)} THB` : "-  THB"}</span>
+                </div>
+              </div>
+
+              {/* Warning Box */}
+              <div className="mt-0 px-0">
+                <div className="w-full bg-red-500/20 backdrop-blur-sm border border-red-500 rounded-[12px] p-3 sm:p-4">
+                  <p className="text-red-400 text-[11px] sm:text-[12px] leading-relaxed">
+                    <span className="font-extrabold">หมายเหตุ:</span> ระบบแสดงราคา Fair Bid / Fair Ask เพื่อเป็นข้อมูลประกอบการตัดสินใจเบื้องต้นเท่านั้น โดยประมวลผลจากราคาสินทรัพย์อ้างอิง อัตราแลกเปลี่ยน และ อัตราส่วนต่อสินทรัพย์อ้างอิง ราคาบนกระดานซื้อขายจริงอาจแตกต่างไปตามสภาพคล่องของ DR
+                  </p>
+                </div>
               </div>
             </div>
           </div>
-        </div>
 
-        {updatedAt && (
-          <div className="flex flex-col items-end gap-0.5 text-[10px] sm:text-xs text-gray-500 pr-1 mt-3 sm:mt-4 mb-1 overflow-hidden">
+          {updatedAt && (
+            <div className="flex flex-col items-end gap-0.5 text-[10px] sm:text-xs text-gray-500 pr-1 mt-3 sm:mt-4 mb-1 overflow-hidden">
               <div className="break-words">
                 Last Updated:{" "}
                 {updatedAt.toLocaleString("en-US", {
@@ -720,10 +739,10 @@ const dynamicSpreadPct = useMemo(() => {
                   second: "2-digit",
                 })}
               </div>
-          </div>
-        )}
+            </div>
+          )}
 
-        {renderComparisonTable()}
+          {renderComparisonTable()}
         </div>
       </div>
     </div>
