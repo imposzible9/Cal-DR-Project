@@ -1,10 +1,8 @@
 import { useEffect, useMemo, useState, useRef } from "react";
-import { trackPageView, trackDRSelection, trackCalculation } from "../utils/tracker";
-import { API_CONFIG } from "../config/api";
 
 // const API_BASE = "http://172.17.1.85:8333";
-const API_BASE = "https://api.ideatrade1.com";       // DR snapshot (production)
-const CALC_API_BASE = API_CONFIG.RATINGS_API;      // DR real-time calc (local unified API)
+const API_BASE = import.meta.env.VITE_DR_LIST_BASE_API; // DR snapshot (use same as DRList)
+const CALC_API_BASE = import.meta.env.VITE_CAL_API; // DR real-time calc
 
 const EXCHANGE_CURRENCY_MAP = {
   "The Nasdaq Global Select Market": "USD",
@@ -37,6 +35,13 @@ const formatInt = (n) => {
   return Math.round(num).toLocaleString();
 };
 
+const formatInputNum = (n, d = 2) => {
+  const num = Number(n);
+  if (!Number.isFinite(num)) return "";
+  return num.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+};
+
+
 const formatRatio = (raw) => {
   if (!raw) return "0:1";
   const s = String(raw);
@@ -61,6 +66,11 @@ const fxDecimalsByCcy = (ccy) => {
   return 2; // USD/HKD/EUR ปกติ
 };
 
+const roundToTick = (p) => {
+  const tick = 0.01; // SET DR ส่วนใหญ่ใช้ 0.01
+  return Math.round(Number(p) / tick) * tick;
+};
+
 
 export default function DRCal() {
   // ================== state สำหรับ DR & การค้นหา ==================
@@ -74,49 +84,58 @@ export default function DRCal() {
 
   const [sortConfig, setSortConfig] = useState({ key: null, direction: "asc" });
 
-  // ================== state สำหรับการคำนวณ ==================
-  const [underlyingValue, setUnderlyingValue] = useState("");
-  const [fxTHBPerUnderlying, setFxTHBPerUnderlying] = useState("");
-  const [underlyingCurrency, setUnderlyingCurrency] = useState("USD");
+// ================== state สำหรับการคำนวณ ==================
+const [underlyingValue, setUnderlyingValue] = useState(null);              // ✅ ใช้แสดงผล (ปัดแล้ว)
+const [underlyingValueRaw, setUnderlyingValueRaw] = useState(null);        // ✅ ค่าดิบจาก backend (ไว้คำนวณ)
+const [fxTHBPerUnderlying, setFxTHBPerUnderlying] = useState(null);
+const [underlyingCurrency, setUnderlyingCurrency] = useState("USD");
 
-  const [loadingRealtime, setLoadingRealtime] = useState(false);
+const [loadingRealtime, setLoadingRealtime] = useState(false);
+const [defaultDR, setDefaultDR] = useState(null);
 
-  const [defaultDR, setDefaultDR] = useState(null);
+const fetchRealtimeUnderlying = async (drSymbol) => {
+  try {
+    setLoadingRealtime(true);
 
-  const fetchRealtimeUnderlying = async (drSymbol) => {
-    try {
-      setLoadingRealtime(true);
+const res = await fetch(
+  `${CALC_API_BASE}/api/calc/dr/${encodeURIComponent(drSymbol)}`
+);
+    if (!res.ok) throw new Error("Failed realtime calc");
 
-      const res = await fetch(`${CALC_API_BASE}/api/calc/dr/${drSymbol}`);
-      if (!res.ok) throw new Error("Failed realtime calc");
+    const data = await res.json();
 
-      const data = await res.json();
+    const ccy = String(data.currency ?? "USD");
+    setUnderlyingCurrency(ccy);
 
-      const ccy = String(data.currency ?? "USD");
-      setUnderlyingCurrency(ccy);
+    // ✅ 1) รับค่าดิบก่อน (ถ้า backend ส่ง underlying_price_raw มา)
+    const undRaw =
+      data.underlying_price_raw != null
+        ? Number(data.underlying_price_raw)
+        : (data.underlying_price != null ? Number(data.underlying_price) : null);
 
-      setUnderlyingValue(
-        data.underlying_price != null
-          ? Number(data.underlying_price).toFixed(2)
-          : ""
-      );
+    setUnderlyingValueRaw(undRaw);
+    setUnderlyingValue(undRaw != null ? Math.round((undRaw + 1e-10) * 100) / 100 : null);
 
-      const dec = fxDecimalsByCcy(ccy);
-      setFxTHBPerUnderlying(
-        data.fx_rate != null
-          ? Number(data.fx_rate).toFixed(dec)
-          : ""
-      );
-    } catch (err) {
-      console.error("Realtime calc error:", err);
-    } finally {
-      setLoadingRealtime(false);
-    }
-  };
+    // ✅ 2) ปัด 2 ตำแหน่งเพื่อแสดงผลในหน้าเว็บ
+    const undRounded =
+      Number.isFinite(undRaw) ? Math.round(undRaw * 100) / 100 : null;
 
+    setUnderlyingValue(undRounded);
+
+    setFxTHBPerUnderlying(
+      data.fx_rate != null ? Number(data.fx_rate) : null
+    );
+  } catch (err) {
+    console.error("Realtime calc error:", err);
+  } finally {
+    setLoadingRealtime(false);
+  }
+};
 
   const tableRef = useRef(null);
-  const SPREAD_PCT = 0.002;
+  const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
+
+  const searchInputRef = useRef(null);
 
   // ================== ดึง DR ทั้งหมด ==================
   useEffect(() => {
@@ -124,7 +143,7 @@ export default function DRCal() {
       try {
         const res = await fetch(
           // `${API_BASE}/dr?fields=` +
-          `${API_BASE}/caldr?fields=` +
+          `${API_BASE}/caldr?fields=`+
           [
             "symbol",
             "name",
@@ -158,7 +177,7 @@ export default function DRCal() {
 
         const data = await res.json();
         setAllDR(data.rows || []);
-
+        
         if (data.updated_at) {
           const date = new Date(data.updated_at * 1000);
           if (!isNaN(date.getTime())) {
@@ -180,9 +199,7 @@ export default function DRCal() {
         console.error(err);
       }
     }
-
     fetchDR();
-    trackPageView('caldr');
   }, []);
 
   // ================== format numbers ==================
@@ -210,53 +227,95 @@ export default function DRCal() {
   }, [selectedDR]);*/
 
   // ================== ratio ==================
-  const ratioDR = useMemo(() => {
-    if (!selectedDR) return 0;
-    if (selectedDR?.conversionRatioR) return 1 / Number(selectedDR.conversionRatioR);
-    if (selectedDR?.conversionRatio) {
-      const m = String(selectedDR.conversionRatio).split(":")[0];
-      return Number(m.replace(/[^\d.]/g, "")) || 0;
-    }
-    return 0;
-  }, [selectedDR]);
+// ================== ratio ==================
+const ratioDR = useMemo(() => {
+  if (!selectedDR) return 0;
+
+  if (selectedDR?.conversionRatio) {
+    const left = String(selectedDR.conversionRatio).split(":")[0];
+    const n = Number(left.replace(/[^\d.]/g, ""));
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  if (selectedDR?.conversionRatioR) {
+    const r = Number(selectedDR.conversionRatioR);
+    return r > 0 ? (1 / r) : 0;
+  }
+
+  return 0;
+}, [selectedDR]);
+
+// ================== dynamic spread ==================
+const dynamicSpreadPct = useMemo(() => {
+  if (!selectedDR) return 0.002;
+
+  const bid = Number(selectedDR.bidPrice || 0);
+  const ask = Number(selectedDR.offerPrice || 0);
+
+  let spread = null;
+
+  if (bid > 0 && ask > 0 && ask > bid) {
+    const mid = (bid + ask) / 2;
+    if (mid > 0) spread = (ask - bid) / mid;
+  }
+
+  if (spread == null) {
+    const value = Number(selectedDR.totalValue || 0);
+    spread =
+      value >= 50_000_000 ? 0.001 :
+      value >= 10_000_000 ? 0.002 :
+      value >= 2_000_000  ? 0.004 :
+                           0.008;
+  }
+
+  return clamp(spread, 0.001, 0.02);
+}, [selectedDR]);
+
+
 
   // ================== fair value ==================
   const fairMidTHB = useMemo(() => {
-    const und = Number(underlyingValue || 0);
+    const und = Number(underlyingValueRaw ?? underlyingValue ?? 0);
     const fx = Number(fxTHBPerUnderlying || 0);
     if (!und || !fx || !ratioDR) return 0;
     return (und * fx) / ratioDR;
   }, [underlyingValue, fxTHBPerUnderlying, ratioDR]);
 
-  const fairBidTHB = fairMidTHB * (1 - SPREAD_PCT / 2);
-  const fairAskTHB = fairMidTHB * (1 + SPREAD_PCT / 2);
-  const hasInput = underlyingValue && fxTHBPerUnderlying;
+  const fairBidTHB = useMemo(
+    () => roundToTick(fairMidTHB * (1 - dynamicSpreadPct / 2)),
+    [fairMidTHB, dynamicSpreadPct]
+  );
 
-  // Track Calculation
-  useEffect(() => {
-    if (selectedDR && hasInput && fairMidTHB > 0) {
-      const timeout = setTimeout(() => {
-        trackCalculation(
-          selectedDR.symbol,
-          underlyingValue,
-          fxTHBPerUnderlying,
-          fairBidTHB.toFixed(2),
-          fairAskTHB.toFixed(2)
-        );
-      }, 2000);
-      return () => clearTimeout(timeout);
-    }
-  }, [selectedDR, hasInput, fairMidTHB, fairBidTHB, fairAskTHB, underlyingValue, fxTHBPerUnderlying]);
+  const fairAskTHB = useMemo(
+    () => roundToTick(fairMidTHB * (1 + dynamicSpreadPct / 2)),
+    [fairMidTHB, dynamicSpreadPct]
+  );
+  
+  const hasInput = Number(underlyingValue) > 0 && Number(fxTHBPerUnderlying) > 0 && ratioDR > 0;
 
   // ================== Suggest ==================
   const filteredSuggest = useMemo(() => {
     const q = searchText.trim().toUpperCase();
     if (!q) return [];
+
     return allDR
       .filter((dr) => {
-        const sym = dr.symbol?.toUpperCase() || "";
-        const nm = dr.name?.toUpperCase() || "";
-        return sym.includes(q) || nm.includes(q);
+        const sym = (dr.symbol || "").toUpperCase();                 // DR
+        const nm = (dr.name || "").toUpperCase();                    // ชื่อ DR
+        const und = (dr.underlying || "").toUpperCase();             // underlying (บางทีเป็นชื่อสั้น)
+        const undName = (dr.underlyingName || "").toUpperCase();     // ชื่อบริษัท/ชื่อกองทุนเต็ม
+        const issuer = (dr.issuer || "").toUpperCase();              // ผู้ออก (KTB/FSS)
+        const issuerName = (dr.issuerName || "").toUpperCase();      // ชื่อผู้ออก
+
+        // ✅ เพิ่มค้นหา “ชื่อบริษัท” ได้จาก underlyingName
+        return (
+          sym.includes(q) ||
+          nm.includes(q) ||
+          und.includes(q) ||
+          undName.includes(q) ||
+          issuer.includes(q) ||
+          issuerName.includes(q)
+        );
       })
       .slice(0, 8);
   }, [searchText, allDR]);
@@ -267,21 +326,12 @@ export default function DRCal() {
     setShowSuggest(false);
     setHighlightIndex(-1);
 
-    // ไม่ต้อง clear
-    setUnderlyingCurrency(
-      EXCHANGE_CURRENCY_MAP[dr.underlyingExchange] || "USD"
-    );
+    // fallback ระหว่างรอ realtime
+    setUnderlyingCurrency(EXCHANGE_CURRENCY_MAP[dr.underlyingExchange] || "USD");
 
-    // fetch realtime
+    // ยิง realtime ครั้งเดียวพอ
     fetchRealtimeUnderlying(dr.symbol);
-
-    setUnderlyingCurrency(EXCHANGE_CURRENCY_MAP[dr.underlyingExchange] || "USD"); // ✅ fallback ระหว่างรอ realtime
-
-    // 🔥 ดึง realtime
-    fetchRealtimeUnderlying(dr.symbol);
-    trackDRSelection(dr.symbol);
   };
-
 
   const handleSearchChange = (e) => {
     setSearchText(e.target.value.toUpperCase());
@@ -410,23 +460,23 @@ export default function DRCal() {
     if (filteredTableData.length === 0) return null;
 
     return (
-      <div ref={tableRef} className="w-full mt-2 bg-white rounded-xl shadow-[0_4px_20px_rgba(0,0,0,0.05)] border border-gray-100 overflow-hidden">
+      <div ref={tableRef} className="w-full mt-3 md:mt-2 bg-white rounded-xl shadow-[0_4px_20px_rgba(0,0,0,0.05)] border border-gray-100 overflow-hidden font-['Sarabun'] overflow-x-auto md:overflow-x-visible">
         <div className="overflow-x-auto">
-          <table className="w-full text-xs text-left border-separate border-spacing-0">
-            <thead className="bg-[#0B102A] text-white font-bold">
+          <table className="w-full text-[10px] sm:text-xs md:text-sm lg:text-sm text-left border-separate border-spacing-0">
+            <thead className="bg-[#0B102A] text-white font-bold sticky top-0">
               <tr>
-                <th rowSpan={2} className="py-4 px-3 text-left sticky bg-[#0B102A] align-middle cursor-pointer relative"
-                  style={{ left: "0px", width: "155px", minWidth: "155px", zIndex: 30 }}
+                <th rowSpan={2} className="py-3 md:py-4 px-2 sm:px-3 text-left sticky bg-[#0B102A] align-middle cursor-pointer relative"
+                  style={{ left: "0px", width: "120px", minWidth: "120px", zIndex: 30 }}
                   onClick={() => handleSort("dr")}>
-                  <div className={`flex items-center gap-0.5`}>Underlying <SortIndicator colKey="dr" /></div>
+                  <div className={`flex items-center gap-0.5 text-[10px] sm:text-xs`}>DR <SortIndicator colKey="dr" /></div>
                   {sortConfig.key === "dr" && (
                     <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#2F80ED] z-50">
                       <div className="absolute bottom-[-4px] left-1/2 -translate-x-1/2 w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[4px] border-t-[#2F80ED]"></div>
                     </div>
                   )}
                 </th>
-                <th colSpan={9} className="py-3 text-center bg-[#020323]">Trading information</th>
-                <th colSpan={6} className="py-3 text-center bg-[#020323] border-l border-gray-700">Basic Underlying information</th>
+                <th colSpan={9} className="py-2 md:py-3 text-center text-[10px] sm:text-xs bg-[#020323]">Trading information</th>
+                <th colSpan={6} className="py-2 md:py-3 text-center text-[10px] sm:text-xs bg-[#020323] border-l border-gray-700">Basic DR information</th>
               </tr>
               <tr>
                 {[
@@ -434,20 +484,20 @@ export default function DRCal() {
                   { key: "high", label: "High", align: "right" },
                   { key: "low", label: "Low", align: "right" },
                   { key: "last", label: "Last", align: "right" },
-                  { key: "pct", label: "%Change", align: "right" },
+                  { key: "pct", label: "%Chg", align: "right" },
                   { key: "bid", label: "Bid", align: "right" },
-                  { key: "offer", label: "Offer", align: "right" },
-                  { key: "vol", label: "Volume", align: "right" },
+                  { key: "offer", label: "Ask", align: "right" },
+                  { key: "vol", label: "Vol", align: "right" },
                   { key: "value", label: "Value('000)", align: "right" },
-                  { key: "marketCap", label: "Market Cap (M)", align: "right", border: true },
-                  { key: "underlying", label: "Underlying", align: "left" },
+                  { key: "marketCap", label: "MCap (M)", align: "right", border: true },
+                  { key: "underlying", label: "UDL", align: "left" },
                   { key: "ratio", label: "Ratio", align: "right" },
-                  { key: "divYield", label: "Div. Yield", align: "right" },
+                  { key: "divYield", label: "Div%", align: "right" },
                   { key: "exchange", label: "Exchange", align: "left" },
-                  { key: "outstandingShare", label: "Outstanding Share", align: "right" },
+                  { key: "outstandingShare", label: "Out Share", align: "right" },
                 ].map((item) => (
                   <th key={item.key}
-                    className={`py-3 px-3 text-${item.align} bg-[#1C1D39] border-b border-gray-700 whitespace-nowrap cursor-pointer relative ${item.border ? 'border-l border-gray-700' : ''}`}
+                    className={`py-2 md:py-3 px-2 sm:px-3 text-${item.align} text-[10px] sm:text-xs bg-[#1C1D39] border-b border-gray-700 whitespace-nowrap cursor-pointer relative ${item.border ? 'border-l border-gray-700' : ''}`}
                     onClick={() => handleSort(item.key)}>
                     <div className={`flex items-center ${item.align === "right" ? "justify-end" : "justify-start"} gap-0.5`}>
                       {item.label} <SortIndicator colKey={item.key} />
@@ -468,30 +518,30 @@ export default function DRCal() {
                 const textBaseColor = isSelected ? "text-[#1e3a8a] font-semibold" : "text-gray-600";
 
                 return (
-                  <tr key={row.dr} className={`transition-colors duration-200 ${isSelected ? "bg-[#eff6ff] border-l-4 border-[#2F80ED] shadow-sm relative z-10" : (index % 2 === 0 ? "bg-white" : "bg-[#F9FAFB]") + " hover:bg-gray-50 border-l-4 border-transparent"}`} style={{ height: "52px" }}>
-                    <td className="py-4 px-3 text-left font-bold text-[#2F80ED] sticky left-0 z-20" style={{ backgroundColor: stickyBgClass, height: "52px" }}>
-                      <div className="flex items-center gap-2">
-                        {isSelected && <div className="w-1.5 h-1.5 rounded-full bg-[#2F80ED]"></div>}
-                        {row.dr}
+                  <tr key={row.dr} className={`transition-colors duration-200 text-[10px] sm:text-xs md:text-sm ${isSelected ? "bg-[#eff6ff] border-l-4 border-[#2F80ED] shadow-sm relative z-10" : (index % 2 === 0 ? "bg-white" : "bg-[#F9FAFB]") + " hover:bg-gray-50 border-l-4 border-transparent"}`} style={{ height: "auto", minHeight: "48px" }}>
+                    <td className="py-2 md:py-4 px-2 sm:px-3 text-left font-bold text-[#2F80ED] sticky left-0 z-20" style={{ backgroundColor: stickyBgClass }}>
+                      <div className="flex items-center gap-1">
+                        {isSelected && <div className="w-1 md:w-1.5 h-1 md:h-1.5 rounded-full bg-[#2F80ED]"></div>}
+                        <span className="text-[10px] sm:text-xs md:text-sm">{row.dr}</span>
                       </div>
                     </td>
-                    <td className={`py-4 px-3 text-right text-xs font-medium font-mono ${textBaseColor}`} style={{ height: "52px" }}>{formatNum(row.open)}</td>
-                    <td className={`py-4 px-3 text-right text-xs font-medium font-mono ${textBaseColor}`} style={{ height: "52px" }}>{formatNum(row.high)}</td>
-                    <td className={`py-4 px-3 text-right text-xs font-medium font-mono ${textBaseColor}`} style={{ height: "52px" }}>{formatNum(row.low)}</td>
-                    <td className={`py-4 px-3 text-right text-xs font-medium font-mono ${textBaseColor}`} style={{ height: "52px" }}>{formatNum(row.last)}</td>
-                    <td className="py-4 px-3 text-right font-medium text-xs font-mono" style={{ color: row.pct > 0 ? "#27AE60" : row.pct < 0 ? "#EB5757" : "#111827", height: "52px" }}>
+                    <td className={`py-2 md:py-4 px-2 sm:px-3 text-right text-[9px] sm:text-[10px] md:text-xs font-medium font-mono ${textBaseColor}`}>{formatNum(row.open)}</td>
+                    <td className={`py-2 md:py-4 px-2 sm:px-3 text-right text-[9px] sm:text-[10px] md:text-xs font-medium font-mono ${textBaseColor}`}>{formatNum(row.high)}</td>
+                    <td className={`py-2 md:py-4 px-2 sm:px-3 text-right text-[9px] sm:text-[10px] md:text-xs font-medium font-mono ${textBaseColor}`}>{formatNum(row.low)}</td>
+                    <td className={`py-2 md:py-4 px-2 sm:px-3 text-right text-[9px] sm:text-[10px] md:text-xs font-medium font-mono ${textBaseColor}`}>{formatNum(row.last)}</td>
+                    <td className="py-2 md:py-4 px-2 sm:px-3 text-right font-medium text-[9px] sm:text-[10px] md:text-xs font-mono" style={{ color: row.pct > 0 ? "#27AE60" : row.pct < 0 ? "#EB5757" : "#111827" }}>
                       {row.pct === 0 ? "-" : row.pct > 0 ? `+${formatNum(row.pct)}` : formatNum(row.pct)}
                     </td>
-                    <td className={`py-4 px-3 text-right text-gray-600 text-xs font-medium font-mono`} style={{ height: "52px" }}>{formatNum(row.bid)}</td>
-                    <td className={`py-4 px-3 text-right text-gray-600 text-xs font-medium font-mono`} style={{ height: "52px" }}>{formatNum(row.offer)}</td>
-                    <td className={`py-4 px-3 text-right text-gray-600 text-xs font-medium font-mono`} style={{ height: "52px" }}>{formatInt(row.vol)}</td>
-                    <td className={`py-4 px-3 text-right text-gray-600 text-xs font-medium font-mono`} style={{ height: "52px" }}>{formatNum(row.value)}</td>
-                    <td className={`py-4 px-3 text-right text-gray-600 text-xs font-medium font-mono border-l border-gray-200`} style={{ height: "52px" }}>{row.marketCap ? formatNum(row.marketCap / 1000000) : "-"}</td>
-                    <td className={`py-4 px-3 text-left font-bold text-[#2F80ED]`} style={{ height: "52px" }}>{row.underlying || "-"}</td>
-                    <td className={`py-4 px-3 text-right text-gray-600 text-xs font-medium`} style={{ height: "52px" }}>{row.ratio}</td>
-                    <td className={`py-4 px-3 text-right text-gray-600 text-xs font-medium font-mono`} style={{ height: "52px" }}>{row.divYield ? formatNum(row.divYield) : "-"}</td>
-                    <td className={`py-4 px-3 text-left text-gray-600 text-xs font-medium max-w-[200px] truncate`} title={row.exchange} style={{ height: "52px" }}>{row.exchange || "-"}</td>
-                    <td className={`py-4 px-3 text-right text-gray-600 text-xs font-medium font-mono`} style={{ height: "52px" }}>{row.outstandingShare ? formatInt(row.outstandingShare) : "-"}</td>
+                    <td className={`py-2 md:py-4 px-2 sm:px-3 text-right text-gray-600 text-[9px] sm:text-[10px] md:text-xs font-medium font-mono`}>{formatNum(row.bid)}</td>
+                    <td className={`py-2 md:py-4 px-2 sm:px-3 text-right text-gray-600 text-[9px] sm:text-[10px] md:text-xs font-medium font-mono`}>{formatNum(row.offer)}</td>
+                    <td className={`py-2 md:py-4 px-2 sm:px-3 text-right text-gray-600 text-[9px] sm:text-[10px] md:text-xs font-medium font-mono`}>{formatInt(row.vol)}</td>
+                    <td className={`py-2 md:py-4 px-2 sm:px-3 text-right text-gray-600 text-[9px] sm:text-[10px] md:text-xs font-medium font-mono`}>{formatNum(row.value)}</td>
+                    <td className={`py-2 md:py-4 px-2 sm:px-3 text-right text-gray-600 text-[9px] sm:text-[10px] md:text-xs font-medium font-mono border-l border-gray-200`}>{row.marketCap ? formatNum(row.marketCap / 1000000) : "-"}</td>
+                    <td className={`py-2 md:py-4 px-2 sm:px-3 text-left font-bold text-[#2F80ED] text-[10px] sm:text-xs md:text-sm`}>{row.underlying || "-"}</td>
+                    <td className={`py-2 md:py-4 px-2 sm:px-3 text-right text-gray-600 text-[9px] sm:text-[10px] md:text-xs font-medium`}>{row.ratio}</td>
+                    <td className={`py-2 md:py-4 px-2 sm:px-3 text-right text-gray-600 text-[9px] sm:text-[10px] md:text-xs font-medium font-mono`}>{row.divYield ? formatNum(row.divYield) : "-"}</td>
+                    <td className={`py-2 md:py-4 px-2 sm:px-3 text-left text-gray-600 text-[9px] sm:text-[10px] md:text-xs font-medium max-w-[120px] md:max-w-[200px] truncate`} title={row.exchange}>{row.exchange || "-"}</td>
+                    <td className={`py-2 md:py-4 px-2 sm:px-3 text-right text-gray-600 text-[9px] sm:text-[10px] md:text-xs font-medium font-mono`}>{row.outstandingShare ? formatInt(row.outstandingShare) : "-"}</td>
                   </tr>
                 );
               })}
@@ -503,65 +553,74 @@ export default function DRCal() {
   };
 
   return (
-    <div className="min-h-screen w-full bg-[#f5f5f5] flex flex-col items-center pb-10">
-      <div className="w-full max-w-[1040px] scale-[1.2] origin-top">
-        <h1 className="text-4xl font-bold mb-3 text-black mt-10">Calculation Underlying</h1>
-        <p className="text-[#6B6B6B] mb-8 text-sm md:text-base">
-          Calculate Underlying Fair Value based on Underlying Price, Exchange Rate, and Conversion Ratio.
+    <div className="min-h-screen w-full bg-[#f5f5f5] flex flex-col items-center pb-6 lg:pb-10">
+      <div className="w-full max-w-[1040px] lg:scale-[1.2] origin-top px-3 sm:px-4 md:px-6 lg:px-0 mx-auto">
+        <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold mb-2 sm:mb-3 text-black mt-6 lg:mt-10">Calculation DR</h1>
+        <p className="text-xs sm:text-sm lg:text-base text-[#6B6B6B] mb-4 sm:mb-6 lg:mb-8 break-words">
+          Calculate DR Fair Value based on Underlying Price, Exchange Rate, and Conversion Ratio.
         </p>
 
-        <div className="w-full min-h-[627px] mt-2">
-          <div className="flex w-full">
-            <div className="flex-1 min-h-[427px] bg-[#FFFFFF] rounded-tl-[12px] rounded-bl-[12px] shadow-[0_10px_25px_rgba(0,0,0,0.12)] px-6 pt-10 border border-[#e0e0e0]">
-              <h2 className="font-semibold text-[26px] text-black mb-[14px]">Select DR</h2>
-              <div className="relative w-full h-[48px]">
-                <input
-                  type="text"
-                  placeholder="Select DR"
-                  value={searchText}
-                  onChange={handleSearchChange}
-                  onKeyDown={handleSearchKeyDown}
-                  onFocus={() => setShowSuggest(true)}
-                  className="w-full h-full bg-white border border-[#d0d0d0] rounded-[12px] pl-4 pr-12 text-black shadow-lg focus:outline-none"
-                />
-                <svg xmlns="http://www.w3.org/2000/svg" className="absolute right-4 top-1/2 -translate-y-1/2 h-6 w-6 text-black" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                </svg>
-                {showSuggest && filteredSuggest.length > 0 && (
-                  <div className="absolute z-40 mt-1 max-h-64 w-full overflow-y-auto rounded-2xl border border-[#e0e0e0] bg-white shadow-xl">
-                    {filteredSuggest.map((dr, idx) => (
-                      <button
-                        key={dr.symbol}
-                        type="button"
-                        onMouseDown={() => applyDR(dr)}
-                        className={`flex w-full justify-between px-4 py-2 text-left text-sm ${idx === highlightIndex ? "bg-gray-100" : "hover:bg-gray-50"}`}
-                      >
-                        <span className="font-semibold text-black">{dr.symbol}</span>
-                        <span className="text-xs text-gray-500 truncate w-40 text-right">{dr.name}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
+      <div className="w-full min-h-auto lg:min-h-[627px] mt-2 font-sarabun">
+        <div className="flex flex-col lg:flex-row w-full gap-3 sm:gap-4 lg:gap-0">
+          <div className="flex-1 min-h-auto md:min-h-[427px] bg-[#FFFFFF] rounded-t-[12px] md:rounded-tl-[12px] md:rounded-tr-none md:rounded-bl-[12px] md:rounded-br-none shadow-[0_10px_25px_rgba(0,0,0,0.12)] px-4 sm:px-6 pt-6 md:pt-10 pb-6 md:pb-0 border border-[#e0e0e0]">
+            <h2 className="font-semibold text-lg sm:text-xl md:text-[26px] text-black mb-3 md:mb-[14px]">Select DR</h2>
+            <div className="relative w-full h-[42px] sm:h-[46px] md:h-[48px]">
+              <input
+                ref={searchInputRef}
+                type="text"
+                placeholder="Select DR"
+                value={searchText}
+                onChange={handleSearchChange}
+                onKeyDown={handleSearchKeyDown}
+                onClick={(e) => { e.target.select(); setShowSuggest(true); }}
+                className="w-full h-full bg-white border border-[#d0d0d0] rounded-[12px] pl-3 sm:pl-4 pr-10 sm:pr-12 text-xs sm:text-sm text-black shadow-lg focus:outline-none"
+              />
+              <svg xmlns="http://www.w3.org/2000/svg" className="absolute right-3 sm:right-4 top-1/2 -translate-y-1/2 h-5 sm:h-6 w-5 sm:w-6 text-black" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+              {showSuggest && filteredSuggest.length > 0 && (
+                <div className="absolute z-40 mt-1 max-h-48 sm:max-h-64 w-full overflow-y-auto rounded-2xl border border-[#e0e0e0] bg-white shadow-xl">
+                  {filteredSuggest.map((dr, idx) => (
+                    <button
+                      key={dr.symbol}
+                      type="button"
+                      onMouseDown={() => applyDR(dr)}
+                      className={`flex w-full justify-between px-3 sm:px-4 py-2 text-left text-xs sm:text-sm ${idx === highlightIndex ? "bg-gray-100" : "hover:bg-gray-50"}`}
+                    >
+                      <span className="font-semibold text-black">{dr.symbol}</span>
+                      <span className="text-[10px] sm:text-xs text-gray-500 truncate w-20 sm:w-40 text-right">
+                        {(dr.underlyingName || dr.name)
+                          ?.replace(/^โครงการจัดการลงทุนต่างประเทศ\s*/g, "")
+                          ?.replace(/^บริษัทหลักทรัพย์\s*/g, "")
+                          ?.replace(/^บริษัท\s*/g, "")
+                          ?.replace(/\s*บริษัท$/g, "")
+                          ?.trim()}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
 
-              <div className="mt-6">
-                <h3 className="text-[#0046b8] font-extrabold text-[30px] leading-[26px]">{selectedDR?.symbol || "—"}</h3>
-                <p className="font-medium text-[10px] text-[#555] mt-1 truncate">
-                  {selectedDR ? `Depositary Receipt on ${selectedDR.underlying || selectedDR.underlyingName} Issued by ${selectedDR.issuer}` : "—"}
-                </p>
-                <div className="w-full h-[175px] bg-white border border-[#e0e0e0] rounded-[12px] shadow-lg mt-4 p-4 relative">
-                  <p className="font-bold text-[13px] text-[#6B6B6B]">Ratio (DR : Underlying)</p>
-                  <p className="font-bold text-[26px] text-[#111]">{ratioDR ? `${fmtNum(ratioDR, 0)} : 1` : "—"} </p>
-                  <div className="w-full h-[1px] bg-[#9A9A9A] mt-2"></div>
-                  <div className="flex items-center mt-2">
-                    <div className="w-1/2">
-                      <p className="font-bold text-[13px] text-[#6B6B6B] mt-1">Last Price</p>
-                      <p className="font-bold text-[26px]">{selectedDR?.last ? fmtNum(selectedDR.last) : "—"}</p>
+            <div className="mt-4 lg:mt-6">
+              <h3 className="text-[#0046b8] font-extrabold text-xl sm:text-2xl lg:text-3xl leading-snug break-words">{selectedDR?.symbol || "—"}</h3>
+              <p className="font-medium text-[9px] sm:text-[10px] text-[#555] mt-1 line-clamp-2 break-words">
+                {selectedDR ? `Depositary Receipt on ${selectedDR.underlying || selectedDR.underlyingName} Issued by ${selectedDR.issuer}` : "—"}
+              </p>
+              <div className="w-full min-h-auto lg:h-[175px] bg-white border border-[#e0e0e0] rounded-[12px] shadow-lg mt-4 p-3 sm:p-4 relative">
+                <p className="font-bold text-[11px] sm:text-[12px] lg:text-[13px] text-[#6B6B6B] break-words">Ratio (DR : Underlying)</p>
+                <p className="font-bold text-lg sm:text-xl lg:text-2xl text-[#111] mt-1">{ratioDR ? `${fmtNum(ratioDR, 0)} : 1` : "—"} </p>
+                <div className="w-full h-[1px] bg-[#9A9A9A] mt-2"></div>
+                <div className="flex flex-col lg:flex-row items-center mt-3 gap-3 lg:gap-0">
+                  <div className="flex flex-row items-center w-full">
+                    <div className="flex-1 min-w-0">
+                      <p className="font-bold text-[11px] sm:text-[12px] lg:text-[13px] text-[#6B6B6B] mt-1 break-words">Last Price</p>
+                      <p className="font-bold text-lg sm:text-xl lg:text-2xl mt-1 whitespace-nowrap">{selectedDR?.last ? fmtNum(selectedDR.last) : "—"}</p>
                     </div>
-                    <div className="absolute left-1/2 -translate-x-1/2 w-[1px] h-[56px] bg-[#9A9A9A]"></div>
-                    <div className="w-1/2 pl-6">
-                      <p className="font-bold text-[13px] text-[#6B6B6B] mt-1">Change</p>
-                      <p className={`font-bold text-[26px] ${changeAbs > 0 ? "text-[#27AE60]" : changeAbs < 0 ? "text-[#EB5757]" : "text-black"}`}>
+                    <div className="mx-3 w-[1px] h-8 bg-[#9A9A9A]"></div>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-bold text-[11px] sm:text-[12px] lg:text-[13px] text-[#6B6B6B] mt-1 break-words">Change</p>
+                      <p className={`font-bold text-lg sm:text-xl lg:text-2xl mt-1 whitespace-nowrap ${changeAbs > 0 ? "text-[#27AE60]" : changeAbs < 0 ? "text-[#EB5757]" : "text-black"}`}>
                         {`${fmtNum(changeAbs)} (${fmtPct(changePct)})`}
                       </p>
                     </div>
@@ -569,81 +628,88 @@ export default function DRCal() {
                 </div>
               </div>
             </div>
+          </div>
 
-            <div className="flex-1 bg-[#0B102A] rounded-tr-[16px] rounded-br-[16px] shadow-lg p-6">
-              <div className="w-full h-[253px] bg-white/20 border border-[#9A9A9A] rounded-[12px] shadow-lg p-6">
-                <div className="mb-4">
-                  <p className="font-bold text-[13px] text-white mb-1">Underlying Price</p>
-                  <div className="w-full h-[46px] bg-white/20 border border-[#9A9A9A] rounded-[12px] flex items-center hover:border-[#4AB6FF] transition-colors duration-150">
-                    <input
-                      type="text"
-                      autoComplete="off"
-                      value={underlyingValue}
-                      readOnly
-                      disabled={loadingRealtime}
-                      style={{ WebkitTextFillColor: "white" }}
-                      className={`flex-1 h-full bg-transparent text-white placeholder-[#9A9A9A] px-4 focus:outline-none ${loadingRealtime ? "opacity-50 cursor-not-allowed" : ""}`}
-                    />
-                    <div className="w-[1px] h-[30px] bg-[#9A9A9A]"></div>
-                    <div className="w-[100px] flex justify-center text-white font-bold text-[13px]">
-                      {underlyingCurrency || "USD"}
-                    </div>
+          <div className="flex-1 bg-[#0B102A] rounded-b-[16px] lg:rounded-b-none lg:rounded-tr-[16px] lg:rounded-br-[16px] shadow-lg p-4 sm:p-5 lg:p-6">
+            <div className="w-full min-h-auto lg:h-[253px] bg-white/20 border border-[#9A9A9A] rounded-[12px] shadow-lg p-3 sm:p-6 flex flex-col">
+              <div className="mb-3 sm:mb-4">
+                <p className="font-bold text-[11px] sm:text-[13px] text-white mb-1">Underlying Price</p>
+                <div className="w-full h-[40px] sm:h-[46px] bg-white/20 border border-[#9A9A9A] rounded-[12px] flex items-center hover:border-[#4AB6FF] transition-colors duration-150">
+                  <input
+                    type="text"
+                    autoComplete="off"
+                    value={formatInputNum(underlyingValue, 2)}
+                    readOnly
+                    disabled={loadingRealtime}
+                    style={{ WebkitTextFillColor: "white" }}
+                    className={`flex-1 h-full bg-transparent text-xs sm:text-sm text-white placeholder-[#9A9A9A] px-3 sm:px-4 focus:outline-none ${loadingRealtime ? "opacity-50 cursor-not-allowed" : ""}`}
+                  />
+                  <div className="w-[1px] h-[25px] sm:h-[30px] bg-[#9A9A9A]"></div>
+                  <div className="w-[80px] sm:w-[100px] flex justify-center text-white font-bold text-[11px] sm:text-[13px]">
+                    {underlyingCurrency || "USD"}
                   </div>
-                </div>
-
-                <div>
-                  <p className="font-bold text-[13px] text-white mb-1">Exchange Rate</p>
-                  <div className="w-full h-[46px] bg-white/20 border border-[#9A9A9A] rounded-[12px] flex items-center hover:border-[#4AB6FF] transition-colors duration-150">
-                    <input
-                      type="text"
-                      autoComplete="off"
-                      value={fxTHBPerUnderlying}
-                      readOnly
-                      disabled={loadingRealtime}
-                      style={{ WebkitTextFillColor: "white" }}
-                      className={`flex-1 h-full bg-transparent text-white placeholder-[#9A9A9A] px-4 focus:outline-none ${loadingRealtime ? "opacity-50 cursor-not-allowed" : ""}`}
-                    />
-                    <div className="w-[1px] h-[30px] bg-[#9A9A9A]"></div>
-                    <div className="w-[100px] flex justify-center text-white font-bold text-[13px]">{"THB/" + (underlyingCurrency || "USD")}</div>
-                  </div>
-                </div>
-
-                {loadingRealtime && (
-                  <span className="text-xs text-blue-300 ml-2">Calculating fair value…</span>
-                )}
-
-
-                <div className="flex justify-center gap-2 mt-4 w-full">
-                  <button onClick={onReset} className="w-[139px] h-[38px] bg-white rounded-[8px] flex justify-center items-center gap-2 text-black font-bold text-[12px] hover:bg-gray-200 transition-colors">Clear</button>
                 </div>
               </div>
 
-              <div className="mt-6 px-4">
-                <h3 className="text-white font-bold text-[20px] mb-4">Calculation Result</h3>
-                <div className="flex justify-between items-center mb-2 px-4">
-                  <span className="text-white font-bold text-[16px]">Fair Bid</span>
-                  <span className="text-white font-bold text-[18px]">{hasInput ? `${fmtTHB(fairBidTHB)} THB` : "-  THB"}</span>
-                </div>
-                <div className="flex justify-between items-center px-4 mb-4">
-                  <span className="text-white font-bold text-[16px]">Fair Ask</span>
-                  <span className="text-white font-bold text-[18px]">{hasInput ? `${fmtTHB(fairAskTHB)} THB` : "-  THB"}</span>
+              <div className="mb-3 sm:mb-4">
+                <p className="font-bold text-[11px] sm:text-[13px] text-white mb-1">Exchange Rate</p>
+                <div className="w-full h-[40px] sm:h-[46px] bg-white/20 border border-[#9A9A9A] rounded-[12px] flex items-center hover:border-[#4AB6FF] transition-colors duration-150">
+                  <input
+                    type="text"
+                    autoComplete="off"
+                    value={formatInputNum(fxTHBPerUnderlying, fxDecimalsByCcy(underlyingCurrency))}
+                    readOnly
+                    disabled={loadingRealtime}
+                    style={{ WebkitTextFillColor: "white" }}
+                    className={`flex-1 h-full bg-transparent text-xs sm:text-sm text-white placeholder-[#9A9A9A] px-3 sm:px-4 focus:outline-none ${loadingRealtime ? "opacity-50 cursor-not-allowed" : ""}`}
+                  />
+                  <div className="w-[1px] h-[25px] sm:h-[30px] bg-[#9A9A9A]"></div>
+                  <div className="w-[80px] sm:w-[100px] flex justify-center text-white font-bold text-[11px] sm:text-[13px]">{"THB/" + (underlyingCurrency || "USD")}</div>
                 </div>
               </div>
 
-              {/* Warning Box */}
-              <div className="mt-0 px-0">
-                <div className="w-full bg-red-500/20 backdrop-blur-sm border border-red-500 rounded-[12px] p-4">
-                  <p className="text-red-400 text-[12px] leading-relaxed">
-                    <span className="font-extrabold">หมายเหตุ:</span> ระบบแสดงราคา Fair Bid / Fair Ask เพื่อเป็นข้อมูลประกอบการตัดสินใจเบื้องต้นเท่านั้น โดยประมวลผลจากราคาสินทรัพย์อ้างอิง อัตราแลกเปลี่ยน และ อัตราส่วนต่อสินทรัพย์อ้างอิง ราคาบนกระดานซื้อขายจริงอาจแตกต่างไปตามสภาพคล่องของ DR
-                  </p>
-                </div>
+              {loadingRealtime && (
+                <span className="text-[10px] sm:text-xs text-blue-300 ml-2 mb-2">
+                  Calculating fair value…
+                </span>
+              )}
+
+              <div className="flex justify-center gap-2 mt-0 sm:mt-0.5 w-full">
+                <button
+                  onClick={onReset}
+                  className="w-[120px] sm:w-[139px] h-[36px] sm:h-[38px] bg-white rounded-[8px] flex justify-center items-center gap-2 text-black font-bold text-[11px] sm:text-[12px] hover:bg-gray-200 transition-colors"
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-4 sm:mt-6 px-2 sm:px-4">
+              <h3 className="text-white font-bold text-base sm:text-[20px] mb-3 sm:mb-4">Calculation Result</h3>
+              <div className="flex justify-between items-center mb-2 px-3 sm:px-4">
+                <span className="text-white font-bold text-sm sm:text-[16px]">Fair Bid</span>
+                <span className="text-white font-bold text-base sm:text-[18px]">{hasInput ? `${fmtTHB(fairBidTHB)} THB` : "-  THB"}</span>
+              </div>
+              <div className="flex justify-between items-center px-3 sm:px-4 mb-4">
+                <span className="text-white font-bold text-sm sm:text-[16px]">Fair Ask</span>
+                <span className="text-white font-bold text-base sm:text-[18px]">{hasInput ? `${fmtTHB(fairAskTHB)} THB` : "-  THB"}</span>
+              </div>
+            </div>
+
+            {/* Warning Box */}
+            <div className="mt-0 px-0">
+              <div className="w-full bg-red-500/20 backdrop-blur-sm border border-red-500 rounded-[12px] p-3 sm:p-4">
+                <p className="text-red-400 text-[11px] sm:text-[12px] leading-relaxed">
+                  <span className="font-extrabold">หมายเหตุ:</span> ระบบแสดงราคา Fair Bid / Fair Ask เพื่อเป็นข้อมูลประกอบการตัดสินใจเบื้องต้นเท่านั้น โดยประมวลผลจากราคาสินทรัพย์อ้างอิง อัตราแลกเปลี่ยน และ อัตราส่วนต่อสินทรัพย์อ้างอิง ราคาบนกระดานซื้อขายจริงอาจแตกต่างไปตามสภาพคล่องของ DR
+                </p>
               </div>
             </div>
           </div>
+        </div>
 
-          {updatedAt && (
-            <div className="flex flex-col items-end gap-0.5 text-xs text-gray-500 pr-1 mt-4 mb-1">
-              <div>
+        {updatedAt && (
+          <div className="flex flex-col items-end gap-0.5 text-[10px] sm:text-xs text-gray-500 pr-1 mt-3 sm:mt-4 mb-1 overflow-hidden">
+              <div className="break-words">
                 Last Updated:{" "}
                 {updatedAt.toLocaleString("en-US", {
                   year: "numeric",
@@ -654,10 +720,10 @@ export default function DRCal() {
                   second: "2-digit",
                 })}
               </div>
-            </div>
-          )}
+          </div>
+        )}
 
-          {renderComparisonTable()}
+        {renderComparisonTable()}
         </div>
       </div>
     </div>
