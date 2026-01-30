@@ -72,23 +72,41 @@ BATCH_SLEEP_SECONDS = float(os.getenv("BATCH_SLEEP_SECONDS") or "0.2")
 
 
 
-MARKET_CLOSE_CONFIG = {
-    # US – NYSE / NASDAQ (ตั้งเป็นเวลาเดียวกันทั้ง winter/summer ตามที่ร้องขอ)
-    "US": {"winter": time(4, 30), "summer": time(4, 30)},   # 04:30 ไทย
+"""
+Market Open Time + 30 Minutes (Buffer)
+"""
+MARKET_OPEN_CONFIG = {
+    # US
+    "US": {"winter": time(22, 0), "summer": time(21, 0)},
 
-    # Europe (ตั้งเวลาเดียวกันทั้งปีตามรายการที่ให้มา)
-    "DK": {"winter": time(23, 30), "summer": time(23, 30)},  # 23:30 ไทย
-    "NL": {"winter": time(23, 59), "summer": time(23, 59)},  # 23:59 ไทย
-    "FR": {"winter": time(23, 59), "summer": time(23, 59)},  # 23:59 ไทย
-    "IT": {"winter": time(23, 59), "summer": time(23, 59)},  # 23:59 ไทย
+    # Europe
+    "FR": {"winter": time(15, 30), "summer": time(14, 30)},
+    "IT": {"winter": time(15, 30), "summer": time(14, 30)},
+    "NL": {"winter": time(15, 30), "summer": time(14, 30)},
+    "DK": {"winter": time(15, 30), "summer": time(14, 30)},
 
-    # Asia (ตั้งเวลาเดียวกันทั้งปี)
-    "HK": {"winter": time(15, 30), "summer": time(15, 30)},  # 15:30 ไทย
-    "JP": {"winter": time(13, 30), "summer": time(13, 30)},  # 13:30 ไทย
-    "SG": {"winter": time(16, 30), "summer": time(16, 30)},  # 16:30 ไทย
-    "TW": {"winter": time(13, 0), "summer": time(13, 0)},    # 13:00 ไทย
-    "CN": {"winter": time(14, 30), "summer": time(14, 30)},  # 14:30 ไทย
-    "VN": {"winter": time(15, 30), "summer": time(15, 30)},  # 15:30 ไทย
+    # Asia
+    "JP": {"winter": time(7, 30), "summer": time(7, 30)},
+    "HK": {"winter": time(9, 0), "summer": time(9, 0)},
+    "CN": {"winter": time(9, 0), "summer": time(9, 0)},
+    "TW": {"winter": time(8, 30), "summer": time(8, 30)},
+    "SG": {"winter": time(8, 30), "summer": time(8, 30)},
+    "VN": {"winter": time(9, 30), "summer": time(9, 30)},
+}
+
+# Market timezone mapping (used to determine local weekday for each market)
+MARKET_TIMEZONE = {
+    "US": "America/New_York",
+    "DK": "Europe/Copenhagen",
+    "NL": "Europe/Amsterdam",
+    "FR": "Europe/Paris",
+    "IT": "Europe/Rome",
+    "HK": "Asia/Hong_Kong",
+    "JP": "Asia/Tokyo",
+    "SG": "Asia/Singapore",
+    "TW": "Asia/Taipei",
+    "CN": "Asia/Shanghai",
+    "VN": "Asia/Ho_Chi_Minh",
 }
 
 # --- Database Config ---
@@ -939,35 +957,29 @@ def is_summer_time(ref_thai: datetime) -> bool:
     
     return False
 
-def get_market_close_thai(market_code: str, ref_thai: datetime) -> datetime:
+def get_market_open_thai(market_code: str, ref_thai: datetime) -> datetime:
     """
-    Given market code (US, JP, etc.) and current Thai time, return today's close datetime in Thai time
-    for that market.
-    
-    รองรับทั้งหน้าหนาวและหน้าร้อนตาม MARKET_CLOSE_CONFIG
+    Given market code and current Thai time, return the next market-open datetime (Thai time)
+    for that market using MARKET_OPEN_CONFIG (which represents market open + 30min buffer).
     """
-    cfg = MARKET_CLOSE_CONFIG.get(market_code, MARKET_CLOSE_CONFIG["US"])
-    
-    # ตรวจสอบว่าตอนนี้เป็นหน้าร้อนหรือหน้าหนาว
+    cfg = MARKET_OPEN_CONFIG.get(market_code, MARKET_OPEN_CONFIG["US"])
+
+    # ตรวจสอบฤดูกาล (summer/winter)
     is_summer = is_summer_time(ref_thai)
-    
-    # เลือกเวลาตามฤดูกาล
+
     if "winter" in cfg and "summer" in cfg:
-        close_time = cfg["summer"] if is_summer else cfg["winter"]
+        open_time = cfg["summer"] if is_summer else cfg["winter"]
     else:
-        # ถ้าไม่มีกำหนดฤดูกาล ให้ใช้ค่าเดียว (กรณี Asia)
-        close_time = cfg.get("winter") or cfg.get("summer") or time(3, 0)
-    
-    # ใช้วันที่ของเวลาไทยที่ส่งมา
+        open_time = cfg.get("winter") or cfg.get("summer") or time(3, 0)
+
     thai_date = ref_thai.date()
-    close_thai = datetime.combine(thai_date, close_time, tzinfo=ref_thai.tzinfo)
-    
-    # ถ้าเวลาปิดตลาดยังไม่มาถึง (เป็นอนาคต) ให้ใช้ของเมื่อวาน
-    if close_thai > ref_thai:
-        thai_date_yesterday = thai_date - timedelta(days=1)
-        close_thai = datetime.combine(thai_date_yesterday, close_time, tzinfo=ref_thai.tzinfo)
-    
-    return close_thai
+    open_thai = datetime.combine(thai_date, open_time, tzinfo=ref_thai.tzinfo)
+
+    # If open time already passed today, schedule for next day
+    if open_thai <= ref_thai:
+        open_thai = open_thai + timedelta(days=1)
+
+    return open_thai
 
 async def fetch_single_ticker(client: httpx.AsyncClient, item_data):
     ticker = item_data.get("u_code")
@@ -2313,46 +2325,70 @@ async def market_scheduler(market_code: str):
     while True:
         try:
             now_thai = datetime.now(bkk_tz)
-            cfg = MARKET_CLOSE_CONFIG.get(market_code, MARKET_CLOSE_CONFIG["US"])
-            
+            cfg = MARKET_OPEN_CONFIG.get(market_code, MARKET_OPEN_CONFIG["US"])
+
             # ตรวจสอบฤดูกาล
             is_summer = is_summer_time(now_thai)
             if "winter" in cfg and "summer" in cfg:
-                close_time = cfg["summer"] if is_summer else cfg["winter"]
+                open_time = cfg["summer"] if is_summer else cfg["winter"]
             else:
-                close_time = cfg.get("winter") or cfg.get("summer") or time(3, 0)
-            
-            # คำนวณเวลาปิดตลาดของวันนี้
+                open_time = cfg.get("winter") or cfg.get("summer") or time(3, 0)
+
+            # คำนวณเวลาเปิดตลาดของวันนี้ (open + buffer)
             today = now_thai.date()
-            close_today = datetime.combine(today, close_time, tzinfo=bkk_tz)
-            
-            # ถ้าเวลาปิดตลาดผ่านไปแล้ว ให้ใช้ของวันถัดไป
-            if close_today <= now_thai:
-                close_today = close_today + timedelta(days=1)
-            
-            # คำนวณเวลาที่เหลือจนถึงเวลาปิดตลาด
-            wait_seconds = (close_today - now_thai).total_seconds()
-            
-            print(f"[Scheduler] [{market_code}] Next fetch at {close_today.strftime('%Y-%m-%d %H:%M:%S')} ไทย (in {wait_seconds/60:.1f} minutes)")
-            
-            # Sleep จนถึงเวลาปิดตลาด
+            open_today = datetime.combine(today, open_time, tzinfo=bkk_tz)
+
+            # ถ้าเวลาเปิดตลาดผ่านไปแล้ว ให้ใช้ของวันถัดไป
+            if open_today <= now_thai:
+                open_today = open_today + timedelta(days=1)
+
+            # คำนวณเวลาที่เหลือจนถึงเวลาเปิดตลาด
+            wait_seconds = (open_today - now_thai).total_seconds()
+
+            # เพิ่มข้อมูล timezone-aware เพื่อแสดงว่าเวลานั้นเป็นวันหยุดในตลาดท้องถิ่นหรือไม่
+            tz_name = MARKET_TIMEZONE.get(market_code)
+            local_info = ""
+            try:
+                if tz_name:
+                    market_tz = ZoneInfo(tz_name)
+                    local_open = open_today.astimezone(market_tz)
+                    local_weekday_name = local_open.strftime('%A')
+                    is_weekend_local = local_open.weekday() in (5, 6)
+                    local_info = f" | market local: {local_open.strftime('%Y-%m-%d %H:%M:%S')} ({local_weekday_name}) weekend={is_weekend_local}"
+                else:
+                    local_info = ""
+            except Exception:
+                local_info = ""
+
+            print(f"[Scheduler] [{market_code}] Next fetch at {open_today.strftime('%Y-%m-%d %H:%M:%S')} ไทย (in {wait_seconds/60:.1f} minutes){local_info}")
+
+            # Sleep จนถึงเวลาเปิดตลาด
             await asyncio.sleep(wait_seconds)
             
             # เมื่อถึงเวลา → ดึงข้อมูลทันที แต่ข้ามวันหยุดตามข้อกำหนด
-            # Markets that should skip history fetch on Sat+Sun
-            sat_sun_markets = {"DK", "NL", "FR", "IT", "HK", "JP", "SG", "TW", "CN", "VN"}
-            # US skips on Sun+Mon
-            us_skip_days = {6, 0}  # Sunday=6, Monday=0 (weekday(): Mon=0..Sun=6)
-
-            run_day = close_today.weekday()
+            # ตรวจสอบโดยแปลงเวลาเป็น timezone ของตลาดนั้นๆ แล้วดูว่าเป็นวันหยุด (Sat/Sun) หรือไม่
+            tz_name = MARKET_TIMEZONE.get(market_code)
             should_skip = False
-            if market_code in sat_sun_markets and run_day in (5, 6):
-                should_skip = True
-            if market_code == "US" and run_day in us_skip_days:
-                should_skip = True
+            try:
+                if tz_name:
+                    market_tz = ZoneInfo(tz_name)
+                    local_open = open_today.astimezone(market_tz)
+                    local_weekday = local_open.weekday()  # Mon=0 .. Sun=6
+                    if local_weekday in (5, 6):
+                        should_skip = True
+                else:
+                    # Fallback: if no timezone mapping, use Thai weekday (but skip Sat/Sun)
+                    run_day = open_today.weekday()
+                    if run_day in (5, 6):
+                        should_skip = True
+            except Exception:
+                # If timezone conversion fails, default to not skipping
+                should_skip = False
 
             if should_skip:
-                print(f"[Scheduler] [{market_code}] Skipping history fetch on {close_today.strftime('%A %Y-%m-%d')} per weekend policy")
+                # Log using local_open if available
+                skip_date = local_open.strftime('%A %Y-%m-%d') if tz_name else open_today.strftime('%A %Y-%m-%d')
+                print(f"[Scheduler] [{market_code}] Skipping history fetch on {skip_date} per weekend policy (market local time)")
             else:
                 # ใช้ WAL mode + connection แยก + retry logic เพื่อรองรับ concurrent access
                 await fetch_market_history(market_code)
@@ -2440,7 +2476,7 @@ async def history_updater():
     await analyze_all_tickers()
     
     # เริ่ม scheduler สำหรับทุก market
-    markets = list(MARKET_CLOSE_CONFIG.keys())
+    markets = list(MARKET_OPEN_CONFIG.keys())
     print(f"[History] Starting schedulers for {len(markets)} markets: {', '.join(markets)}")
     
     # สร้าง task สำหรับแต่ละ market
