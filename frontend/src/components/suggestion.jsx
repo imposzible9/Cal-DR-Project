@@ -1,4 +1,4 @@
-  import React, { useState, useEffect, useMemo, useRef } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 
 
   const API_URL = import.meta.env.VITE_DR_LIST_API;
@@ -147,7 +147,7 @@
       <div className="relative z-[60] flex-1 sm:flex-initial sm:w-auto" ref={ref}>
         <button onClick={() => setIsOpen(!isOpen)} className="flex items-center justify-between gap-2 px-3 sm:px-4 py-2 bg-white border border-gray-200 rounded-xl text-xs sm:text-sm w-full sm:min-w-[140px] md:min-w-[180px] hover:border-gray-300 transition-colors shadow-sm h-[37.33px]">
           <span className="text-gray-800 font-medium truncate">{currentLabel}</span>
-          <svg className={`w-4 h-4 text-gray-400 flex-shrink-0 transition-transform ${isOpen ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+          <svg className={`w-4 h-4 text-gray-400 flex-shrink-0 transition-transform ${isOpen ? "rotate-180" : ""}`} fill="none" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
         </button>
         {isOpen && (
           <div className="absolute top-full left-0 mt-1 w-full bg-white border border-gray-100 rounded-xl shadow-lg z-[100] py-1 overflow-hidden">
@@ -220,14 +220,18 @@
 
   // --- RatingHistoryModal ---
   const RatingHistoryModal = ({ item, timeframe, onClose }) => {
+    const [mode, setMode] = useState('intraday'); // Default to 'intraday'
     const [filterRating, setFilterRating] = useState(null);
     const [historyData, setHistoryData] = useState([]);
     const [accuracy, setAccuracy] = useState({ accuracy: 0, correct: 0, incorrect: 0, total: 0 });
     const [loading, setLoading] = useState(true);
-    const [currentPrice, setCurrentPrice] = useState(item?.last || 0);
-    const [currentChange, setCurrentChange] = useState(item?.change || 0);
-    const [currentChangePercent, setCurrentChangePercent] = useState(item?.percentChange || 0);
-    const [currentRating, setCurrentRating] = useState(timeframe === "1W" ? (item?.ratingWeek || "Unknown") : (item?.ratingDay || "Unknown"));
+    // Initialize header values from the table's selected row (use the processed/display fields)
+    const [currentPrice, setCurrentPrice] = useState(item?.sortPrice ?? item?.last ?? 0);
+    const [currentChange, setCurrentChange] = useState(item?.displayChange ?? item?.change ?? 0);
+    const [currentChangePercent, setCurrentChangePercent] = useState(item?.displayPct ?? item?.percentChange ?? 0);
+    const [currentRating, setCurrentRating] = useState(
+      timeframe === "1W" ? (item?.ratingWeek ?? item?.technicalRating ?? "Unknown") : (item?.ratingDay ?? item?.technicalRating ?? "Unknown")
+    );
     const [logoError, setLogoError] = useState(false);
 
     // Store raw history data (unfiltered)
@@ -302,56 +306,50 @@
     useEffect(() => {
       if (!item) return;
 
-      async function fetchHistoryWithAccuracy() {
+      async function fetchHistory() {
         setLoading(true);
         try {
           const ticker = item.displaySymbol || item.symbol;
-          const tf = timeframe === "1W" ? "1W" : "1D";
-
-          // Use local API for development
-          const baseUrl = import.meta.env.VITE_HISTORY_API;;
-          const url = `${baseUrl}/ratings/history-with-accuracy/${ticker}?timeframe=${tf}`;
-          console.log("🔍 Fetching from URL:", url);
-
-          const response = await fetch(url);
-          if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+          let data = null;
+            if (mode === "intraday") {
+            // ดึงจาก /api/intraday-history/{ticker}?timeframe=...
+            const baseUrl = import.meta.env.VITE_HISTORY_API;
+            const url = `${baseUrl}/api/intraday-history/${ticker}?timeframe=${timeframe}`;
+            console.log("🔍 Fetching INTRADAY from URL:", url);
+            const response = await fetch(url);
+            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+            const apiData = await response.json();
+            data = { history: apiData.intraday_history };
+          } else {
+            // ดึงแบบเดิม (daily)
+            const baseUrl = import.meta.env.VITE_HISTORY_API;
+            const tf = timeframe === "1W" ? "1W" : "1D";
+            const url = `${baseUrl}/ratings/history-with-accuracy/${ticker}?timeframe=${tf}&mode=${mode}`;
+            console.log("🔍 Fetching from URL:", url);
+            const response = await fetch(url);
+            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+            data = await response.json();
           }
 
-          const data = await response.json();
-          console.log("📦 API Response:", data);
-          console.log("📊 History items count:", data.history?.length || 0);
-
-          if (data.history && Array.isArray(data.history)) {
-            // Store raw data (unfiltered)
+          if (data && Array.isArray(data.history) && data.history.length > 0) {
             setRawHistoryData(data.history);
-            setAccuracy(data.accuracy || { accuracy: 0, correct: 0, incorrect: 0, total: 0 });
-            setCurrentPrice(data.price || 0);
-            setCurrentChange(data.change || 0);
-            setCurrentChangePercent(data.changePercent || 0);
-            setCurrentRating(data.current_rating || "Unknown");
+            setAccuracy(data.accuracy ?? { accuracy: 0, correct: 0, incorrect: 0, total: 0 });
           } else {
-            // Handle empty or no data response
-            console.log("ℹ️ No history data available for this ticker");
             setRawHistoryData([]);
-            setAccuracy({ accuracy: 0, correct: 0, incorrect: 0, total: 0 });
-            // Use item data as fallback
-            setCurrentPrice(data.price || item?.last || 0);
-            setCurrentChange(data.change || item?.change || 0);
-            setCurrentChangePercent(data.changePercent || item?.percentChange || 0);
-            setCurrentRating(data.current_rating || (timeframe === "1W" ? (item?.ratingWeek || "Unknown") : (item?.ratingDay || "Unknown")));
+            setAccuracy(data?.accuracy ?? { accuracy: 0, correct: 0, incorrect: 0, total: 0 });
           }
         } catch (error) {
-          console.error("Error fetching history with accuracy:", error);
+          console.error("Error fetching history:", error);
         } finally {
           setLoading(false);
         }
       }
 
-      fetchHistoryWithAccuracy();
-    }, [item, timeframe]);
+      fetchHistory();
+    }, [item, timeframe, mode]);
 
     // Filter history data based on filterRating (client-side filtering)
+    // Use the same strength+threshold logic as backend (CHANGE_THRESHOLD=2.0)
     useEffect(() => {
       if (!rawHistoryData || rawHistoryData.length === 0) {
         setHistoryData([]);
@@ -359,78 +357,174 @@
         return;
       }
 
-      let filtered = filterNeutralFromHistory(rawHistoryData);
+      // สร้าง enriched history โดยคำนวณค่า open-based change percent
+      // Important: build ordered array newest-first so pairing (Exit = newest, Entry = previous) aligns correctly
+      // Use explicit sort by timestamp/date descending to avoid depending on API order
+      const ordered = (rawHistoryData || []).slice().sort((a, b) => {
+        const at = new Date(a.timestamp ?? a.date).getTime() || 0;
+        const bt = new Date(b.timestamp ?? b.date).getTime() || 0;
+        return bt - at; // newest first
+      });
+      const enriched = ordered.map((curr, idx, arr) => {
+        const next = arr[idx + 1] || {}; // next is older item (Entry)
+        // Include price as a fallback so Entry shows correct value when 'open' is null
+        const prev_open = (next && (next.at_price ?? next.open ?? next.prev_close ?? next.result_price ?? next.price)) ?? null;
+        // Normalize rating fields so UI can show Signal: prev -> curr
+        const ratingNow = curr.daily_rating ?? curr.rating ?? curr.dailyRating ?? curr.rating_day ?? null;
+        // Prefer the explicit 'prev' value on the current record if provided,
+        // otherwise fall back to the next (older) record's rating.
+        const ratingPrev = curr.prev ?? next.daily_rating ?? next.rating ?? next.dailyRating ?? next.rating_day ?? null;
+        // DEBUG: log prev value for troubleshooting
+        // console.log('DEBUG prev:', ratingPrev, 'raw:', next);
+        const prev_timestamp = next.timestamp ?? next.date ?? null;
+        const curr_open = (curr.at_price ?? curr.open ?? curr.result_price ?? curr.price) ?? null;
+        let change_pct_open = null;
+        let change_abs_open = null;
+        if (prev_open != null && curr_open != null && Number(prev_open) !== 0) {
+          change_abs_open = Number(curr_open) - Number(prev_open);
+          change_pct_open = (change_abs_open / Number(prev_open)) * 100;
+        }
 
-      if (filterRating) {
-        filtered = filtered.filter(item => item.rating === filterRating);
+        return {
+          ...curr,
+          // signal fields used by UI
+          rating: ratingNow,
+          prev: ratingPrev,
+          prev_timestamp: prev_timestamp,
+          prev_open: prev_open,
+          result_open: curr_open,
+          change_pct_open: change_pct_open, // may be null
+          change_abs_open: change_abs_open,
+        };
+      });
+
+      // Filter out neutral/unknown as before (works because fields preserved)
+      let filtered = filterNeutralFromHistory(enriched);
+
+      // If in intraday mode, only show items from the latest timestamp's date (use overall newest item)
+      if (mode === 'intraday' && enriched.length > 0) {
+        const latestOverall = enriched[0]; // enriched is sorted newest-first
+        const latestDate = new Date(latestOverall.timestamp ?? latestOverall.date);
+        if (!isNaN(latestDate.getTime())) {
+          const latestDay = latestDate.toDateString();
+          filtered = filtered.filter(it => {
+            const d = new Date(it.timestamp ?? it.date);
+            return !isNaN(d.getTime()) && d.toDateString() === latestDay;
+          });
+        }
       }
 
+      // Apply rating filter after restricting to the day's entries so filters only consider that day
+      if (filterRating) filtered = filtered.filter(item => item.rating === filterRating);
+
+      // `enriched` is newest-first and `filtered` now contains only same-day items when in intraday mode
       setHistoryData(filtered);
 
-      // คำนวณ accuracy จาก filtered data (ต้องคำนวณใหม่เพราะมี filter)
-      if (filtered.length > 0) {
-        let correct = 0;
-        let incorrect = 0;
-
-        filtered.forEach((item) => {
-          const ratingPrev = item.prev?.toLowerCase() || "";
-          const ratingCurr = item.rating?.toLowerCase() || "";
-          const changePct = item.change_pct || 0;
-
-          if (!ratingPrev || !ratingCurr) {
-            return;
-          }
-
-          // ข้ามถ้า rating ไม่เปลี่ยนและ price ไม่เปลี่ยน
-          const ratingNotChanged = (ratingCurr === ratingPrev);
-          const priceNotChanged = (Math.abs(changePct) < 0.01);
-
-          if (ratingNotChanged && priceNotChanged) {
-            return; // ไม่นับ
-          }
-
-          // ตรวจสอบความถูกต้อง
-          let isCorrect = false;
-
-          if (ratingPrev === "sell" || ratingPrev === "strong sell") {
-            if (ratingCurr === "buy" || ratingCurr === "strong buy") {
-              isCorrect = changePct > 0;
-            }
-          } else if (ratingPrev === "buy" || ratingPrev === "strong buy") {
-            if (ratingCurr === "sell" || ratingCurr === "strong sell") {
-              isCorrect = changePct < 0;
-            }
-          }
-          
-          // กรณี rating ไม่เปลี่ยน (แต่ price เปลี่ยน)
-          if (ratingNotChanged) {
-            if (ratingCurr === "buy" || ratingCurr === "strong buy") {
-              isCorrect = changePct > 0;
-            } else if (ratingCurr === "sell" || ratingCurr === "strong sell") {
-              isCorrect = changePct < 0;
-            }
-          }
-
-          if (isCorrect) {
-            correct += 1;
-          } else {
-            incorrect += 1;
-          }
-        });
-
-        const total = correct + incorrect;
-        const accuracy_pct = total > 0 ? (correct / total * 100) : 0;
-
-        setAccuracy({
-          accuracy: Math.round(accuracy_pct),
-          correct: correct,
-          incorrect: incorrect,
-          total: total
-        });
-      } else {
-        setAccuracy({ accuracy: 0, correct: 0, incorrect: 0, total: 0 });
-      }
+      // คำนวณ accuracy โดยใช้ข้อมูลที่จะแสดง (filtered)
+      const acc = calculateAccuracy(filtered, 2.0);
+      setAccuracy(acc);
     }, [rawHistoryData, filterRating]);
+
+    // Calculate accuracy based on history rows
+    const calculateAccuracy = (historyRows, changeThreshold = 2.0) => {
+      if (!historyRows || historyRows.length === 0) {
+        return { accuracy: 0, correct: 0, incorrect: 0, total: 0 };
+      }
+
+      let correct = 0;
+      let incorrect = 0;
+
+      const strengthMap = {
+        "strong sell": -2,
+        "sell": -1,
+        "neutral": 0,
+        "buy": 1,
+        "strong buy": 2
+      };
+
+      const ratingStrength = (rtext) => {
+        if (!rtext) return null;
+        const rl = String(rtext).toLowerCase().trim();
+        if (rl in strengthMap) return strengthMap[rl];
+        if (rl.includes("strong") && rl.includes("sell")) return strengthMap["strong sell"];
+        if (rl.includes("strong") && rl.includes("buy")) return strengthMap["strong buy"];
+        if (rl.includes("sell")) return strengthMap["sell"];
+        if (rl.includes("buy")) return strengthMap["buy"];
+        if (rl.includes("neutral")) return strengthMap["neutral"];
+        return null;
+      };
+
+      // Use index-based iteration to allow open-based calculation from consecutive rows
+      for (let i = 0; i < historyRows.length; i++) {
+        const row = historyRows[i];
+        // support different key names from API / storage
+        const ratingRaw = row.daily_rating ?? row.rating ?? row.dailyRating ?? row.rating_day ?? null;
+        const prevRaw = row.daily_prev ?? row.prev ?? row.dailyPrev ?? row.prev_rating ?? null;
+
+        // Prefer open-based change if available; otherwise fallback to existing change_pct
+        let changeVal = null;
+        if (row.change_pct_open != null && !Number.isNaN(Number(row.change_pct_open))) {
+          changeVal = Number(row.change_pct_open);
+        } else if (row.change_pct != null && !Number.isNaN(Number(row.change_pct))) {
+          changeVal = Number(row.change_pct);
+        } else if (row.changePct != null && !Number.isNaN(Number(row.changePct))) {
+          changeVal = Number(row.changePct);
+        } else if (row.change != null && !Number.isNaN(Number(row.change))) {
+          changeVal = Number(row.change);
+        } else {
+          // If no reliable change value, try to compute from this row and next row open values
+          const next = historyRows[i + 1] || {};
+          const prev_open = next.open ?? next.prev_close ?? next.result_price ?? next.prev_open ?? null;
+          const curr_open = row.open ?? row.result_price ?? row.price ?? null;
+          if (prev_open != null && curr_open != null && Number(prev_open) !== 0) {
+            changeVal = ((Number(curr_open) - Number(prev_open)) / Number(prev_open)) * 100;
+          }
+        }
+
+        if (changeVal === null || changeVal === undefined) continue;
+
+        if (!ratingRaw || !prevRaw) continue;
+
+        const strNow = ratingStrength(ratingRaw);
+        const strPrev = ratingStrength(prevRaw);
+
+        if (strNow === null || strPrev === null) continue;
+
+        const delta = strNow - strPrev;
+
+        // ข้ามถ้า rating ไม่เปลี่ยนและ price ไม่เปลี่ยน (threshold 0.01% เหมือน backend)
+        const ratingNotChanged = String(ratingRaw).toLowerCase().trim() === String(prevRaw).toLowerCase().trim();
+        const priceNotChanged = Math.abs(changeVal) < 0.01;
+        if (ratingNotChanged && priceNotChanged) continue;
+
+        let isCorrect = false;
+        if (delta > 0) {
+          isCorrect = (changeVal >= changeThreshold);
+        } else if (delta < 0) {
+          isCorrect = (changeVal <= -changeThreshold);
+        } else {
+          if (strNow > 0) {
+            isCorrect = (changeVal >= changeThreshold);
+          } else if (strNow < 0) {
+            isCorrect = (changeVal <= -changeThreshold);
+          } else {
+            continue;
+          }
+        }
+
+        if (isCorrect) correct += 1; else incorrect += 1;
+      }
+
+      const total = correct + incorrect;
+      const accuracy = total > 0 ? (correct / total) * 100 : 0;
+
+      return {
+        accuracy: Math.round(accuracy),
+        correct,
+        incorrect,
+        total,
+      };
+    };
 
     if (!item) return null;
 
@@ -451,6 +545,17 @@
         const isToday = d.toDateString() === today.toDateString();
 
         return `${day} ${month} ${year}${isToday ? " • Today" : ""}`;
+      } catch {
+        return dateStr;
+      }
+    };
+
+    const formatModalTime = (dateStr) => {
+      if (!dateStr) return "";
+      try {
+        const d = new Date(dateStr);
+        if (isNaN(d.getTime())) return dateStr;
+        return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       } catch {
         return dateStr;
       }
@@ -502,10 +607,7 @@
               </div>
             </div>
 
-            <div className="flex justify-between items-center mb-1 mt-0">
-              <p className="text-[10px] sm:text-xs text-gray-400">Filter Accuracy</p>
-              <p className="text-[10px] sm:text-xs text-gray-400 text-right">Auto-selected : Current Signal</p>
-            </div>
+              
 
             {/* Filter Accuracy Section */}
             <div>
@@ -567,6 +669,22 @@
 
           {/* Timeline Section - Light Theme */}
           <div className="bg-white p-3 sm:p-6 max-h-[50vh] sm:max-h-[60vh] overflow-y-auto">
+            <div className="sm:mb-7 mb-4 flex items-center justify-center">
+              <div className="flex items-center gap-3 w-full sm:w-auto">
+                <button
+                  onClick={() => setMode('intraday')}
+                  className={`w-1/2 sm:w-[263px] h-9 sm:h-[47px] rounded-lg text-[10px] sm:text-sm font-semibold px-0 py-0 sm:px-4 sm:py-0 shadow-md transition ${mode === 'intraday' ? 'bg-[#0B102A] text-white' : 'bg-white text-gray-700 border border-gray-200'}`}
+                >
+                  Intraday (time)
+                </button>
+                <button
+                  onClick={() => setMode('daily')}
+                  className={`w-1/2 sm:w-[263px] h-9 sm:h-[47px] rounded-lg text-[10px] sm:text-sm font-semibold px-0 py-0 sm:px-4 sm:py-0 shadow-md transition ${mode === 'daily' ? 'bg-[#0B102A] text-white' : 'bg-white text-gray-700 border border-gray-200'}`}
+                >
+                  Daily (Open-to-Open)
+                </button>
+              </div>
+            </div>
             {loading ? (
               <div className="py-12 sm:py-20 text-center">
                 <div className="animate-spin rounded-full h-10 w-10 sm:h-12 sm:w-12 border-b-2 border-[#0B102A] mx-auto"></div>
@@ -574,10 +692,9 @@
               </div>
             ) : historyData.length > 0 ? (
               <div className="relative">
-                <div className="absolute left-[13px] sm:left-[15px] top-0 w-[2px] bg-gray-200" style={{ height: `${(historyData.length - 1) * 160 + 18}px` }}></div>
-
-                <div className="space-y-4 sm:space-y-6">
-                  {historyData.map((log, idx) => {
+                <div className="space-y-4 sm:space-y-6 relative">
+                  <div className="absolute left-[14px] sm:left-[16px] w-[2px] bg-gray-200" style={{ top: '20px', bottom: '150px' }}></div>
+                    {historyData.map((log, idx) => {
                     const scorePrev = RATING_SCORE[(log.prev || "").toLowerCase()] || 0;
                     const scoreCurr = RATING_SCORE[(log.rating || "").toLowerCase()] || 0;
                     const isPositive = (scoreCurr > scorePrev);
@@ -587,7 +704,7 @@
                     if (isPositive) dotColor = "bg-[#27AE60]";
                     else if (isNegative) dotColor = "bg-[#EB5757]";
 
-                    const changePct = log.change_pct || 0;
+                    const changePct = (log.change_pct_open ?? log.change_pct ?? log.changePct ?? log.change ?? 0);
 
                     return (
                       <div key={idx} className="relative pl-9 sm:pl-12">
@@ -604,7 +721,7 @@
                           {/* Signal Change */}
                           <div className="mb-2 sm:mb-3 flex items-center gap-1.5 sm:gap-2 flex-wrap">
                             <div className="px-1.5 sm:px-2 py-0.5 sm:py-1 bg-gray-100 rounded text-[10px] sm:text-xs text-gray-600 font-medium">Signal</div>
-                            <span className={`text-xs sm:text-sm font-bold ${getRatingTextColor(log.prev)}`}>{log.prev || "Unknown"}</span>
+                            <span className={`text-xs sm:text-sm font-bold ${getRatingTextColor(log.prev)}`}>{log.prev ?? log.rating ?? "Unknown"}</span>
                             <svg className="w-3 h-3 sm:w-4 sm:h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
                             </svg>
@@ -617,8 +734,18 @@
                           {/* Price Info */}
                           <div className="flex items-start justify-between text-xs sm:text-base">
                             <div className="flex flex-col">
-                              <div className="text-[10px] sm:text-sm text-gray-500 mb-0">Prev Close</div>
-                              <div className="text-sm sm:text-lg font-semibold text-gray-900 font-mono">${formatPrice(log.prev_close || 0)}</div>
+                              <div className="text-[10px] sm:text-sm text-gray-500 mb-0">{mode === 'intraday' ? 'Entry' : 'Open Price'}</div>
+                              <div className="text-[10px] sm:text-xs text-gray-700 mb-1">
+                                {mode === 'intraday' ? (
+                                  <>
+                                    {formatModalDate(log.prev_timestamp ?? historyData[idx + 1]?.timestamp ?? historyData[idx + 1]?.date ?? null)}{' '}
+                                    {formatModalTime(log.prev_timestamp ?? historyData[idx + 1]?.timestamp ?? historyData[idx + 1]?.date ?? null)}
+                                  </>
+                                ) : (
+                                  formatModalDate(historyData[idx + 1]?.timestamp ?? historyData[idx + 1]?.date ?? null)
+                                )}
+                              </div>
+                              <div className="text-sm sm:text-lg font-semibold text-gray-900 font-mono">${formatPrice(log.prev_open ?? log.prev_close ?? 0)}</div>
                             </div>
                             <div className="flex items-center -space-x-2 sm:-space-x-3 text-gray-500 pt-3 sm:pt-5">
                               <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -632,8 +759,9 @@
                               </svg>
                             </div>
                             <div className="text-right flex flex-col">
-                              <div className="text-[10px] sm:text-sm text-gray-500 mb-0">Result</div>
-                              <div className="text-sm sm:text-lg font-semibold text-gray-900 font-mono">${formatPrice(log.result_price || 0)}</div>
+                              <div className="text-[10px] sm:text-sm text-gray-500 mb-0">{mode === 'intraday' ? 'Exit' : 'Open Price'}</div>
+                              <div className="text-[10px] sm:text-xs text-gray-700 mb-1">{mode === 'intraday' ? formatModalTime(log.timestamp ?? log.date) : formatModalDate(log.timestamp ?? log.date)}</div>
+                              <div className="text-sm sm:text-lg font-semibold text-gray-900 font-mono">${formatPrice(log.result_open ?? log.result_price ?? 0)}</div>
                               <div className={`text-xs sm:text-sm font-semibold mt-0 font-mono ${changePct >= 0 ? "text-[#27AE60]" : "text-[#EB5757]"}`}>
                                 ({changePct >= 0 ? "+" : ""}{formatPct(changePct)}%)
                               </div>
@@ -946,8 +1074,8 @@
         <div className="w-full max-w-[1248px] flex flex-col h-full">
           <div className="pt-6 md:pt-10 pb-0 px-4 md:px-0 flex-shrink-0" style={{ overflow: 'visible', zIndex: 100 }}>
             <div className="w-full md:w-[1040px] max-w-full mx-auto md:scale-[1.2] md:origin-top" style={{ overflow: 'visible' }}>
-              <h1 className="text-xl sm:text-2xl md:text-3xl font-bold mb-2 md:mb-3 text-black">Suggestion</h1>
-              <p className="text-[#6B6B6B] mb-4 sm:mb-6 md:mb-8 text-xs sm:text-sm md:text-base">Technical Ratings (Underlying Assets)</p>
+              <h1 className="text-2xl md:text-3xl font-bold mb-2 md:mb-3 text-black">Suggestion</h1>
+              <p className="text-[#6B6B6B] mb-6 md:mb-8 text-sm md:text-base">Technical Ratings (Underlying Assets)</p>
 
               {/* Filters Row */}
               <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 md:gap-4 mb-2">

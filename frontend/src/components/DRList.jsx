@@ -750,7 +750,7 @@ export default function DRList() {
             </div>
           </div>
         )}
-        
+
         {/* Mobile Card View */}
         <div className="block lg:hidden">
           <div className="space-y-3 p-3">
@@ -796,19 +796,31 @@ export default function DRList() {
                         )}
                       </div>
                     </div>
-                    <div className="text-right flex-shrink-0 ml-2">
-                      <div className="text-lg font-semibold text-gray-900">{formatNum(row.last)}</div>
-                      <div
-                        className={`text-xs font-medium ${row.pct > 0 ? "text-[#27AE60]" : row.pct < 0 ? "text-[#EB5757]" : "text-gray-600"
-                          }`}
-                      >
-                        {(() => {
-                          const hasData = row.open && row.high && row.low && row.last &&
-                            row.open !== 0 && row.high !== 0 && row.low !== 0 && row.last !== 0;
-                          if (!hasData) return "-";
-                          const pctValue = formatChange(row.pct);
-                          return row.pct > 0 ? `+${pctValue}%` : `${pctValue}%`;
-                        })()}
+                    <div className="text-right flex-shrink-0 ml-2 min-w-0">
+                      <div className="flex flex-row sm:flex-col items-center sm:items-end gap-2 sm:gap-0 min-w-0 w-full">
+                        <span className="text-lg font-semibold text-gray-900 min-w-0 whitespace-nowrap">{formatNum(row.last)}</span>
+                        <span className="block sm:hidden mx-2 h-6 w-px bg-gray-200"></span>
+                        <span
+                          className={`text-xs font-medium min-w-0 whitespace-nowrap ${row.pct > 0 ? "text-[#27AE60]" : row.pct < 0 ? "text-[#EB5757]" : "text-gray-600"
+                            }`}
+                        >
+                          {(() => {
+                            const hasData =
+                              row.open &&
+                              row.high &&
+                              row.low &&
+                              row.last &&
+                              row.open !== 0 &&
+                              row.high !== 0 &&
+                              row.low !== 0 &&
+                              row.last !== 0;
+                            if (!hasData) return "-";
+                            const pctValue = formatChange(row.pct);
+                            const changeValue = formatChange(row.change);
+                            return `${row.change > 0 ? "+" : ""}${changeValue} (${row.pct > 0 ? "+" : ""}${pctValue}%)`;
+                          })()}
+                        </span>
+                        <span className="hidden sm:block w-full h-[1px] bg-gray-200 my-1"></span>
                       </div>
                     </div>
                   </div>
@@ -871,7 +883,7 @@ export default function DRList() {
               <tr className="h-[45px] md:h-[50px]">
                 {visibleColumns.dr && (
                   <th rowSpan={2} colSpan={visibleColumns.star ? 2 : 1} className="py-2 md:py-4 px-2 md:px-3 text-left sticky top-0 bg-[#0B102A] align-middle cursor-pointer relative text-xs md:text-sm" style={{ left: "0px", width: visibleColumns.star ? "160px" : "130px", minWidth: visibleColumns.star ? "160px" : "130px", zIndex: 110 }} onClick={() => handleSort("dr")}>
-                  <div className="flex items-center gap-0.5 text-xs md:text-sm">
+                    <div className="flex items-center gap-0.5 text-xs md:text-sm">
                       <span className={visibleColumns.star ? "pl-6 md:pl-8" : ""}>DR</span>
                       <SortIndicator colKey="dr" />
                     </div>
@@ -887,8 +899,8 @@ export default function DRList() {
               </tr>
               <tr className="h-[45px] md:h-[50px]">
                 {[...tradingKeys, ...fundamentalKeys].map(key => visibleColumns[key] && (
-                  <th 
-                    key={key} 
+                  <th
+                    key={key}
                     className={`py-2 md:py-3 px-2 md:px-4 text-xs md:text-sm ${textCols.includes(key) ? "text-left" : "text-right"} bg-[#1C1D39] border-b border-gray-200 whitespace-nowrap cursor-pointer relative ${fundamentalKeys.includes(key) && key === firstVisibleFundamentalKey ? 'border-l border-gray-200' : ''}`}
                     style={key === "securityTypeName" ? { minWidth: 280 } : undefined}
                     onClick={() => handleSort(key)}
@@ -1083,14 +1095,28 @@ export default function DRList() {
             </div>
             <div className="flex min-w-[140px] sm:min-w-[190px] flex-col items-start gap-0.5 sm:gap-1 pt-1 text-left">
               <div className="flex w-full items-baseline justify-between">
-                <span className="text-[9px] sm:text-[11px] text-gray-500 w-[40px] sm:w-[50px]">Last</span>
-                <span className="text-right text-lg sm:text-[23px] font-semibold leading-none text-[#E53935]">{formatNum(detailRow.last)}</span>
-              </div>
-              <div className="flex w-full items-baseline justify-between">
-                <span className="text-[9px] sm:text-[11px] text-gray-500 w-[40px] sm:w-[50px]">Change</span>
-                <span className={`text-right text-[10px] sm:text-[12px] font-semibold ${detailRow.change > 0 ? "text-[#27AE60]" : detailRow.change < 0 ? "text-[#E53935]" : "text-gray-700"}`}>
-                  {detailRow.change > 0 ? "+" : ""}{formatNum(detailRow.change)} ({detailRow.pct > 0 ? "+" : ""}{formatNum(detailRow.pct)}%)
+                <span className="text-[9px] sm:text-[11px] text-gray-500 whitespace-nowrap mr-2">
+                  Last Price
                 </span>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-right text-lg sm:text-[23px] font-semibold leading-none text-[#E53935]">
+                    {formatNum(detailRow.last)}
+                  </span>
+                  <span
+                    className={`text-right text-[10px] sm:text-[12px] font-semibold ${detailRow.change > 0
+                        ? "text-[#27AE60]"
+                        : detailRow.change < 0
+                          ? "text-[#E53935]"
+                          : "text-gray-700"
+                      }`}
+                  >
+                    {detailRow.change > 0 ? "+" : ""}
+                    {formatNum(detailRow.change)} (
+                    {detailRow.pct > 0 ? "+" : ""}
+                    {formatNum(detailRow.pct)}
+                    %)
+                  </span>
+                </div>
               </div>
             </div>
           </div>
@@ -1191,7 +1217,7 @@ export default function DRList() {
             }`}></div>
 
           {/* Main Tooltip */}
-          <div className="relative px-3 sm:px-5 py-2.5 sm:py-4 rounded-xl backdrop-blur-md bg-gradient-to-br from-white/95 via-white/90 to-white/85 border border-white/60 shadow-[0_8px_32px_rgba(0,0,0,0.12)] max-w-xs sm:max-w-md">
+          <div className="relative px-3 sm:px-5 py-2.5 sm:py-4 rounded-xl backdrop-blur-md bg-gradient-to-br from-white/95 via-white/90 to-white/85 border border-white/60 shadow-[0_8px_32px_rgba(0,0,0,0.12)] w-[180px] sm:w-auto sm:max-w-md">
             {/* Shine Effect */}
             <div className="absolute inset-0 bg-gradient-to-br from-white/40 via-transparent to-transparent rounded-xl pointer-events-none"></div>
 
@@ -1199,9 +1225,10 @@ export default function DRList() {
             <div className="relative">
               {hoveredTab === "popular" && (
                 <div className="text-center">
-                  {/* Title */}
-                  <div className="font-bold text-gray-900 mb-1.5 sm:mb-2 text-sm sm:text-base bg-gradient-to-r from-green-600 to-emerald-600 bg-clip-text text-transparent">Most Popular DR</div>
-                  <div className="text-xs sm:text-sm text-gray-700 leading-relaxed space-y-0.5 sm:space-y-1">
+                  {/* Title: ลดเหลือ text-xs ใน mobile */}
+                  <div className="font-bold text-gray-900 mb-1.5 sm:mb-2 text-xs sm:text-base bg-gradient-to-r from-green-600 to-emerald-600 bg-clip-text text-transparent">Most Popular DR</div>
+                  {/* Content: ลดเหลือ text-[10px] ใน mobile */}
+                  <div className="text-[10px] sm:text-sm text-gray-700 leading-relaxed space-y-0.5 sm:space-y-1">
                     <div>จัดอันดับ DR ที่ได้รับความนิยมสูงสุดในแต่ละ Underlying</div>
                     <div>โดยวัดจากปริมาณการซื้อขาย <span className="font-semibold text-green-600">(Volume)</span> ที่มากที่สุด</div>
                   </div>
@@ -1209,9 +1236,10 @@ export default function DRList() {
               )}
               {hoveredTab === "sensitivity" && (
                 <div className="text-center">
-                  {/* Title */}
-                  <div className="font-bold text-gray-900 mb-1.5 sm:mb-2 text-sm sm:text-base bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">High Sensitivity DR</div>
-                  <div className="text-xs sm:text-sm text-gray-700 leading-relaxed space-y-0.5 sm:space-y-1">
+                  {/* Title: ลดเหลือ text-xs ใน mobile */}
+                  <div className="font-bold text-gray-900 mb-1.5 sm:mb-2 text-xs sm:text-base bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">High Sensitivity DR</div>
+                  {/* Content: ลดเหลือ text-[10px] ใน mobile */}
+                  <div className="text-[10px] sm:text-sm text-gray-700 leading-relaxed space-y-0.5 sm:space-y-1">
                     <div>จัดอันดับ DR ที่มีความเคลื่อนไหวโดดเด่นที่สุดในแต่ละ Underlying</div>
                     <div>โดยวัดจากราคาเสนอซื้อ <span className="font-semibold text-blue-600">(Bid)</span> ที่ต่ำที่สุด</div>
                   </div>

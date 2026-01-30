@@ -554,7 +554,7 @@ const dynamicSpreadPct = useMemo(() => {
 
   return (
     <div className="min-h-screen w-full bg-[#f5f5f5] flex flex-col items-center pb-6 lg:pb-10">
-      <div className="w-full max-w-full px-3 sm:px-4 md:px-6 lg:px-0 lg:max-w-[1040px] mx-auto">
+      <div className="w-full max-w-[1040px] lg:scale-[1.2] origin-top px-3 sm:px-4 md:px-6 lg:px-0 mx-auto">
         <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold mb-2 sm:mb-3 text-black mt-6 lg:mt-10">Calculation DR</h1>
         <p className="text-xs sm:text-sm lg:text-base text-[#6B6B6B] mb-4 sm:mb-6 lg:mb-8 break-words">
           Calculate DR Fair Value based on Underlying Price, Exchange Rate, and Conversion Ratio.
@@ -612,16 +612,18 @@ const dynamicSpreadPct = useMemo(() => {
                 <p className="font-bold text-lg sm:text-xl lg:text-2xl text-[#111] mt-1">{ratioDR ? `${fmtNum(ratioDR, 0)} : 1` : "—"} </p>
                 <div className="w-full h-[1px] bg-[#9A9A9A] mt-2"></div>
                 <div className="flex flex-col lg:flex-row items-center mt-3 gap-3 lg:gap-0">
-                  <div className="w-full lg:w-1/2">
-                    <p className="font-bold text-[11px] sm:text-[12px] lg:text-[13px] text-[#6B6B6B] mt-1 break-words">Last Price</p>
-                    <p className="font-bold text-lg sm:text-xl lg:text-2xl mt-1">{selectedDR?.last ? fmtNum(selectedDR.last) : "—"}</p>
-                  </div>
-                  <div className="hidden lg:block absolute left-1/2 -translate-x-1/2 w-[1px] h-[56px] bg-[#9A9A9A]"></div>
-                  <div className="w-full lg:w-1/2 lg:pl-6">
-                    <p className="font-bold text-[11px] sm:text-[12px] lg:text-[13px] text-[#6B6B6B] mt-1 break-words">Change</p>
-                    <p className={`font-bold text-lg sm:text-xl lg:text-2xl mt-1 ${changeAbs > 0 ? "text-[#27AE60]" : changeAbs < 0 ? "text-[#EB5757]" : "text-black"}`}>
-                      {`${fmtNum(changeAbs)} (${fmtPct(changePct)})`}
-                    </p>
+                  <div className="flex flex-row items-center w-full">
+                    <div className="flex-1 min-w-0">
+                      <p className="font-bold text-[11px] sm:text-[12px] lg:text-[13px] text-[#6B6B6B] mt-1 break-words">Last Price</p>
+                      <p className="font-bold text-lg sm:text-xl lg:text-2xl mt-1 whitespace-nowrap">{selectedDR?.last ? fmtNum(selectedDR.last) : "—"}</p>
+                    </div>
+                    <div className="mx-3 w-[1px] h-8 bg-[#9A9A9A]"></div>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-bold text-[11px] sm:text-[12px] lg:text-[13px] text-[#6B6B6B] mt-1 break-words">Change</p>
+                      <p className={`font-bold text-lg sm:text-xl lg:text-2xl mt-1 whitespace-nowrap ${changeAbs > 0 ? "text-[#27AE60]" : changeAbs < 0 ? "text-[#EB5757]" : "text-black"}`}>
+                        {`${fmtNum(changeAbs)} (${fmtPct(changePct)})`}
+                      </p>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -672,7 +674,7 @@ const dynamicSpreadPct = useMemo(() => {
                 </span>
               )}
 
-              <div className="flex justify-center gap-2 mt-3 sm:mt-4 w-full">
+              <div className="flex justify-center gap-2 mt-0 sm:mt-0.5 w-full">
                 <button
                   onClick={onReset}
                   className="w-[120px] sm:w-[139px] h-[36px] sm:h-[38px] bg-white rounded-[8px] flex justify-center items-center gap-2 text-black font-bold text-[11px] sm:text-[12px] hover:bg-gray-200 transition-colors"

@@ -17,17 +17,29 @@ IDEATRADE_BASE = "https://api.ideatrade1.com"
 TV_SCAN_URL = "https://scanner.tradingview.com/global/scan"
 
 # -----------------------------
-# CONFIG (ปรับได้)
+# CONFIG
 # -----------------------------
-CACHE_TTL_SECONDS = 5            # อายุ cache (วินาที) เช่น 3-10
-REFRESH_INTERVAL_SECONDS = 2     # background รีทุกกี่วินาที
-WARM_KEYS_LIMIT = 120            # จะอุ่นกี่ตัวล่าสุด (กันหนัก)
-CACHE_FILE = "dr_price_cache.json"   # จะเก็บไฟล์แคชไว้ไฟล์นี้
-CACHE_SAVE_DEBOUNCE_SEC = 0.5        # หน่วงรวมการเขียนไฟล์ (กันเขียนถี่)
-CACHE_MAX_ITEMS = 5000               # กันไฟล์โตเกิน (ปรับได้)
+CACHE_TTL_SECONDS = 60                # underlying fresh 1 นาที
+FX_CACHE_TTL_SECONDS = 600            # FX fresh 10 นาที (FX เปลี่ยนช้ากว่า)
+STALE_GRACE_SECONDS = 1200            # ใช้ค่า stale ต่อได้อีก 15 นาทีเวลาทีวีล่ม/โดน 429
 
-# ถ้าอยากให้ FX รีถี่กว่า underlying:
-FX_REFRESH_MULT = 1              # 1 = เท่ากัน, 2 = underlying ช้ากว่า FX 2 เท่า ฯลฯ
+REFRESH_INTERVAL_SECONDS = 60         # loop วิ่งทุก 60 วิ
+WARM_KEYS_LIMIT = 20                  # อุ่นเฉพาะ 20 key ล่าสุด
+
+CACHE_FILE = "dr_price_cache.json"
+CACHE_SAVE_DEBOUNCE_SEC = 1.0        
+CACHE_MAX_ITEMS = 5000
+
+TV_MAX_RETRIES = 3                    # retry 1,2,4 (รวม 3 ครั้งพอ)
+TV_BACKOFF_BASE_SEC = 1.0
+TV_COOLDOWN_ON_429_SEC = 180          # โดน 429 → พักทั้งระบบ 3 นาที
+TV_CONCURRENCY = 1                    # สำคัญสุด: ยิงทีละ 1 กันโดนลิมิต
+_tv_sem = asyncio.Semaphore(TV_CONCURRENCY)
+# Timestamp (epoch seconds) until which TradingView requests are blocked (set on 429)
+# Initialize to 0 so checks like `_now() < _tv_block_until` are safe.
+_tv_block_until: float = 0.0
+
+FX_REFRESH_MULT = 10                  # ✅ FX รีช้ากว่า underlying 10 เท่า = 10 นาที
 
 # -----------------------------
 # MAPS (ตามของคุณ)
@@ -59,7 +71,7 @@ EXCHANGE_TV_PREFIX_MAP = {
     "Nasdaq Copenhagen": "OMXCOP",
     "Euronext Paris": "EURONEXT",
     "Euronext Amsterdam": "EURONEXT",
-    "Euronext Milan": "EURONEXT",
+    "Euronext Milan": "MIL",
     "Tokyo Stock Exchange": "TSE",
     "Singapore Exchange": "SGX",
     "Taiwan Stock Exchange": "TWSE",
@@ -96,6 +108,7 @@ TV_SYMBOL_OVERRIDES: dict[str, str] = {
     "NYSEARCA:SPY":  "AMEX:SPY",
     "NYSEARCA:SPYM": "AMEX:SPYM",
     "NYSEARCA:SPAB": "AMEX:SPAB",
+    "MIL:RACE": "MIL:RACE",
 }
 
 def _norm(s: str) -> str:
@@ -123,26 +136,48 @@ _warm_keys: dict[str, float] = {}
 _cache_lock = asyncio.Lock()
 _cache_dirty = False
 _cache_save_task: asyncio.Task | None = None
+_inflight: dict[str, asyncio.Future] = {}
+_inflight_lock = asyncio.Lock()
 
-def cache_get(key: str):
+def cache_get(key: str, allow_stale: bool = False):
     item = _price_cache.get(key)
     if not item:
         return None
-    if item["exp"] <= _now():
-        _price_cache.pop(key, None)
-        return None
-    return item["value"]
+
+    now = _now()
+    exp = item.get("exp", 0)
+
+    # fresh
+    if exp > now:
+        return item.get("value")
+
+    # stale (อนุญาตเฉพาะเวลาขอ)
+    if allow_stale and item.get("stale_exp", 0) > now:
+        return item.get("value")
+
+    # หมดจริง ๆ ค่อยลบ
+    _price_cache.pop(key, None)
+    return None
+
 
 def cache_set(key: str, value: float, ttl: int = CACHE_TTL_SECONDS):
-    _price_cache[key] = {"value": float(value), "exp": _now() + ttl}
-    schedule_cache_save()   # ✅ บันทึกลงไฟล์
+    now = _now()
+    _price_cache[key] = {
+        "value": float(value),
+        "exp": now + ttl,                         # fresh จนถึงเวลานี้
+        "stale_exp": now + ttl + STALE_GRACE_SECONDS,  # ✅ stale ได้ต่ออีก
+    }
+    schedule_cache_save()
 
 def mark_warm(key: str):
     _warm_keys[key] = _now()
 
 def _prune_expired_inplace():
     now = _now()
-    expired = [k for k, v in _price_cache.items() if v.get("exp", 0) <= now]
+    expired = [
+        k for k, v in _price_cache.items()
+        if v.get("stale_exp", v.get("exp", 0)) <= now
+    ]
     for k in expired:
         _price_cache.pop(k, None)
 
@@ -150,10 +185,9 @@ def _prune_to_limit_inplace(limit=CACHE_MAX_ITEMS):
     if len(_price_cache) <= limit:
         return
     items = sorted(
-        _price_cache.items(),
-        key=lambda kv: kv[1].get("exp", 0),
-        reverse=True
-    )
+    _price_cache.items(),
+    key=lambda kv: kv[1].get("stale_exp", kv[1].get("exp", 0)),
+    reverse=True)
     _price_cache.clear()
     _price_cache.update(dict(items[:limit]))
 
@@ -172,6 +206,9 @@ async def load_cache_from_file():
             _warm_keys.clear()
             wk = data.get("warm_keys", {})
             _warm_keys.update({str(k): float(v) for k, v in wk.items() if v is not None})
+            _warm_keys_copy = {k: v for k, v in _warm_keys.items() if k in _price_cache}
+            _warm_keys.clear()
+            _warm_keys.update(_warm_keys_copy)
 
             _prune_expired_inplace()
             _prune_to_limit_inplace()
@@ -232,153 +269,169 @@ _idea_client: httpx.AsyncClient | None = None
 async def tv_scan_close(tv_ticker: str) -> float:
     columns = ["last", "close", "open"]
     assert _tv_client is not None
+    global _tv_block_until
 
     def to_float(x):
         if x is None:
             return None
         try:
             f = float(x)
-            if f == f and f > 0:  # กัน NaN / 0 / ติดลบ
+            if f == f and f > 0:
                 return f
         except Exception:
             return None
         return None
 
-    async def _fetch(ticker: str) -> dict:
+    async def _post_once(ticker: str):
         payload = {
             "symbols": {"tickers": [ticker], "query": {"types": []}},
             "columns": columns,
         }
-        r = await _tv_client.post(TV_SCAN_URL, json=payload)
+
+        # ✅ จับ semaphore แค่ตอนยิงจริง
+        async with _tv_sem:
+            r = await _tv_client.post(TV_SCAN_URL, json=payload)
+
+        status = r.status_code
+        text = (r.text or "")[:300]
+
+        if status == 429:
+            return 429, text, None
+
         r.raise_for_status()
         try:
-            return r.json()
+            return status, text, r.json()
         except Exception:
-            print(
-                "TV_SCAN_NONJSON ticker=", ticker,
-                "status=", r.status_code,
-                "text=", (r.text or "")[:300],
-            )
+            print("TV_SCAN_NONJSON ticker=", ticker, "status=", status, "text=", text)
             raise HTTPException(502, f"TradingView returned non-JSON for {ticker}")
+
+    async def _fetch_with_retry(ticker: str) -> dict:
+        global _tv_block_until
+
+        if _now() < _tv_block_until:
+            raise HTTPException(503, f"TradingView cooldown until {_tv_block_until:.0f}")
+
+        last_text = ""
+        for attempt in range(1, TV_MAX_RETRIES + 1):
+            status, text, data = await _post_once(ticker)
+            last_text = text
+
+            if status != 429:
+                return data  # type: ignore
+
+            wait = TV_BACKOFF_BASE_SEC * (2 ** (attempt - 1))  # 1,2,4,8
+            print("TV_SCAN_429 ticker=", ticker, "attempt=", attempt, "sleep=", wait)
+            await asyncio.sleep(wait)
+
+        _tv_block_until = _now() + TV_COOLDOWN_ON_429_SEC
+        print("TV_SCAN_COOLDOWN_SET until=", _tv_block_until, "ticker=", ticker, "last_text=", last_text)
+        raise HTTPException(429, f"TradingView rate limited for {ticker}")
 
     data = None
     used_ticker = tv_ticker
 
     try:
-        # ------------------------------------------------
         # 1) ยิงด้วย ticker เดิมก่อน
-        # ------------------------------------------------
-        data = await _fetch(tv_ticker)
+        data = await _fetch_with_retry(tv_ticker)
 
-        # ------------------------------------------------
         # 2) fallback ด้วย TV_SYMBOL_OVERRIDES (สำคัญ)
-        # ------------------------------------------------
         if not data.get("data"):
             override = TV_SYMBOL_OVERRIDES.get(tv_ticker)
             if override and override != tv_ticker:
-                data2 = await _fetch(override)
+                data2 = await _fetch_with_retry(override)
                 if data2.get("data"):
                     data = data2
                     used_ticker = override
 
-        # ------------------------------------------------
         # 3) fallback NYSEARCA → AMEX / ARCA / BATS
-        # ------------------------------------------------
         if not data.get("data"):
             if tv_ticker.startswith("NYSEARCA:"):
                 sym = tv_ticker.split(":", 1)[1]
-                candidates = [
-                    f"AMEX:{sym}",
-                    f"ARCA:{sym}",
-                    f"BATS:{sym}",
-                ]
+                candidates = [f"AMEX:{sym}", f"ARCA:{sym}", f"BATS:{sym}"]
 
-                found = False
                 for alt in candidates:
-                    data2 = await _fetch(alt)
+                    data2 = await _fetch_with_retry(alt)
                     if data2.get("data"):
                         data = data2
                         used_ticker = alt
-                        found = True
                         break
 
-                if not found:
-                    print(
-                        "TV_SCAN_NOT_FOUND ticker=", tv_ticker,
-                        "override=", TV_SYMBOL_OVERRIDES.get(tv_ticker),
-                        "candidates=", candidates,
-                    )
+                if not data.get("data"):
+                    print("TV_SCAN_NOT_FOUND ticker=", tv_ticker, "override=", TV_SYMBOL_OVERRIDES.get(tv_ticker), "candidates=", candidates)
                     print("TV_SCAN_RESPONSE=", data)
-                    raise HTTPException(
-                        404,
-                        f"TradingView ticker not found or no data returned: {tv_ticker}",
-                    )
+                    raise HTTPException(404, f"TradingView ticker not found or no data returned: {tv_ticker}")
             else:
                 print("TV_SCAN_NOT_FOUND ticker=", tv_ticker)
                 print("TV_SCAN_RESPONSE=", data)
-                raise HTTPException(
-                    404,
-                    f"TradingView ticker not found or no data returned: {tv_ticker}",
-                )
+                raise HTTPException(404, f"TradingView ticker not found or no data returned: {tv_ticker}")
 
-        # ------------------------------------------------
         # 4) ดึงราคา last → close → open
-        # ------------------------------------------------
-        d = data["data"][0]["d"]  # list ตาม columns
+        d = data["data"][0]["d"]
         for v in d:
             fv = to_float(v)
             if fv is not None:
                 return fv
 
-        raise HTTPException(
-            500,
-            f"No usable price fields for {used_ticker} (tried {columns})",
-        )
+        raise HTTPException(500, f"No usable price fields for {used_ticker} (tried {columns})")
 
     except HTTPException:
         raise
 
     except httpx.HTTPError as e:
+        # (จริง ๆ ส่วนใหญ่จะถูกดักใน _post_once แล้ว)
         try:
             status = getattr(e.response, "status_code", None)
             text = getattr(e.response, "text", "")
         except Exception:
             status, text = None, ""
-        print(
-            "TV_SCAN_HTTP_ERROR ticker=", used_ticker,
-            "status=", status,
-            "err=", repr(e),
-            "text=", (text or "")[:300],
-        )
-        raise HTTPException(
-            502,
-            f"TradingView request failed for {used_ticker}",
-        )
+        print("TV_SCAN_HTTP_ERROR ticker=", used_ticker, "status=", status, "err=", repr(e), "text=", (text or "")[:300])
+        raise HTTPException(502, f"TradingView request failed for {used_ticker}")
 
     except Exception as e:
         print("TV_SCAN_ERROR ticker=", used_ticker)
         print("TV_SCAN_ERROR response=", data)
-        raise HTTPException(
-            500,
-            f"Cannot fetch close for {used_ticker}: {type(e).__name__}",
-        )
+        raise HTTPException(500, f"Cannot fetch close for {used_ticker}: {type(e).__name__}")
 
 async def get_price_cached(kind: str, tv_ticker: str, ttl: int = CACHE_TTL_SECONDS) -> float:
-    """
-    kind: 'U' underlying, 'F' fx
-    key: f"{kind}|{tv_ticker}"
-    """
     key = f"{kind}|{tv_ticker}"
     mark_warm(key)
     _trim_warm_keys()
 
-    v = cache_get(key)
+    # 1) fresh
+    v = cache_get(key, allow_stale=False)
     if v is not None:
         return v
 
-    v = await tv_scan_close(tv_ticker)
-    cache_set(key, v, ttl=ttl)
-    return v
+    # 2) single-flight
+    async with _inflight_lock:
+        fut = _inflight.get(key)
+        if fut:
+            return await fut
+
+        loop = asyncio.get_event_loop()
+        fut = loop.create_future()
+        _inflight[key] = fut
+
+    try:
+        if _now() < _tv_block_until:
+            v = cache_get(key, allow_stale=True)
+            if v is not None:
+                fut.set_result(v)
+                return v
+            raise HTTPException(503, "TradingView cooldown")
+
+        v = await tv_scan_close(tv_ticker)
+        cache_set(key, v, ttl=ttl)
+        fut.set_result(v)
+        return v
+
+    except Exception as e:
+        fut.set_exception(e)
+        raise
+
+    finally:
+        async with _inflight_lock:
+            _inflight.pop(key, None)
 
 # -----------------------------
 # DR selection helpers (ของคุณ)
@@ -589,24 +642,30 @@ async def refresher_loop():
             keys = sorted(_warm_keys.items(), key=lambda kv: kv[1], reverse=True)
             keys = [k for k, _ in keys[:WARM_KEYS_LIMIT]]
 
+            # ✅ ถ้าโดน cooldown อยู่ อย่า refresh ต่อ ให้รอจนพ้นก่อน
+            if _now() < _tv_block_until:
+                await asyncio.sleep(max(1.0, _tv_block_until - _now()))
+                continue
+
             for key in keys:
                 if "|" not in key:
                     continue
 
                 item = _price_cache.get(key)
-                near_exp = (not item) or (item["exp"] - _now() < 1)
+                near_exp = (not item) or (item["exp"] - _now() < ttl * 0.3)
                 if not near_exp:
                     continue
 
                 kind, tv_ticker = key.split("|", 1)
 
-                # ✅ ทำให้ Underlying รีช้ากว่า FX ตามที่ตั้งใจ
-                if kind == "U" and FX_REFRESH_MULT > 1:
+                # ทำให้ FX รีช้ากว่า underlying ตาม FX_REFRESH_MULT
+                if kind == "F" and FX_REFRESH_MULT > 1:
                     if tick % FX_REFRESH_MULT != 0:
                         continue
 
                 v = await tv_scan_close(tv_ticker)
-                cache_set(key, v, ttl=CACHE_TTL_SECONDS)
+                ttl = FX_CACHE_TTL_SECONDS if kind == "F" else CACHE_TTL_SECONDS
+                cache_set(key, v, ttl=ttl)
 
         except asyncio.CancelledError:
             raise
@@ -693,7 +752,22 @@ async def calculate_dr(dr_symbol: str):
         if underlying_price is None:
             raise HTTPException(404, f"Underlying price not resolved for {dr_symbol} (tv_symbol={tv_symbol})")
 
-        fx_rate = await get_price_cached("F", f"FX_IDC:{fx_pair}", ttl=CACHE_TTL_SECONDS)
+        fx_rate = None
+        fx_is_stale = False
+
+        try:
+            fx_rate = await get_price_cached(
+                "F",
+                f"FX_IDC:{fx_pair}",
+                ttl=FX_CACHE_TTL_SECONDS
+            )
+
+        except HTTPException as e:
+            # ✅ FX พัง แต่ underlying ได้ → ใช้ stale FX
+            fx_rate = cache_get(f"F|FX_IDC:{fx_pair}", allow_stale=True)
+            if fx_rate is None:
+                raise  # ไม่มี stale จริง ๆ ค่อยล้ม
+            fx_is_stale = True
 
         return {
             "dr_symbol": dr_symbol,
@@ -702,6 +776,8 @@ async def calculate_dr(dr_symbol: str):
             "currency": currency,
             "fx_pair": fx_pair,
             "fx_rate": float(fx_rate),  # จะปัดหรือไม่ก็ได้ แต่ถ้าจะให้ frontend จัดการ ก็ส่ง raw ไปเลย
+            "fx_rate": float(fx_rate),
+            "fx_is_stale": fx_is_stale,
             "underlying_price_raw": float(underlying_price),  # ✅ เพิ่มบรรทัดนี้ (ห้ามปัด)
             "underlying_price": float(underlying_price),      # ✅ แก้ไม่ให้ round (ให้หน้าเว็บปัดเอง)
             "underlyingExchange": dr.get("underlyingExchange"),
@@ -724,6 +800,7 @@ async def calculate_dr(dr_symbol: str):
     except Exception as e:
         print("CALC_CRASH", "dr_symbol=", dr_symbol, "err=", type(e).__name__, str(e))
         raise HTTPException(500, f"Unhandled error: {type(e).__name__}")
+
 
 if __name__ == "__main__":
     uvicorn.run("dr_calculation_api:app", host="0.0.0.0", port=8002, reload=True)

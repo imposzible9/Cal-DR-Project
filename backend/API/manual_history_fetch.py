@@ -22,20 +22,24 @@ import ratings_api_dynamic as rmod
 
 # Markets and their desired close timestamps (Thai time)
 TARGETS = {
-    "US": "2026-01-24 04:30:00",
-    "HK": "2026-01-24 15:30:00",
-    "JP": "2026-01-24 13:30:00",
-    "SG": "2026-01-24 16:30:00",
-    "TW": "2026-01-24 13:00:00",
-    "CN": "2026-01-24 14:30:00",
-    "VN": "2026-01-24 15:30:00",
+    "US": "2026-01-30T04:30:00+07:00",
+    "DK": "2026-01-29T23:30:00+07:00",
+    "NL": "2026-01-29T23:59:00+07:00",
+    "FR": "2026-01-29T23:59:00+07:00",
+    "IT": "2026-01-29T23:59:00+07:00",
+    "HK": "2026-01-29T15:30:00+07:00",
+    "JP": "2026-01-29T13:30:00+07:00",
+    "SG": "2026-01-29T16:30:00+07:00",
+    "TW": "2026-01-29T13:00:00+07:00",
+    "CN": "2026-01-29T14:30:00+07:00",
+    "VN": "2026-01-29T15:30:00+07:00",
 }
 
 BKK_TZ = ZoneInfo("Asia/Bangkok")
 DB_PATH = getattr(rmod, "DB_FILE", "ratings.sqlite")
 DR_LIST_URL = os.getenv("DR_LIST_URL") or getattr(rmod, "DR_LIST_URL", None)
 MAX_CONCURRENCY = int(getattr(rmod, "MAX_CONCURRENCY", 8))
-BATCH_SLEEP = float(getattr(rmod, "BATCH_SLEEP_SECONDS", 0.2))
+BATCH_SLEEP = float(getattr(rmod, "BATCH_SLEEP_SECONDS", 3.0))
 REQUEST_TIMEOUT = int(getattr(rmod, "REQUEST_TIMEOUT", 10))
 
 if not DR_LIST_URL:
@@ -96,7 +100,7 @@ async def process_market(market_code: str, snapshot_ts_thai: datetime):
             return
 
         # Batch fetch in groups to avoid rate limits
-        batch_size = max(4, local_max_concurrency * 2)
+        batch_size = 1
         all_results = []
         item_map = {it["u_code"]: it for it in items}
         for i in range(0, len(items), batch_size):
@@ -184,15 +188,21 @@ async def process_market(market_code: str, snapshot_ts_thai: datetime):
             daily_rating = data.get("daily_rating") or data.get("daily", {}).get("rating")
             weekly_val = data.get("weekly_val") or data.get("weekly", {}).get("val")
             weekly_rating = data.get("weekly_rating") or data.get("weekly", {}).get("rating")
-            market_data = data.get("market_data") or {
-                "price": res.get("price") or data.get("price"),
-                "open": res.get("open") or data.get("open"),
-                "high": res.get("high") or data.get("high"),
-                "low": res.get("low") or data.get("low"),
-                "currency": res.get("currency") or data.get("currency"),
-                "change_pct": res.get("change_pct") or data.get("change_pct"),
-                "change_abs": res.get("change_abs") or data.get("change_abs"),
-            }
+            market_data = data.get("market_data")
+            if not market_data:
+                # fallback for legacy, but prefer market_data from fetch_single_ticker_for_history
+                market_data = {
+                    "price": res.get("price") or data.get("price"),
+                    "open": res.get("open") or data.get("open"),
+                    "high": res.get("high") or data.get("high"),
+                    "low": res.get("low") or data.get("low"),
+                    "currency": res.get("currency") or data.get("currency"),
+                    "change_pct": res.get("change_pct") or data.get("change_pct"),
+                    "change_abs": res.get("change_abs") or data.get("change_abs"),
+                }
+            # Debug: print market_data for first few rows
+            if inserted < 5:
+                print(f"[DEBUG] {ticker} market_data: {market_data}")
             # call helper to upsert
             rmod.upsert_history_snapshot(
                 cur,
