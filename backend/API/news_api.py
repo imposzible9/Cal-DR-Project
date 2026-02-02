@@ -36,6 +36,20 @@ app.add_middleware(
 _client: httpx.AsyncClient | None = None
 _news_cache: dict[str, dict] = {}
 
+TRUSTED_SOURCES = {
+    "bloomberg", "reuters", "cnbc", "wall street journal", "financial times", "wsj",
+    "marketwatch", "nikkei", "bangkok post", "the nation", "scmp", "caixin",
+    "bbc", "cnn", "forbes", "business insider", "techcrunch", "engadget",
+    "kaohoon", "thansettakij", "money channel", "efinance thai", "infoquest",
+    "settrade", "prachachat", "ประชาชาติ", "กรุงเทพธุรกิจ", "ฐานเศรษฐกิจ",
+    "ข่าวหุ้น", "ทันหุ้น", "bangkok biz news"
+}
+
+def _is_trusted_source(source_name: str) -> bool:
+    if not source_name: return False
+    s = source_name.lower()
+    return any(t in s for t in TRUSTED_SOURCES)
+
 def _is_valid_source(item: dict) -> bool:
     """Filter out unwanted sources like Yahoo Finance"""
     src = (item.get("source") or "").lower()
@@ -43,7 +57,7 @@ def _is_valid_source(item: dict) -> bool:
     
     # Filter out Yahoo
     if "yahoo" in src or "yahoo" in url:
-        return True # Allow Yahoo, but we will mix it later
+        return True 
         
     return True
 
@@ -97,16 +111,16 @@ def _mix_news_sources(items: list[dict], limit: int) -> list[dict]:
     return result
 
 FALLBACK_SYMBOLS = [
-    {"symbol": "AAPL", "name": "Apple Inc.", "logo": "https://s3-symbol-logo.tradingview.com/apple.svg"},
-    {"symbol": "MSFT", "name": "Microsoft Corporation", "logo": "https://s3-symbol-logo.tradingview.com/microsoft.svg"},
-    {"symbol": "GOOG", "name": "Alphabet Inc.", "logo": "https://s3-symbol-logo.tradingview.com/alphabet.svg"},
-    {"symbol": "AMZN", "name": "Amazon.com, Inc.", "logo": "https://s3-symbol-logo.tradingview.com/amazon.svg"},
-    {"symbol": "NVDA", "name": "NVIDIA Corporation", "logo": "https://s3-symbol-logo.tradingview.com/nvidia.svg"},
-    {"symbol": "TSLA", "name": "Tesla, Inc.", "logo": "https://s3-symbol-logo.tradingview.com/tesla.svg"},
-    {"symbol": "META", "name": "Meta Platforms, Inc.", "logo": "https://s3-symbol-logo.tradingview.com/meta-platforms.svg"},
-    {"symbol": "BABA", "name": "Alibaba Group Holding Limited", "logo": "https://s3-symbol-logo.tradingview.com/alibaba.svg"},
-    {"symbol": "NFLX", "name": "Netflix, Inc.", "logo": "https://s3-symbol-logo.tradingview.com/netflix.svg"},
-    {"symbol": "AMD", "name": "Advanced Micro Devices, Inc.", "logo": "https://s3-symbol-logo.tradingview.com/advanced-micro-devices.svg"}
+    {"symbol": "AAPL", "name": "Apple Inc.", "logo": "https://s3-symbol-logo.tradingview.com/apple.svg", "country": "US"},
+    {"symbol": "MSFT", "name": "Microsoft Corporation", "logo": "https://s3-symbol-logo.tradingview.com/microsoft.svg", "country": "US"},
+    {"symbol": "GOOG", "name": "Alphabet Inc.", "logo": "https://s3-symbol-logo.tradingview.com/alphabet.svg", "country": "US"},
+    {"symbol": "AMZN", "name": "Amazon.com, Inc.", "logo": "https://s3-symbol-logo.tradingview.com/amazon.svg", "country": "US"},
+    {"symbol": "NVDA", "name": "NVIDIA Corporation", "logo": "https://s3-symbol-logo.tradingview.com/nvidia.svg", "country": "US"},
+    {"symbol": "TSLA", "name": "Tesla, Inc.", "logo": "https://s3-symbol-logo.tradingview.com/tesla.svg", "country": "US"},
+    {"symbol": "META", "name": "Meta Platforms, Inc.", "logo": "https://s3-symbol-logo.tradingview.com/meta-platforms.svg", "country": "US"},
+    {"symbol": "BABA", "name": "Alibaba Group Holding Limited", "logo": "https://s3-symbol-logo.tradingview.com/alibaba.svg", "country": "US"},
+    {"symbol": "NFLX", "name": "Netflix, Inc.", "logo": "https://s3-symbol-logo.tradingview.com/netflix.svg", "country": "US"},
+    {"symbol": "AMD", "name": "Advanced Micro Devices, Inc.", "logo": "https://s3-symbol-logo.tradingview.com/advanced-micro-devices.svg", "country": "US"}
 ]
 
 
@@ -217,6 +231,7 @@ async def fetch_news(symbol: str, limit: int, language: str | None, hours: int, 
             "source": source.get("name"),
             "url": a.get("url"),
             "image_url": a.get("urlToImage"),
+            "is_trusted": _is_trusted_source(source.get("name")),
         }
         if _is_valid_source(item):
             normalized.append(item)
@@ -291,6 +306,7 @@ async def _fetch_google_rss_items(query: str, limit: int, language: str | None, 
                 "source": source,
                 "url": link or None,
                 "image_url": None,
+                "is_trusted": _is_trusted_source(source),
             }
             if _is_valid_source(item):
                 normalized.append(item)
@@ -547,6 +563,7 @@ async def get_company_news(
             "source": a.get("source"),
             "url": a.get("url"),
             "image_url": a.get("image"),
+            "is_trusted": _is_trusted_source(a.get("source")),
         }
         if _is_valid_source(item):
             normalized.append(item)
@@ -696,7 +713,7 @@ async def get_symbols():
     """
     Fetches the list of available DR symbols and merged with TradingView stocks.
     """
-    key = "dr_tv_symbols_list"
+    key = "dr_tv_symbols_list_v5"
     cached = _cache_get(key)
     if cached is not None:
         return cached
@@ -723,16 +740,43 @@ async def get_symbols():
                             "symbol": underlying,
                             "name": row.get("underlyingName") or row.get("name") or "",
                             "dr_symbol": row.get("symbol"),
-                            "logo": row.get("logo") or row.get("logoUrl") or row.get("image")
+                            "logo": row.get("logo") or row.get("logoUrl") or row.get("image"),
+                            "country": "TH" # DRs are traded in Thailand
                         })
         except Exception as e:
             print(f"Error fetching DR symbols: {e}")
             # Don't fail completely, just use fallback or empty
 
-        # 2. Fetch TradingView Stocks (US and Thailand)
-        tv_symbols_us = await _fetch_tradingview_stocks(client_to_use, region="america")
-        tv_symbols_th = await _fetch_tradingview_stocks(client_to_use, region="thailand")
-        tv_symbols = tv_symbols_us + tv_symbols_th
+        # 2. Fetch TradingView Stocks (All Supported Regions)
+        regions_config = [
+            {"region": "america", "country": "US", "limit": 2000},
+            {"region": "thailand", "country": "TH", "limit": 2000},
+            {"region": "china", "country": "CN", "limit": 500},
+            {"region": "hongkong", "country": "HK", "limit": 500},
+            {"region": "japan", "country": "JP", "limit": 500},
+            {"region": "korea", "country": "KR", "limit": 500},
+            {"region": "vietnam", "country": "VN", "limit": 500},
+            {"region": "singapore", "country": "SG", "limit": 500},
+            {"region": "taiwan", "country": "TW", "limit": 500},
+            {"region": "india", "country": "IN", "limit": 500},
+            {"region": "australia", "country": "AU", "limit": 500},
+            {"region": "uk", "country": "GB", "limit": 500},
+            {"region": "germany", "country": "DE", "limit": 500},
+            {"region": "france", "country": "FR", "limit": 500}
+        ]
+        
+        tasks = []
+        for rc in regions_config:
+            tasks.append(_fetch_tradingview_stocks(client_to_use, region=rc["region"], country_code=rc["country"], limit=rc.get("limit", 500)))
+            
+        tv_results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        tv_symbols = []
+        for res in tv_results:
+            if isinstance(res, list):
+                tv_symbols.extend(res)
+            else:
+                print(f"Error fetching region: {res}")
         
         # 3. Merge Lists
         # Use a dict to dedup by symbol, preferring DR info if available (or TV info if better?)
@@ -768,6 +812,8 @@ async def get_symbols():
                 existing["price"] = s.get("price", 0)
                 existing["change_pct"] = s.get("change_pct", 0)
                 existing["change"] = s.get("change", 0)
+                existing["exchange"] = s.get("exchange")
+                existing["country"] = s.get("country")
             else:
                 merged[s["symbol"]] = s
         
@@ -782,34 +828,43 @@ async def get_symbols():
         if local_client:
             await client_to_use.aclose()
 
-async def _fetch_tradingview_stocks(client, region="america"):
+async def _fetch_tradingview_stocks(client, region="america", country_code="US", limit=500):
     try:
-        url = "https://scanner.tradingview.com/america/scan"
-        min_volume = 500000 # Higher threshold for US to ensure news availability
-        exchange_filter = ["AMEX", "NASDAQ", "NYSE"]
+        url = f"https://scanner.tradingview.com/{region}/scan"
+        min_volume = 50000 # Default threshold
+        exchange_filter = []
 
-        if region == "thailand":
-            url = "https://scanner.tradingview.com/thailand/scan"
-            min_volume = 50000 # Threshold for Thai stocks
+        if region == "america":
+            min_volume = 500000 # Higher threshold for US
+            exchange_filter = ["AMEX", "NASDAQ", "NYSE"]
+        elif region == "thailand":
             exchange_filter = ["SET", "mai"]
 
         # Filter logic to reduce noise (remove derivatives, low volume, etc.)
         # We restrict subtypes to common/etf/reit to avoid warrants/structured products that rarely have news.
         subtypes = ["common", "preference", "etf", "reit"]
         
+        filters = [
+            {"left": "type", "operation": "in_range", "right": ["stock", "dr", "fund"]},
+            # {"left": "exchange", "operation": "in_range", "right": exchange_filter},
+            {"left": "average_volume_10d_calc", "operation": "greater", "right": min_volume}
+        ]
+        
+        if exchange_filter:
+            filters.append({"left": "exchange", "operation": "in_range", "right": exchange_filter})
+        
+        # For US, be stricter with subtypes. For Thailand, we need to allow empty subtypes for DRs.
+        # For others, apply subtypes to avoid junk.
+        if region != "thailand":
+             filters.append({"left": "subtype", "operation": "in_range", "right": subtypes})
+
         payload = {
-            "filter": [
-                {"left": "type", "operation": "in_range", "right": ["stock", "dr", "fund"]},
-                {"left": "subtype", "operation": "in_range", "right": subtypes},
-                {"left": "exchange", "operation": "in_range", "right": exchange_filter},
-                # Filter out inactive stocks
-                {"left": "average_volume_10d_calc", "operation": "greater", "right": min_volume}
-            ],
+            "filter": filters,
             "options": {"lang": "en"},
             "symbols": {"query": {"types": []}, "tickers": []},
-            "columns": ["logoid", "name", "close", "change", "change_abs", "Recommend.All", "volume", "market_cap_basic"],
+            "columns": ["logoid", "name", "close", "change", "change_abs", "Recommend.All", "volume", "market_cap_basic", "exchange"],
             "sort": {"sortBy": "market_cap_basic", "sortOrder": "desc"},
-            "range": [0, 2000] 
+            "range": [0, limit] 
         }
         
         headers = {
@@ -827,6 +882,12 @@ async def _fetch_tradingview_stocks(client, region="america"):
         data = r.json()
         total = data.get("totalCount", 0)
         rows = data.get("data", [])
+        
+        # Determine country code based on region (Now passed as argument)
+        # country_code = "US"
+        # if region == "thailand":
+        #    country_code = "TH"
+        # Add more mappings if needed
         
         results = []
         for row in rows:
@@ -847,10 +908,9 @@ async def _fetch_tradingview_stocks(client, region="america"):
                 # But allow numbers (2S, 7UP)
                 if "." in symbol:
                     continue
-                # Exclude if Name is same as Symbol (often bad data like "88TH")
-                # Real companies usually have full names "PTT Public Company..."
-                if name.strip().upper() == symbol.strip().upper():
-                    continue
+                # Removed "name == symbol" check because many valid Thai stocks have name=symbol in TV data
+                # if name.strip().upper() == symbol.strip().upper():
+                #    continue
 
             # 2. General Filters
             # Exclude if name is empty
@@ -859,13 +919,14 @@ async def _fetch_tradingview_stocks(client, region="america"):
             # ---------------------------------------
 
             # Extract additional data (close, change, change_abs, volume, market_cap)
-            # columns: ["logoid", "name", "close", "change", "change_abs", "Recommend.All", "volume", "market_cap_basic"]
-            # indices:     0        1        2        3          4              5             6           7
+            # columns: ["logoid", "name", "close", "change", "change_abs", "Recommend.All", "volume", "market_cap_basic", "exchange"]
+            # indices:     0        1        2        3          4              5             6           7                  8
             close = d[2] if len(d) > 2 else 0
             change_pct = d[3] if len(d) > 3 else 0
             change_abs = d[4] if len(d) > 4 else 0
             volume = d[6] if len(d) > 6 else 0
-            market_cap = d[7] if len(d) > 7 else 0
+            market_cap = d[7] if len(d) > 7 and d[7] is not None else 0
+            exchange = d[8] if len(d) > 8 else None
 
             logo_url = None
             if logoid:
@@ -881,7 +942,9 @@ async def _fetch_tradingview_stocks(client, region="america"):
                 "change_pct": change_pct,
                 "change": change_abs,
                 "volume": volume,
-                "market_cap": market_cap
+                "market_cap": market_cap,
+                "exchange": exchange,
+                "country": country_code
             })
             
         return results

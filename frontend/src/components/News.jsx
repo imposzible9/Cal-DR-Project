@@ -8,7 +8,24 @@ const API_BASE = import.meta.env.VITE_NEWS_API || import.meta.env.VITE_NEWS_API_
 const TH_QUERY = "ตลาดหุ้น OR หุ้น OR ดัชนี";
 const EN_QUERY = "stock market";
 const DEFAULT_SYMBOLS = ["NVDA", "TSLA", "GOOG", "AAPL", "MSFT", "AMZN", "META", "BABA"];
-const CACHE_KEY_HOME = "caldr_news_home_v2";
+const COUNTRY_OPTIONS = [
+  { code: "All", label: "Global" },
+  { code: "US", label: "United States" },
+  { code: "TH", label: "Thailand" },
+  { code: "CN", label: "China" },
+  { code: "HK", label: "Hong Kong" },
+  { code: "JP", label: "Japan" },
+  { code: "KR", label: "South Korea" },
+  { code: "VN", label: "Vietnam" },
+  { code: "SG", label: "Singapore" },
+  { code: "TW", label: "Taiwan" },
+  { code: "IN", label: "India" },
+  { code: "AU", label: "Australia" },
+  { code: "GB", label: "United Kingdom" },
+  { code: "DE", label: "Germany" },
+  { code: "FR", label: "France" },
+];
+const CACHE_KEY_HOME = "caldr_news_home_v4";
 const CACHE_KEY_SEARCH_PREFIX = "caldr_news_search_v2_";
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
@@ -130,8 +147,13 @@ const NewsCard = ({ ticker, quote, news }) => {
           </p>
           <div className="flex items-center gap-2 text-xs text-gray-500">
             {news.source && (
-              <span className="inline-flex items-center px-2 py-0.5 rounded bg-gray-100 text-gray-800 font-medium">
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-gray-100 text-gray-800 font-medium">
                 {news.source}
+                {news.is_trusted && (
+                  <svg className="w-3 h-3 text-blue-500" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                  </svg>
+                )}
               </span>
             )}
             {news.source && <span>•</span>}
@@ -148,6 +170,7 @@ const News = () => {
   const selected = searchParams.get("symbol") || "";
 
   const [search, setSearch] = useState(selected);
+  const [country, setCountry] = useState("All");
   // const [selected, setSelected] = useState(""); 
   const [allSymbols, setAllSymbols] = useState([]);
   const [suggestions, setSuggestions] = useState([]);
@@ -189,30 +212,51 @@ const News = () => {
     let mounted = true;
     async function loadMarket() {
       // 1. Try Cache First (Stale-While-Revalidate)
-      const cached = getCache(CACHE_KEY_HOME, true); // Get stale data if available
+      const currentCacheKey = `${CACHE_KEY_HOME}_${country}`;
+      const cached = getCache(currentCacheKey, true); // Get stale data if available
       if (cached) {
         setMarketNews(cached.marketNews);
         setDefaultUpdates(cached.defaultUpdates);
-        // If cache is fresh, stop here (optional: can always revalidate if you want "live" feel)
-        const isFresh = getCache(CACHE_KEY_HOME); 
+        // If cache is fresh, stop here
+        const isFresh = getCache(currentCacheKey); 
         if (isFresh) {
             setLoadingHome(false);
             return;
         }
-        // If stale, we continue to fetch but don't show full loading spinner if we have data
       } else {
         setLoadingHome(true);
       }
 
       try {
-        const [enRes, thRes] = await Promise.all([
-          axios.get(`${API_BASE}/api/news/${encodeURIComponent(EN_QUERY)}`, { params: { limit: 20, language: "en", hours: 72 } }),
-          axios.get(`${API_BASE}/api/news/${encodeURIComponent(TH_QUERY)}`, { params: { limit: 20, language: "th", hours: 72 } })
-        ]);
-        if (!mounted) return;
-        const enNews = enRes.data?.news || [];
-        const thNews = thRes.data?.news || [];
-        const merged = [...enNews, ...thNews].sort((a, b) => {
+        let merged = [];
+        
+        if (country === "All") {
+            // Default behavior: US + TH
+            const [enRes, thRes] = await Promise.all([
+              axios.get(`${API_BASE}/api/news/${encodeURIComponent(EN_QUERY)}`, { params: { limit: 20, language: "en", hours: 72 } }),
+              axios.get(`${API_BASE}/api/news/${encodeURIComponent(TH_QUERY)}`, { params: { limit: 20, language: "th", hours: 72 } })
+            ]);
+            if (!mounted) return;
+            const enNews = enRes.data?.news || [];
+            const thNews = thRes.data?.news || [];
+            merged = [...enNews, ...thNews];
+        } else if (country === "TH") {
+            // Thailand specific
+            const res = await axios.get(`${API_BASE}/api/news/${encodeURIComponent(TH_QUERY)}`, { 
+                params: { limit: 40, language: "th", hours: 72, country: "th" } 
+            });
+            if (!mounted) return;
+            merged = res.data?.news || [];
+        } else {
+            // Other countries
+            const res = await axios.get(`${API_BASE}/api/news/${encodeURIComponent(EN_QUERY)}`, { 
+                params: { limit: 40, language: "en", hours: 72, country: country.toLowerCase() } 
+            });
+            if (!mounted) return;
+            merged = res.data?.news || [];
+        }
+
+        merged.sort((a, b) => {
           const da = a.published_at ? new Date(a.published_at) : new Date(0);
           const db = b.published_at ? new Date(b.published_at) : new Date(0);
           return db - da;
@@ -258,7 +302,7 @@ const News = () => {
           setMarketNews(combinedNews);
           
           // Save to Cache
-          setCache(CACHE_KEY_HOME, {
+          setCache(currentCacheKey, {
             marketNews: combinedNews,
             defaultUpdates: updates
           });
@@ -276,7 +320,7 @@ const News = () => {
     }
 
     return () => { mounted = false; };
-  }, [selected]);
+  }, [selected, country]);
 
   // Fetch Search Data
   useEffect(() => {
@@ -390,12 +434,25 @@ const News = () => {
   };
 
   const updateSuggestions = (value) => {
-    if (value.length > 0) {
-      const filtered = allSymbols.filter(s => s.symbol.startsWith(value));
-      setSuggestions(filtered.slice(0, 100));
-    } else {
-      setSuggestions(allSymbols.slice(0, 100));
+    let filtered = allSymbols;
+    
+    console.log(`Filtering for Country: ${country}, Search: ${value}, Total Symbols: ${allSymbols.length}`);
+    
+    // Filter by Country if not "All"
+    if (country !== "All") {
+      filtered = filtered.filter(s => s.country === country);
     }
+    
+    if (value.length > 0) {
+      filtered = filtered.filter(s => s.symbol.startsWith(value));
+    }
+    
+    console.log(`Filtered Count: ${filtered.length}`);
+    if (filtered.length > 0) {
+        console.log("Sample:", filtered[0]);
+    }
+    
+    setSuggestions(filtered.slice(0, 100));
     setShowSuggestions(true);
   };
 
@@ -408,6 +465,12 @@ const News = () => {
   const handleSearchFocus = () => {
     updateSuggestions(search);
   };
+
+  // Update suggestions when country changes
+  useEffect(() => {
+    // Only update if we have a search term or the dropdown is interacting
+    updateSuggestions(search);
+  }, [country]);
 
   // Close suggestions when clicking outside would be ideal, 
   // but for now we'll rely on selection or blur (careful with blur vs click)
@@ -482,8 +545,6 @@ const News = () => {
     );
   }
 
-  console.log('suggestionsContent', suggestionsContent);
-
   return (
     <div className="min-h-screen w-full bg-[#F5F5F5] flex justify-center">
       <div className="w-full max-w-[1248px] px-4 md:px-8 flex flex-col h-full py-10">
@@ -494,11 +555,31 @@ const News = () => {
             <h1 className="text-2xl sm:text-3xl font-bold mb-2 text-[#0B102A]">News</h1>
             <p className="text-[#6B6B6B] text-xs sm:text-sm">Latest market updates, earnings reports, and insights for Underlying Assets</p>
           </div>
-          <div className="relative w-full md:w-[300px]">
-            <input
-              type="text"
-              value={search}
-              onChange={handleSearchChange}
+          <div className="flex flex-col md:flex-row items-center gap-4 w-full md:w-auto">
+            {/* Country Select */}
+            <div className="relative w-full md:w-40">
+              <select
+                value={country}
+                onChange={(e) => setCountry(e.target.value)}
+                className="w-full appearance-none bg-white border border-gray-200 text-[#0B102A] py-2.5 pl-4 pr-10 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#0B102A] text-sm font-medium cursor-pointer hover:border-gray-300 transition-colors shadow-sm"
+              >
+                {COUNTRY_OPTIONS.map((opt) => (
+                  <option key={opt.code} value={opt.code}>
+                    {opt.code === "All" ? "Global" : `${opt.code} - ${opt.label}`}
+                  </option>
+                ))}
+              </select>
+              <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-gray-500">
+                <i className="bi bi-chevron-down text-xs"></i>
+              </div>
+            </div>
+
+            {/* Search Input */}
+            <div className="relative w-full md:w-[300px]">
+              <input
+                type="text"
+                value={search}
+                onChange={handleSearchChange}
               onKeyDown={onSearchKey}
               onFocus={handleSearchFocus}
               onBlur={handleSearchBlur}
@@ -518,6 +599,7 @@ const News = () => {
 
           </div>
         </div>
+      </div>
 
         {/* Main Content */}
         <div className="flex-1 pb-10">
