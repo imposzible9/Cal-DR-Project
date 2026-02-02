@@ -13,7 +13,9 @@ export const API_CONFIG = {
     // Base URLs for each service
     RATINGS_API: `${UNIFIED_API_URL}/ratings`,
     EARNINGS_API: `${UNIFIED_API_URL}/earnings`,
+    EARNINGS_API: `${UNIFIED_API_URL}/earnings`,
     NEWS_API: `${UNIFIED_API_URL}/news`,
+    CALCULATION_API: `${UNIFIED_API_URL}/calculation`,
 
     // Full endpoint paths
     endpoints: {
@@ -42,6 +44,12 @@ export const API_CONFIG = {
             quote: (symbol) => `${UNIFIED_API_URL}/news/api/finnhub/quote/${symbol}`,
             companyNews: (symbol) => `${UNIFIED_API_URL}/news/api/finnhub/company-news/${symbol}`,
             stockOverview: (symbol) => `${UNIFIED_API_URL}/news/api/stock/overview/${symbol}`,
+        },
+
+        // Calculation endpoints
+        calculation: {
+            base: `${UNIFIED_API_URL}/calculation`,
+            dr: (symbol) => `${UNIFIED_API_URL}/calculation/api/calc/dr/${encodeURIComponent(symbol)}`,
         }
     }
 };

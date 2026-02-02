@@ -23,6 +23,7 @@ import asyncio
 import ratings_api_dynamic
 import earnings_api
 import news_api
+import dr_calculation_api
 
 
 @asynccontextmanager
@@ -50,6 +51,11 @@ async def lifespan(app: FastAPI):
     await news_api.init_client()
     print("[OK] News API: Ready")
     
+    # ========== Initialize Calculation API ==========
+    print("[INIT] Initializing Calculation API...")
+    await dr_calculation_api.init_service()
+    print("[OK] Calculation API: Ready")
+    
     print("=" * 60)
     print("[INFO] Server is running on http://localhost:8000")
     print("")
@@ -57,6 +63,7 @@ async def lifespan(app: FastAPI):
     print("  - Ratings: http://localhost:8000/ratings/...")
     print("  - Earnings: http://localhost:8000/earnings/...")
     print("  - News: http://localhost:8000/news/...")
+    print("  - Calculation: http://localhost:8000/calculation/...")
     print("  - API Docs: http://localhost:8000/docs")
     print("=" * 60)
     
@@ -64,6 +71,7 @@ async def lifespan(app: FastAPI):
     
     print("[SHUTDOWN] Shutting down Cal-DR Unified API Server...")
     await news_api.close_client()
+    await dr_calculation_api.shutdown_service()
 
 
 # Create main app
@@ -93,6 +101,7 @@ for route in ratings_api_dynamic.app.routes:
 
 app.mount("/earnings", earnings_api.app)
 app.mount("/news", news_api.app)
+app.mount("/calculation", dr_calculation_api.app)
 
 
 # Root endpoint for health check
@@ -118,7 +127,8 @@ async def health_check():
         "services": {
             "ratings": "ok",
             "earnings": "ok",
-            "news": "ok"
+            "news": "ok",
+            "calculation": "ok"
         }
     }
 

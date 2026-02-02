@@ -213,10 +213,10 @@ async def load_cache_from_file():
             _prune_expired_inplace()
             _prune_to_limit_inplace()
 
-        print(f"✅ Loaded cache file: {CACHE_FILE} items={len(_price_cache)}")
+        print(f"[INFO] Loaded cache file: {CACHE_FILE} items={len(_price_cache)}")
 
     except Exception as e:
-        print("⚠️ Cache load failed:", e)
+        print("[WARN] Cache load failed:", e)
 
 def _write_cache_file(snapshot: dict):
     tmp = CACHE_FILE + ".tmp"
@@ -674,29 +674,42 @@ async def refresher_loop():
 
         await asyncio.sleep(REFRESH_INTERVAL_SECONDS)
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    global _tv_client, _idea_client
+# ✅ Global task reference
+_refresher_task: asyncio.Task | None = None
+
+async def init_service():
+    global _tv_client, _idea_client, _refresher_task
+    print("[CalcAPI] Initializing services...")
     _tv_client = httpx.AsyncClient(timeout=10)
     _idea_client = httpx.AsyncClient(timeout=20)
-
-    # ✅ โหลด cache จากไฟล์
+    
     await load_cache_from_file()
+    _refresher_task = asyncio.create_task(refresher_loop())
+    print("[CalcAPI] Services ready.")
 
-    task = asyncio.create_task(refresher_loop())
+async def shutdown_service():
+    global _tv_client, _idea_client, _refresher_task
+    print("[CalcAPI] Shutting down services...")
+    
+    if _refresher_task:
+        _refresher_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await _refresher_task
+    
+    if _cache_dirty:
+        await save_cache_to_file()
+        
+    if _tv_client: await _tv_client.aclose()
+    if _idea_client: await _idea_client.aclose()
+    print("[CalcAPI] Shutdown complete.")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await init_service()
     try:
         yield
     finally:
-        task.cancel()
-        with suppress(asyncio.CancelledError):
-            await task
-
-        # ✅ เซฟก่อนปิด
-        if _cache_dirty:
-            await save_cache_to_file()
-
-        await _tv_client.aclose()
-        await _idea_client.aclose()
+        await shutdown_service()
 
 app.router.lifespan_context = lifespan
 

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, useTransition, useRef } from "react";
 import swipeImg from "../assets/swipe.png";
+import { trackPageView, trackSearch } from "../utils/tracker";
 
 const API_URL = import.meta.env.VITE_DR_LIST_API;
 const CACHE_KEY = "dr_cache_v3";
@@ -192,9 +193,20 @@ export default function DRList() {
 
   /* SEARCH DEBOUNCE */
   useEffect(() => {
-    const t = setTimeout(() => setSearch(searchTerm.trim()), 250);
+    const t = setTimeout(() => {
+      const trimmed = searchTerm.trim();
+      setSearch(trimmed);
+      if (trimmed) {
+        trackSearch(trimmed);
+      }
+    }, 250);
     return () => clearTimeout(t);
   }, [searchTerm]);
+
+  /* TRACK PAGE VIEW */
+  useEffect(() => {
+    trackPageView('DR List');
+  }, []);
 
   /* LOAD WATCHLIST */
   useEffect(() => {
@@ -395,6 +407,7 @@ export default function DRList() {
                     onClick={() => {
                       setCountryFilter(opt.code);
                       setShowCountryMenu(false);
+                      trackFilter('country', opt.code);
                     }}
                     className={`flex w-full items-center justify-between px-3 sm:px-4 py-1 sm:py-1.5 text-left text-[11px] sm:text-xs md:text-sm transition-colors ${opt.code === countryFilter ? "bg-[#EEF2FF] text-[#0B102A] font-semibold" : "text-gray-700 hover:bg-gray-50"
                       }`}
@@ -409,7 +422,11 @@ export default function DRList() {
 
           <button
             type="button"
-            onClick={() => setDrFilter((prev) => (prev === "watchlist" ? "all" : "watchlist"))}
+            onClick={() => {
+              const newFilter = drFilter === "watchlist" ? "all" : "watchlist";
+              setDrFilter(newFilter);
+              trackFilter('dr_filter', newFilter);
+            }}
             className={`flex items-center gap-1.5 sm:gap-2 rounded-xl px-2.5 sm:px-3 md:px-4 py-1.5 sm:py-2 text-[11px] sm:text-xs md:text-sm font-medium shadow-sm border transition-colors justify-center shrink-0 h-[35px] md:h-[37.33px] whitespace-nowrap ${drFilter === "watchlist"
               ? "bg-[#0B102A] border-[#0B102A] text-white"
               : "bg-white border-gray-200 text-gray-700 hover:bg-gray-50"
@@ -632,7 +649,7 @@ export default function DRList() {
     const rowBg = index % 2 === 0 ? "bg-white" : "bg-[#F5F5F5]";
 
     return (
-      <tr key={row.dr} className={`${rowBg} cursor-pointer`} onClick={() => setDetailRow(row)} style={{ height: "52px" }}>
+      <tr key={row.dr} className={`${rowBg} cursor-pointer`} onClick={() => { trackStockView(row.dr, row.underlyingName); setDetailRow(row); }} style={{ height: "52px" }}>
         {visibleColumns.star && (
           <td className={`py-3 sm:py-4 px-1 text-center sticky left-0 ${rowBg}`} style={{ width: "35px", minWidth: "35px", zIndex: 20 }} onClick={(e) => { e.stopPropagation(); toggleWatchlist(row.dr); }}>
             {isStarred(row.dr) ? <i className="bi bi-star-fill text-yellow-500 text-xs sm:text-sm"></i> : <i className="bi bi-star text-gray-400 text-xs sm:text-sm hover:text-yellow-500"></i>}
@@ -760,7 +777,7 @@ export default function DRList() {
               return (
                 <div
                   key={row.dr}
-                  onClick={() => setDetailRow(row)}
+                  onClick={() => { trackStockView(row.dr, row.underlyingName); setDetailRow(row); }}
                   className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 cursor-pointer hover:shadow-md transition-shadow"
                 >
                   <div className="flex items-start justify-between mb-3">
@@ -1104,10 +1121,10 @@ export default function DRList() {
                   </span>
                   <span
                     className={`text-right text-[10px] sm:text-[12px] font-semibold ${detailRow.change > 0
-                        ? "text-[#27AE60]"
-                        : detailRow.change < 0
-                          ? "text-[#E53935]"
-                          : "text-gray-700"
+                      ? "text-[#27AE60]"
+                      : detailRow.change < 0
+                        ? "text-[#E53935]"
+                        : "text-gray-700"
                       }`}
                   >
                     {detailRow.change > 0 ? "+" : ""}

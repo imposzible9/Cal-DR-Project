@@ -1,5 +1,5 @@
 # --- Intraday History API ---
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
@@ -502,6 +502,20 @@ def init_database():
         """)
 
         cur.execute("""
+            CREATE TABLE IF NOT EXISTS user_tracking (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT,
+                user_id TEXT,
+                event_type TEXT,
+                event_data TEXT,
+                page_path TEXT,
+                timestamp TEXT,
+                user_agent TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_rating_accuracy_ticker 
             ON rating_accuracy(ticker)
         """)
@@ -532,18 +546,18 @@ def init_database():
         con.commit()
         con.close()
         if needs_recreate:
-            print("✅ SQLite database recreated with new schema successfully.")
+            print("[INFO] SQLite database recreated with new schema successfully.")
         else:
-            print("✅ SQLite database and tables initialized successfully.")
+            print("[INFO] SQLite database and tables initialized successfully.")
     except Exception as e:
-        print(f"⚠️ Database initialization failed: {e}")
+        print(f"[ERROR] Database initialization failed: {e}")
         import traceback
         traceback.print_exc()
 
 def migrate_from_json_if_needed():
     """Reads data from old JSON files and loads it into the SQLite database."""
     if not os.path.exists(DB_FILE):
-        print("🤔 New database, migration not possible.")
+        print("[INFO] New database, migration not possible.")
         return
 
     try:
@@ -555,119 +569,48 @@ def migrate_from_json_if_needed():
 
         cur.execute("SELECT COUNT(*) FROM rating_stats")
         if cur.fetchone()[0] > 0:
-            print("✅ Database already contains data. Skipping migration.")
+            print("[INFO] Database already contains data. Skipping migration.")
             con.close()
             return
-        
-        print("🚚 Starting data migration from JSON to SQLite...")
 
-        if os.path.exists(OLD_STATS_FILE):
-            print(f"  -> Migrating {OLD_STATS_FILE}...")
-            with open(OLD_STATS_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                
-                # Group by ticker and timestamp
-                stats_by_ticker_timestamp = {}
-                for key, items in data.items():
-                    parts = key.split('_')
-                    ticker = "_".join(parts[:-1])
-                    timeframe = parts[-1]
-                    
-                    for item in items:
-                        timestamp = item["timestamp"]
-                        rating = item["rating"]
-                        key_ts = (ticker, timestamp)
-                        
-                        if key_ts not in stats_by_ticker_timestamp:
-                            stats_by_ticker_timestamp[key_ts] = {
-                                "ticker": ticker,
-                                "timestamp": timestamp,
-                                "daily_val": None,
-                                "daily_rating": None,
-                                "weekly_val": None,
-                                "weekly_rating": None
-                            }
-                        
-                        if timeframe == "1D":
-                            stats_by_ticker_timestamp[key_ts]["daily_rating"] = rating
-                        elif timeframe == "1W":
-                            stats_by_ticker_timestamp[key_ts]["weekly_rating"] = rating
-                
-                # Convert to list for insertion
-                stats_to_insert = []
-                for stats in stats_by_ticker_timestamp.values():
-                    stats_to_insert.append((
-                        stats["ticker"], stats["timestamp"],
-                        stats["daily_val"], stats["daily_rating"],
-                        stats["timestamp"] if stats["daily_rating"] else None,  # daily_changed_at
-                        stats["weekly_val"], stats["weekly_rating"],
-                        stats["timestamp"] if stats["weekly_rating"] else None,  # weekly_changed_at
-                        None  # at_price (unknown in old JSON)
-                    ))
-                
-                cur.executemany("""
-                    INSERT OR IGNORE INTO rating_stats 
-                    (ticker, timestamp, at_price, daily_val, daily_rating, daily_changed_at,
-                     weekly_val, weekly_rating, weekly_changed_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, stats_to_insert)
-            print(f"     Done migrating {len(stats_to_insert)} records from {OLD_STATS_FILE}.")
-            os.rename(OLD_STATS_FILE, f"{OLD_STATS_FILE}.migrated")
+        print("[INFO] Migrating data from JSON to SQLite...")
 
-        # Note: Old format has separate entries for daily and weekly, need to combine them
-        if os.path.exists(OLD_HISTORY_FILE):
-            print(f"  -> Migrating {OLD_HISTORY_FILE}...")
-            with open(OLD_HISTORY_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
+        # --- Migrate Ratings ---
+        if os.path.exists(CACHE_FILE):
+            try:
+                with open(CACHE_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
                 
-                # Group by ticker and timestamp
-                history_by_ticker_timestamp = {}
-                for key, items in data.items():
-                    parts = key.split('_')
-                    ticker = "_".join(parts[:-1])
-                    timeframe = parts[-1]
-                    
-                    for item in items:
-                        timestamp = item["timestamp"]
-                        rating = item["rating"]
-                        key_ts = (ticker, timestamp)
-                        
-                        if key_ts not in history_by_ticker_timestamp:
-                            history_by_ticker_timestamp[key_ts] = {
-                                "ticker": ticker,
-                                "timestamp": timestamp,
-                                "daily_rating": None,
-                                "weekly_rating": None
-                            }
-                        
-                        if timeframe == "1D":
-                            history_by_ticker_timestamp[key_ts]["daily_rating"] = rating
-                        elif timeframe == "1W":
-                            history_by_ticker_timestamp[key_ts]["weekly_rating"] = rating
-                
-                # Convert to list for insertion
-                history_to_insert = []
-                for hist in history_by_ticker_timestamp.values():
-                    history_to_insert.append((
-                        hist["ticker"], hist["timestamp"],
-                        None, hist["daily_rating"], None, hist["timestamp"] if hist["daily_rating"] else None,
-                        None, hist["weekly_rating"], None, hist["timestamp"] if hist["weekly_rating"] else None
+                # Use transaction for faster inserts
+                cur.execute("BEGIN TRANSACTION")
+                count = 0
+                for ticker, details in data.items():
+                    # Check if keys exist, handle missing keys gracefully
+                    cur.execute("""
+                        INSERT OR REPLACE INTO rating_stats 
+                        (ticker, daily_rating, weekly_rating, timestamp)
+                        VALUES (?, ?, ?, ?)
+                    """, (
+                        ticker,
+                        details.get("rating_daily"),
+                        details.get("rating_weekly"),
+                        details.get("timestamp", datetime.now().isoformat())
                     ))
-                
-                cur.executemany("""
-                    INSERT OR IGNORE INTO rating_history 
-                    (ticker, timestamp, daily_val, daily_rating, daily_prev, daily_changed_at,
-                     weekly_val, weekly_rating, weekly_prev, weekly_changed_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, history_to_insert)
-            print(f"     Done migrating {len(history_to_insert)} records from {OLD_HISTORY_FILE}.")
-            os.rename(OLD_HISTORY_FILE, f"{OLD_HISTORY_FILE}.migrated")
-        
-        con.commit()
-        print("🎉 Migration completed successfully!")
+                    count += 1
+                cur.execute("COMMIT")
+                print(f"[INFO] Migrated {count} records to rating_stats.")
+            except Exception as e:
+                print(f"[WARN] Failed to migrate cache file: {e}")
+
+        # --- Migrate Intraday History ---
+        # Assuming we don't need to migrate history from JSON as it's fetched live/daily 
+        # but if we did, logic would go here.
+
+        con.close()
+        print("[INFO] Migration completed successfully.")
 
     except Exception as e:
-        print(f"❌ Migration Error: {e}")
+        print(f"[ERROR] Migration Error: {e}")
         import traceback
         traceback.print_exc()
     finally:
@@ -2503,7 +2446,356 @@ async def lifespan(app: FastAPI):
     yield
 
 app = FastAPI(lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],    allow_headers=["*"],
+)
+
+# --- Tracking Models & Endpoints ---
+from pydantic import BaseModel
+
+class TrackingEvent(BaseModel):
+    session_id: str
+    user_id: str
+    event_type: str
+    event_data: dict
+    page_path: str
+    timestamp: str
+    user_agent: str
+
+@app.post("/api/track")
+async def track_event(event: TrackingEvent, req: Request):
+    """
+    Receive tracking events from frontend and save to user_tracking (realtime) 
+    and user_page_analytics (aggregated).
+    """
+    try:
+        # Only track page_view events for analytics
+        if event.event_type != 'page_view':
+            return {"status": "ok", "saved": False, "reason": "Only page_view events are tracked"}
+        
+        client_ip = req.client.host
+        page_path = event.page_path
+        
+        con = sqlite3.connect(DB_FILE)
+        cur = con.cursor()
+        
+        # 1. Save detailed event log to user_tracking (for time-based charts)
+        cur.execute("""
+            INSERT INTO user_tracking 
+            (session_id, user_id, event_type, event_data, page_path, timestamp, user_agent)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            event.session_id, 
+            event.user_id, 
+            event.event_type, 
+            json.dumps(event.event_data), 
+            page_path, 
+            event.timestamp, 
+            event.user_agent
+        ))
+
+        # 2. Update aggregated stats (for quick summary)
+        # Ensure table exists (just in case)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS user_page_analytics (
+                ip_address TEXT, 
+                page_path TEXT, 
+                view_count INTEGER,
+                PRIMARY KEY (ip_address, page_path)
+            )
+        """)
+        
+        cur.execute("""
+            INSERT INTO user_page_analytics (ip_address, page_path, view_count)
+            VALUES (?, ?, 1)
+            ON CONFLICT(ip_address, page_path) DO UPDATE SET
+                view_count = view_count + 1
+        """, (client_ip, page_path))
+        
+        con.commit()
+        con.close()
+        return {"status": "ok", "saved": True}
+    except Exception as e:
+        print(f"Tracking Error: {e}")
+        return {"status": "error", "message": str(e)}
+
+# --- Auth Models & Endpoints ---
+class AuthRequest(BaseModel):
+    password: str
+
+# Stats password from environment
+STATS_PASSWORD = os.getenv("STATS_PASSWORD", "ideatrade29169")
+
+# Simple in-memory storage for authorized IPs (with expiry)
+authorized_ips = {}  # {ip: expiry_timestamp}
+AUTH_SESSION_DURATION = 2 * 60 * 60  # 2 hours in seconds
+
+@app.post("/api/auth/verify")
+async def verify_auth(request: AuthRequest, req: Request):
+    """
+    Verify password and create session for the client IP.
+    """
+    client_ip = req.client.host
+    
+    if request.password == STATS_PASSWORD:
+        # Store IP with expiry time
+        expiry = datetime.now().timestamp() + AUTH_SESSION_DURATION
+        authorized_ips[client_ip] = expiry
+        return {"success": True, "message": "Authentication successful"}
+    else:
+        raise HTTPException(status_code=401, detail="Incorrect password")
+
+@app.get("/api/auth/check")
+async def check_auth(req: Request):
+    """
+    Check if the current IP has an active session.
+    """
+    client_ip = req.client.host
+    
+    if client_ip in authorized_ips:
+        expiry = authorized_ips[client_ip]
+        if datetime.now().timestamp() < expiry:
+            return {"authenticated": True}
+        else:
+            # Session expired, remove it
+            del authorized_ips[client_ip]
+    
+    return {"authenticated": False}
+
+# --- Analytics Endpoints ---
+
+@app.get("/api/analytics/summary")
+async def get_analytics_summary():
+    """
+    Get summary analytics using real data from user_tracking and user_page_analytics.
+    - Active Users: Distinct sessions in last 5 minutes
+    - Unique Visitors: Distinct IPs from user_page_analytics
+    - Total Visits: Sum of view counts
+    """
+    try:
+        con = sqlite3.connect(DB_FILE)
+        cur = con.cursor()
+        
+        # 1. Active Users (Live) - queries user_tracking for activity in last 10 minutes
+        # We use a slightly wider window (10 mins) to capture 'reading' users
+        active_users = 0
+        try:
+            cur.execute("""
+                SELECT COUNT(DISTINCT session_id) 
+                FROM user_tracking 
+                WHERE timestamp >= datetime('now', '-10 minutes')
+            """)
+            active_users = cur.fetchone()[0] or 0
+        except Exception:
+            active_users = 0
+
+        # 2. Unique Visitors & Total Visits - from user_tracking (Real detailed logs)
+        # matches "Total Users" requirement to count all distinct users from DB
+        unique_visitors = 0
+        total_visits = 0
+        
+        try:
+            # Check if table exists
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='user_tracking'")
+            if cur.fetchone():
+                # Count distinct User IDs (Total Users)
+                cur.execute("SELECT COUNT(DISTINCT user_id) FROM user_tracking")
+                unique_visitors = cur.fetchone()[0] or 0
+                
+                # Count total page views (Total Visits)
+                cur.execute("SELECT COUNT(*) FROM user_tracking WHERE event_type = 'page_view'")
+                total_visits = cur.fetchone()[0] or 0
+        except Exception:
+            pass
+
+        # 3. Top Pages
+        top_pages = []
+        try:
+            cur.execute("""
+                SELECT page_path, SUM(view_count) as total_views 
+                FROM user_page_analytics 
+                GROUP BY page_path 
+                ORDER BY total_views DESC
+                LIMIT 10
+            """)
+            top_pages = [{"page_path": row[0], "total_views": row[1]} for row in cur.fetchall()]
+        except Exception:
+            pass
+        
+        con.close()
+        
+        return {
+            "unique_visitors": unique_visitors,
+            "total_visits": total_visits,
+            "active_users": active_users,
+            "top_pages": top_pages
+        }
+    except Exception as e:
+        print(f"Analytics Summary Error: {e}")
+        return {"unique_visitors": 0, "total_visits": 0, "active_users": 0, "top_pages": []}
+
+@app.get("/api/analytics/weekly-trend")
+async def get_weekly_trend():
+    """
+    Get page view data for weekly trend chart using REAL data from user_tracking.
+    Shows 2 week ranges (Last week vs This week).
+    """
+    try:
+        con = sqlite3.connect(DB_FILE)
+        cur = con.cursor()
+        
+        # Define ranges
+        today = datetime.now()
+        
+        # Week 1: Last full week (Mon-Sun)
+        # Find defining dates
+        current_weekday = today.weekday() # Mon=0, Sun=6
+        
+        # This week start (Monday)
+        this_week_start = today - timedelta(days=current_weekday)
+        this_week_start = this_week_start.replace(hour=0, minute=0, second=0, microsecond=0)
+        
+        # Last week start (Monday) and end (Sun)
+        last_week_start = this_week_start - timedelta(days=7)
+        last_week_end = this_week_start - timedelta(seconds=1) # Sunday 23:59:59
+        
+        ranges = [
+            {"label": "Last Week", "start": last_week_start, "end": last_week_end},
+            {"label": "This Week", "start": this_week_start, "end": today}
+        ]
+        
+        page_map = {
+            'home': 'Home',
+            'news': 'News',
+            'drlist': 'DR List',
+            'caldr': 'CalDR',
+            'suggestion': 'Suggestion',
+            'calendar': 'Calendar',
+            'stats': 'Stats'
+        }
+        
+        result = []
+        
+        for r in ranges:
+            start_dt = r["start"]
+            end_dt = r["end"]
+            
+            # Format label: "DD Mon - DD Mon YY"
+            year_suffix = start_dt.strftime("%y")
+            date_str = f"{start_dt.strftime('%d %b')} - {end_dt.strftime('%d %b')} {year_suffix}"
+            
+            # Query user_tracking for this range
+            start_iso = start_dt.isoformat()
+            end_iso = end_dt.isoformat()
+            if not isinstance(end_iso, str):
+                 end_iso = str(end_iso)
+                 
+            # Query pages. Note: timestamps stored from frontend are usually ISO UTC or local.
+            # Comparison with string usually works for ISO format.
+            cur.execute("""
+                SELECT page_path, COUNT(*) as count
+                FROM user_tracking
+                WHERE timestamp >= ? AND timestamp <= ?
+                AND event_type = 'page_view'
+                GROUP BY page_path
+            """, (start_iso, end_iso))
+            
+            rows = cur.fetchall()
+            
+            data_point = {"date": date_str}
+            
+            # Initialize all pages to 0
+            for p_name in page_map.values():
+                if p_name != 'Stats':
+                    data_point[p_name] = 0
+            
+            for row in rows:
+                raw_path = row[0].strip().lower()
+                parts = [p for p in raw_path.split('/') if p]
+                page_path = parts[-1] if parts else 'home'
+                
+                page_name = page_map.get(page_path, page_path.title())
+                
+                if page_name == 'Stats':
+                    continue
+                    
+                if page_name in data_point:
+                    data_point[page_name] += row[1]
+                else:
+                    data_point[page_name] = row[1]
+            
+            result.append(data_point)
+            
+        con.close()
+        return result
+
+    except Exception as e:
+        print(f"Weekly Trend Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return []
+
+@app.get("/api/analytics/monthly-trend")
+async def get_monthly_trend():
+    """
+    Get page view data for monthly trend chart.
+    Shows current month with page distribution (e.g., "Jan 2026").
+    """
+    try:
+        con = sqlite3.connect(DB_FILE)
+        cur = con.cursor()
+        
+        # Get all page views aggregated
+        cur.execute("""
+            SELECT page_path, SUM(view_count) as views
+            FROM user_page_analytics 
+            GROUP BY page_path
+        """)
+        
+        rows = cur.fetchall()
+        con.close()
+        
+        # Map page paths to names and aggregate totals
+        page_map = {
+            'home': 'Home',
+            'news': 'News',
+            'drlist': 'DR List',
+            'caldr': 'CalDR',
+            'suggestion': 'Suggestion',
+            'calendar': 'Calendar',
+            'stats': 'Stats'
+        }
+        
+        # Calculate totals per page
+        page_totals = {}
+        for row in rows:
+            raw_path = row[0].strip().lower()
+            parts = [p for p in raw_path.split('/') if p]
+            page_path = parts[-1] if parts else 'home'
+            if not page_path:
+                page_path = 'home'
+            views = row[1]
+            
+            page_name = page_map.get(page_path, page_path.title())
+            # Skip stats page from trend
+            if page_name == 'Stats':
+                continue
+                
+            if page_name not in page_totals:
+                page_totals[page_name] = 0
+            page_totals[page_name] += views
+        
+        # Generate single month data point
+        today = datetime.now()
+        month_str = today.strftime("%b %Y")  # e.g., "Jan 2026"
+        
+        data_point = {"date": month_str}
+        for page_name, total in page_totals.items():
+            data_point[page_name] = total
+        
+        return [data_point]
+    except Exception as e:
+        print(f"Monthly Trend Error: {e}")
+        return []
 
 # Simple health check endpoint
 @app.get("/")
@@ -3032,10 +3324,10 @@ def populate_accuracy_on_startup():
         con.commit()
         con.close()
         
-        print(f"[Accuracy Startup] ✅ Completed: {populated_count} records populated, {error_count} errors")
+        print(f"[Accuracy Startup] [INFO] Completed: {populated_count} records populated, {error_count} errors")
         
     except Exception as e:
-        print(f"[Accuracy Startup] ❌ Fatal error: {e}")
+        print(f"[Accuracy Startup] [ERROR] Fatal error: {e}")
         import traceback
         traceback.print_exc()
         if 'con' in locals() and con:

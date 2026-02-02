@@ -71,10 +71,10 @@ const analyzeSentiment = (text) => {
     "scrapped", "shut", "close", "halt", "suspend", "ban", "lawsuit", "sue", "probe", "investigation", "breach", "hack", "attack", "debt", "bankrupt", "layoff", "fire", "terminate", "delay", "struggle",
     "punish", "penalty", "fine", "slow", "slower", "pressure", "concern", "problem", "trouble", "hard", "tough", "hurt", "damage", "hit", "weigh", "impact"
   ];
-  
+
   const posCount = positive.filter(w => lower.includes(w)).length;
   const negCount = negative.filter(w => lower.includes(w)).length;
-  
+
   if (posCount > negCount) return "positive";
   if (negCount > posCount) return "negative";
   return "neutral";
@@ -90,7 +90,7 @@ const NewsCard = ({ ticker, quote, news }) => {
     // If Stock is Green but Text says Negative -> Override to Neutral (or Positive if weak negative)
     // This prevents the "Green Price / Red Border" confusion
     if (isPositive && textSentiment === "negative") {
-      sentiment = "neutral"; 
+      sentiment = "neutral";
     }
     // If Stock is Red but Text says Positive -> Override to Neutral
     if (!isPositive && textSentiment === "positive") {
@@ -194,10 +194,10 @@ const News = () => {
         setMarketNews(cached.marketNews);
         setDefaultUpdates(cached.defaultUpdates);
         // If cache is fresh, stop here (optional: can always revalidate if you want "live" feel)
-        const isFresh = getCache(CACHE_KEY_HOME); 
+        const isFresh = getCache(CACHE_KEY_HOME);
         if (isFresh) {
-            setLoadingHome(false);
-            return;
+          setLoadingHome(false);
+          return;
         }
         // If stale, we continue to fetch but don't show full loading spinner if we have data
       } else {
@@ -256,7 +256,7 @@ const News = () => {
         if (mounted) {
           setDefaultUpdates(updates);
           setMarketNews(combinedNews);
-          
+
           // Save to Cache
           setCache(CACHE_KEY_HOME, {
             marketNews: combinedNews,
@@ -291,17 +291,17 @@ const News = () => {
         setQuote(cached.quote);
         setSymbolNews(cached.symbolNews);
         setErrorSearch("");
-        
+
         // If fresh, stop
         if (getCache(cacheKey)) {
-            setLoadingSearch(false);
-            return;
+          setLoadingSearch(false);
+          return;
         }
         // If stale, keep fetching in background
       } else {
         setLoadingSearch(true);
       }
-      
+
       setErrorSearch("");
 
       // Determine query symbol (append .BK for Thai stocks)
@@ -317,7 +317,7 @@ const News = () => {
           axios.get(`${API_BASE}/api/finnhub/company-news/${encodeURIComponent(querySymbol)}`, { params: { hours: 168, limit: 30 } }),
         ]);
         if (!mounted) return;
-        
+
         const newQuote = qRes.data || null;
         const newNews = nRes.data?.news || [];
 
@@ -333,12 +333,12 @@ const News = () => {
       } catch (e) {
         console.error("Search error:", e);
         if (!mounted) return;
-        
+
         // Only show error if we don't have cached data displayed
         if (!cached) {
-            setErrorSearch("ไม่สามารถดึงข้อมูลได้ หรือ Symbol ไม่ถูกต้อง");
-            setQuote(null);
-            setSymbolNews([]);
+          setErrorSearch("ไม่สามารถดึงข้อมูลได้ หรือ Symbol ไม่ถูกต้อง");
+          setQuote(null);
+          setSymbolNews([]);
         }
       } finally {
         if (mounted) setLoadingSearch(false);
@@ -352,14 +352,14 @@ const News = () => {
   const topStorySentiment = useMemo(() => {
     if (!topStory) return "neutral";
     const textSentiment = analyzeSentiment(topStory.news.title + " " + topStory.news.summary);
-    
+
     // Conflict Resolution for Top Story
     if (topStory.quote) {
       const isPositive = topStory.quote.change_pct >= 0;
       if (isPositive && textSentiment === "negative") return "neutral";
       if (!isPositive && textSentiment === "positive") return "neutral";
     }
-    
+
     return textSentiment;
   }, [topStory]);
 

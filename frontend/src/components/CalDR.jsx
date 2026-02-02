@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState, useRef } from "react";
 import { trackPageView, trackDRSelection, trackCalculation } from "../utils/tracker";
+import { API_CONFIG } from "../config/api";
 
 // const API_BASE = "http://172.17.1.85:8333";
 const API_BASE = import.meta.env.VITE_DR_LIST_BASE_API; // DR snapshot (use same as DRList)
-const CALC_API_BASE = import.meta.env.VITE_CAL_API; // DR real-time calc
 
 const EXCHANGE_CURRENCY_MAP = {
   "The Nasdaq Global Select Market": "USD",
@@ -99,7 +99,7 @@ export default function DRCal() {
       setLoadingRealtime(true);
 
       const res = await fetch(
-        `${CALC_API_BASE}/api/calc/dr/${encodeURIComponent(drSymbol)}`
+        API_CONFIG.endpoints.calculation.dr(drSymbol)
       );
       if (!res.ok) throw new Error("Failed realtime calc");
 
@@ -205,20 +205,7 @@ export default function DRCal() {
   }, []);
 
   // Track Calculation
-  useEffect(() => {
-    if (selectedDR && hasInput && fairMidTHB > 0) {
-      const timeout = setTimeout(() => {
-        trackCalculation(
-          selectedDR.symbol,
-          underlyingValue,
-          fxTHBPerUnderlying,
-          fairBidTHB.toFixed(2),
-          fairAskTHB.toFixed(2)
-        );
-      }, 2000);
-      return () => clearTimeout(timeout);
-    }
-  }, [selectedDR, hasInput, fairMidTHB, fairBidTHB, fairAskTHB, underlyingValue, fxTHBPerUnderlying]);
+
 
   // ================== format numbers ==================
   const fmtNum = (n, d = 2) =>
@@ -310,6 +297,22 @@ export default function DRCal() {
   );
 
   const hasInput = Number(underlyingValue) > 0 && Number(fxTHBPerUnderlying) > 0 && ratioDR > 0;
+
+  // Track Calculation
+  useEffect(() => {
+    if (selectedDR && hasInput && fairMidTHB > 0) {
+      const timeout = setTimeout(() => {
+        trackCalculation(
+          selectedDR.symbol,
+          underlyingValue,
+          fxTHBPerUnderlying,
+          fairBidTHB.toFixed(2),
+          fairAskTHB.toFixed(2)
+        );
+      }, 2000);
+      return () => clearTimeout(timeout);
+    }
+  }, [selectedDR, hasInput, fairMidTHB, fairBidTHB, fairAskTHB, underlyingValue, fxTHBPerUnderlying]);
 
   // ================== Suggest ==================
   const filteredSuggest = useMemo(() => {

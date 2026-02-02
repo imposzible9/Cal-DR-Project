@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import axios from "axios";
 import { trackPageView, trackFilter, trackSearch } from "../utils/tracker";
+import { API_CONFIG } from "../config/api";
 
 // ================= CONSTANTS =================
 const countryOptions = [
@@ -348,7 +349,7 @@ export default function Calendar() {
         let finalData = [];
         let apiUpdateTime = null;
         // ดึงข้อมูลจาก backend ตาม country ที่เลือก (หรือ All)
-        const res = await axios.get(`${import.meta.env.VITE_EARNINGS_API}?country=${country}`, { signal: controller.signal });
+        const res = await axios.get(API_CONFIG.endpoints.earnings.get(country), { signal: controller.signal });
         const responseData = res.data;
         finalData = flattenData(responseData);
         if (responseData.updated_at) {
@@ -398,7 +399,7 @@ export default function Calendar() {
 
     const connectSSE = () => {
       try {
-        eventSource = new EventSource(import.meta.env.VITE_EARNINGS_STREAM_API);
+        eventSource = new EventSource(API_CONFIG.endpoints.earnings.stream);
 
         eventSource.onopen = () => {
           reconnectAttempts = 0;
