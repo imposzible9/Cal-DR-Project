@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, useTransition, useRef } from "react";
 import swipeImg from "../assets/swipe.png";
-import { trackPageView, trackSearch } from "../utils/tracker";
+import { trackPageView, trackSearch, trackFilter, trackStockView } from "../utils/tracker";
 
 const API_URL = import.meta.env.VITE_DR_LIST_API;
 const CACHE_KEY = "dr_cache_v3";
@@ -378,7 +378,7 @@ export default function DRList() {
   const renderControlBar = () => {
     return (
       <div className="flex flex-col gap-2 sm:gap-3 md:gap-4 mb-3 md:mb-4 lg:flex-row lg:items-center lg:justify-between lg:gap-4">
-        <div className="flex items-center gap-1.5 sm:gap-2 md:gap-3 w-full lg:w-auto overflow-x-auto pb-1">
+        <div className="flex items-center gap-1.5 sm:gap-2 md:gap-3 w-full lg:w-auto overflow-visible pb-1">
           <div className="relative z-[200] flex-1 sm:flex-initial sm:w-auto min-w-[140px]" ref={countryDropdownRef} style={{ isolation: 'isolate', overflow: 'visible' }}>
             <button
               type="button"
