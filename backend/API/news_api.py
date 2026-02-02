@@ -74,14 +74,14 @@ def _mix_news_sources(items: list[dict], limit: int) -> list[dict]:
         else:
             other_items.append(item)
             
-    # Interleave: 2 others, 1 yahoo
+    # Interleave: 4 others, 1 yahoo
     result = []
     y_idx = 0
     o_idx = 0
     
     while len(result) < limit and (y_idx < len(yahoo_items) or o_idx < len(other_items)):
-        # Add up to 2 others
-        for _ in range(2):
+        # Add up to 4 others
+        for _ in range(4):
             if o_idx < len(other_items):
                 result.append(other_items[o_idx])
                 o_idx += 1
@@ -237,6 +237,39 @@ async def fetch_news(symbol: str, limit: int, language: str | None, hours: int, 
 
     return _mix_news_sources(normalized, limit)
 
+def _clean_text(text: str) -> str:
+    if not text:
+        return ""
+    
+    # 1. Fix common Mojibake (UTF-8 interpreted as Windows-1252)
+    # This happens often with RSS feeds not declaring charset correctly or being double-encoded
+    replacements = {
+        "â": "'",
+        "â\x80\x99": "'",
+        "â": '"',
+        "â\x80\x9c": '"',
+        "â": '"',
+        "â\x80\x9d": '"',
+        "â": "-",
+        "â\x80\x93": "-",
+        "â": "-",
+        "â\x80\x94": "-",
+        "â¦": "...",
+        "â\x80\xa6": "...",
+        "â\x82\xac": "€",  # Euro sign
+        "Â": "",           # Non-breaking space artifact
+    }
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+
+    # 2. Decode HTML entities
+    text = text.replace("&nbsp;", " ").replace("&quot;", '"').replace("&apos;", "'").replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+
+    # 3. Strip HTML tags
+    text = re.sub(r'<[^>]+>', '', text)
+    
+    return text.strip()
+
 async def _fetch_google_rss_items(query: str, limit: int, language: str | None, hours: int, country: str | None):
     assert _client is not None
     hl = "en-US"
@@ -271,19 +304,15 @@ async def _fetch_google_rss_items(query: str, limit: int, language: str | None, 
             since_dt = datetime.now(timezone.utc) - timedelta(hours=hours)
             
         for it in items:
-            title = (it.findtext("title") or "").strip()
+            raw_title = (it.findtext("title") or "")
+            raw_desc = (it.findtext("description") or "")
+            
+            title = _clean_text(raw_title)
+            summary = _clean_text(raw_desc)
+            
             link = (it.findtext("link") or "").strip()
             pub = it.findtext("pubDate")
             
-            # Extract description
-            raw_desc = (it.findtext("description") or "").strip()
-            summary = None
-            if raw_desc:
-                # Remove HTML tags (Google News RSS often has <a>...</a>)
-                summary = re.sub(r'<[^>]+>', '', raw_desc).strip()
-                # Decode HTML entities if present (basic cleanup)
-                summary = summary.replace("&nbsp;", " ").replace("&quot;", '"').replace("&apos;", "'").replace("&amp;", "&")
-
             source_el = it.find("source")
             source = source_el.text.strip() if source_el is not None and source_el.text else None
             published_at = pub
@@ -514,6 +543,7 @@ async def get_market_home(limit: int = 20):
     
     return payload
 
+@app.get("/api/news/{symbol}")
 async def get_news(
     symbol: str,
     limit: int = Query(10, ge=1, le=50),

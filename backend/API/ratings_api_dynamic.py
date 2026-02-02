@@ -116,6 +116,9 @@ OLD_CACHE_FILE = "ratings_cache_smart.json"
 OLD_STATS_FILE = "ratings_stats.json" 
 OLD_HISTORY_FILE = "ratings_history.json"
 
+# Alias for backward compatibility
+CACHE_FILE = OLD_CACHE_FILE
+
 # --- Mock Data Config ---
 USE_MOCK_DATA = False  # Enable mock rating history from AAPL JSON file 
 
@@ -504,8 +507,8 @@ def init_database():
         cur.execute("""
             CREATE TABLE IF NOT EXISTS user_tracking (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ip_address TEXT,
                 session_id TEXT,
-                user_id TEXT,
                 event_type TEXT,
                 event_data TEXT,
                 page_path TEXT,
@@ -514,6 +517,38 @@ def init_database():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        # Check and migrate user_tracking if it has old schema (user_id instead of ip_address)
+        try:
+            cur.execute("PRAGMA table_info(user_tracking)")
+            ut_cols = [r[1] for r in cur.fetchall()]
+            if "user_id" in ut_cols:
+                print("⚠️ Migrating user_tracking to match user_behavior schema...")
+                cur.execute("ALTER TABLE user_tracking RENAME TO user_tracking_old")
+                cur.execute("""
+                    CREATE TABLE user_tracking (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        ip_address TEXT,
+                        session_id TEXT,
+                        event_type TEXT,
+                        event_data TEXT,
+                        page_path TEXT,
+                        timestamp TEXT,
+                        user_agent TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                # Restore data (set ip_address to 'migrated')
+                cur.execute("""
+                    INSERT INTO user_tracking (session_id, event_type, event_data, page_path, timestamp, user_agent, created_at, ip_address)
+                    SELECT session_id, event_type, event_data, page_path, timestamp, user_agent, created_at, 'migrated'
+                    FROM user_tracking_old
+                """)
+                cur.execute("DROP TABLE user_tracking_old")
+                print("   -> user_tracking migrated successfully.")
+        except Exception as e:
+            print(f"⚠️ Error check/migrating user_tracking: {e}")
+
 
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_rating_accuracy_ticker 
@@ -2468,9 +2503,7 @@ async def track_event(event: TrackingEvent, req: Request):
     and user_page_analytics (aggregated).
     """
     try:
-        # Only track page_view events for analytics
-        if event.event_type != 'page_view':
-            return {"status": "ok", "saved": False, "reason": "Only page_view events are tracked"}
+        # Note: logic aligned with user_behavior table (capturing IP, no user_id)
         
         client_ip = req.client.host
         page_path = event.page_path
@@ -2478,14 +2511,52 @@ async def track_event(event: TrackingEvent, req: Request):
         con = sqlite3.connect(DB_FILE)
         cur = con.cursor()
         
-        # 1. Save detailed event log to user_tracking (for time-based charts)
+
+
+
+        # Check for duplicate events (Strict Debounce - Sequential)
+        # If the latest event for this session is IDENTICAL to the current one, ignore it.
+        try:
+            cur.execute("""
+                SELECT event_data 
+                FROM user_tracking 
+                WHERE session_id = ? 
+                AND event_type = ? 
+                AND page_path = ? 
+                ORDER BY id DESC 
+                LIMIT 1
+            """, (event.session_id, event.event_type, page_path))
+            
+            last_record = cur.fetchone()
+            if last_record:
+                last_data_str = last_record[0]
+                
+                # Normalize JSON for comparison (sort keys)
+                try:
+                    current_data_str = json.dumps(event.event_data, sort_keys=True)
+                    # Try to parse last_data_str to re-dump with sort_keys=True to be sure
+                    last_data_obj = json.loads(last_data_str)
+                    last_data_normalized = json.dumps(last_data_obj, sort_keys=True)
+                except Exception:
+                    # Fallback to simple string comparison if parsing fails
+                    current_data_str = json.dumps(event.event_data)
+                    last_data_normalized = last_data_str
+
+                if last_data_normalized == current_data_str:
+                     # It's a duplicate (sequential), ignore it regardless of time
+                     con.close()
+                     return {"status": "ok", "saved": False, "reason": "Duplicate event ignored (sequential match)"}
+        except Exception as e:
+            print(f"⚠️ Error checking duplicates: {e}")
+
+        # 1. Save detailed event log to user_tracking
         cur.execute("""
             INSERT INTO user_tracking 
-            (session_id, user_id, event_type, event_data, page_path, timestamp, user_agent)
+            (ip_address, session_id, event_type, event_data, page_path, timestamp, user_agent)
             VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (
+            client_ip,
             event.session_id, 
-            event.user_id, 
             event.event_type, 
             json.dumps(event.event_data), 
             page_path, 
@@ -2598,7 +2669,7 @@ async def get_analytics_summary():
             cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='user_tracking'")
             if cur.fetchone():
                 # Count distinct User IDs (Total Users)
-                cur.execute("SELECT COUNT(DISTINCT user_id) FROM user_tracking")
+                cur.execute("SELECT COUNT(DISTINCT ip_address) FROM user_tracking")
                 unique_visitors = cur.fetchone()[0] or 0
                 
                 # Count total page views (Total Visits)

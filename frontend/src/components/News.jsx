@@ -82,59 +82,53 @@ const analyzeSentiment = (text) => {
 
 const NewsCard = ({ ticker, quote, news }) => {
   const isPositive = quote && quote.change_pct >= 0;
-  const textSentiment = analyzeSentiment(news.title + " " + news.summary);
 
-  // Logic to resolve conflict between Price and Text Sentiment
-  let sentiment = textSentiment;
-  if (quote) {
-    // If Stock is Green but Text says Negative -> Override to Neutral (or Positive if weak negative)
-    // This prevents the "Green Price / Red Border" confusion
-    if (isPositive && textSentiment === "negative") {
-      sentiment = "neutral";
-    }
-    // If Stock is Red but Text says Positive -> Override to Neutral
-    if (!isPositive && textSentiment === "positive") {
-      sentiment = "neutral";
-    }
-  }
+  // Check if news object is valid to prevent crashes
+  if (!news) return null;
 
   // Define classes based on sentiment
-  const containerClasses = "bg-white rounded-xl border border-gray-200 p-6 hover:shadow-md transition-shadow flex flex-col md:flex-row gap-6 items-start";
+  const containerClasses = "bg-white rounded-xl border border-gray-200 p-4 hover:shadow-md transition-shadow flex flex-row gap-4 items-stretch h-full";
 
   return (
-    <a href={news.url} target="_blank" rel="noreferrer" className="block group">
+    <a href={news.url} target="_blank" rel="noreferrer" className="block group h-full">
       <div className={containerClasses}>
         {ticker && quote && (
-          <div className="flex-shrink-0 w-full md:w-[120px] bg-[#F9FAFB] rounded-lg border border-gray-100 p-3 flex flex-col items-center justify-center text-center gap-2">
-            <div className="w-10 h-10 rounded-full bg-white/80 flex items-center justify-center overflow-hidden">
+          <div className="flex-shrink-0 w-[85px] sm:w-[100px] bg-[#F3F4F6] rounded-xl border border-gray-200 p-2 flex flex-col items-center justify-center text-center gap-1">
+            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-white flex items-center justify-center overflow-hidden shadow-sm p-1">
               {quote.logo_url ? (
                 <img src={quote.logo_url} alt={ticker} className="w-full h-full object-contain" />
               ) : (
                 <span className="text-sm font-bold text-gray-900">{ticker[0]}</span>
               )}
             </div>
-            <div className="text-sm font-bold text-gray-900">{ticker}</div>
-            <div className={`text-xs font-bold ${isPositive ? 'text-[#137333]' : 'text-[#C5221F]'}`}>
-              {isPositive ? '+' : ''}{quote.change_pct?.toFixed(2)}%
+            <div className="flex flex-col gap-0.5">
+              <div className="text-xs sm:text-sm font-bold text-gray-900 leading-tight">{ticker}</div>
+              <div className={`text-[10px] sm:text-xs font-bold ${isPositive ? 'text-[#16A34A]' : 'text-[#DC2626]'}`}>
+                {isPositive ? '+' : ''}{quote.change_pct?.toFixed(2)}%
+              </div>
             </div>
           </div>
         )}
 
         {/* Content */}
-        <div className="flex-1 min-w-0">
-          <h3 className="text-base font-bold text-gray-900 mb-2 group-hover:text-blue-600 transition-colors">
-            {news.title}
-          </h3>
-          <p className="text-sm text-gray-600 mb-3 line-clamp-2">
-            {news.summary}
-          </p>
-          <div className="flex items-center gap-2 text-xs text-gray-500">
+        <div className="flex-1 min-w-0 flex flex-col justify-between">
+          <div>
+            <h3 className="text-sm sm:text-[15px] font-bold text-gray-900 mb-1.5 leading-snug group-hover:text-blue-600 transition-colors line-clamp-2 break-words">
+              {news.title}
+            </h3>
+            <p className="text-xs sm:text-[13px] text-gray-500 line-clamp-3 leading-relaxed hidden sm:block break-words">
+              {news.summary}
+            </p>
+          </div>
+          <div className="flex items-center gap-2 text-[10px] sm:text-xs text-gray-400 mt-2">
             {news.source && (
-              <span className="inline-flex items-center px-2 py-0.5 rounded bg-gray-100 text-gray-800 font-medium">
-                {news.source}
-              </span>
+              <>
+                <span className="px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 font-medium">
+                  {news.source}
+                </span>
+                <span>•</span>
+              </>
             )}
-            {news.source && <span>•</span>}
             <span>{timeAgo(news.published_at)}</span>
           </div>
         </div>
@@ -148,7 +142,6 @@ const News = () => {
   const selected = searchParams.get("symbol") || "";
 
   const [search, setSearch] = useState(selected);
-  // const [selected, setSelected] = useState(""); 
   const [allSymbols, setAllSymbols] = useState([]);
   const [suggestions, setSuggestions] = useState([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -190,9 +183,9 @@ const News = () => {
     async function loadMarket() {
       // 1. Try Cache First (Stale-While-Revalidate)
       const cached = getCache(CACHE_KEY_HOME, true); // Get stale data if available
-      if (cached) {
+      if (cached && Array.isArray(cached.marketNews)) {
         setMarketNews(cached.marketNews);
-        setDefaultUpdates(cached.defaultUpdates);
+        setDefaultUpdates(cached.defaultUpdates || []);
         // If cache is fresh, stop here (optional: can always revalidate if you want "live" feel)
         const isFresh = getCache(CACHE_KEY_HOME);
         if (isFresh) {
@@ -212,7 +205,10 @@ const News = () => {
         if (!mounted) return;
         const enNews = enRes.data?.news || [];
         const thNews = thRes.data?.news || [];
-        const merged = [...enNews, ...thNews].sort((a, b) => {
+
+        // Filter out invalid items
+        const merged = [...enNews, ...thNews].filter(item => item && item.published_at);
+        merged.sort((a, b) => {
           const da = a.published_at ? new Date(a.published_at) : new Date(0);
           const db = b.published_at ? new Date(b.published_at) : new Date(0);
           return db - da;
@@ -240,7 +236,7 @@ const News = () => {
         });
 
         const updatesResults = await Promise.all(updatesPromises);
-        const updates = updatesResults.flat();
+        const updates = updatesResults.flat().filter(u => u && u.news);
 
         const toMs = (v) => typeof v === "number" ? v * 1000 : (new Date(v).getTime() || 0);
         updates.sort((a, b) => toMs(b.news.published_at) - toMs(a.news.published_at));
@@ -289,7 +285,7 @@ const News = () => {
       const cached = getCache(cacheKey, true); // Get stale data
       if (cached) {
         setQuote(cached.quote);
-        setSymbolNews(cached.symbolNews);
+        setSymbolNews(cached.symbolNews || []);
         setErrorSearch("");
 
         // If fresh, stop
@@ -348,53 +344,115 @@ const News = () => {
     return () => { mounted = false; };
   }, [selected, allSymbols]); // Added allSymbols dependency for safe match check
 
-  const topStory = useMemo(() => marketNews.find(item => item.ticker), [marketNews]);
-  const topStorySentiment = useMemo(() => {
-    if (!topStory) return "neutral";
-    const textSentiment = analyzeSentiment(topStory.news.title + " " + topStory.news.summary);
+  const topStory = useMemo(() => (marketNews || []).find(item => item.ticker && item.news), [marketNews]);
 
-    // Conflict Resolution for Top Story
-    if (topStory.quote) {
-      const isPositive = topStory.quote.change_pct >= 0;
-      if (isPositive && textSentiment === "negative") return "neutral";
-      if (!isPositive && textSentiment === "positive") return "neutral";
+  /* SEARCH LOGIC REFACTOR */
+  const performSearch = (overrideValue) => {
+    // If overrideValue is provided (e.g. from suggestion), use it.
+    // Otherwise use current search state.
+    const raw = (overrideValue !== undefined ? overrideValue : search).trim();
+
+    // Priority 1: If suggestions are visible and user hits enter without specific text,
+    // they might mean the first suggestion?
+    // Current logic: If Enter is pressed, check suggestions.
+    // BUT if we click the button, we probably just want to search the string.
+
+    // Let's stick to: If specific value passed, use it. If not, validate 'search' state.
+
+    if (!raw) {
+      setSearchParams({});
+      setErrorSearch("");
+      return;
     }
 
-    return textSentiment;
-  }, [topStory]);
+    // Validation
+    const isValid = /^[A-Za-z0-9]+$/.test(raw);
+    if (!isValid) {
+      setSearchParams({});
+      setErrorSearch("กรุณากรอกรหัส Underlying หรือ Ticker เป็นตัวอักษร/ตัวเลขเท่านั้น");
+      return;
+    }
 
+    setErrorSearch("");
+    setSearchParams({ symbol: raw.toUpperCase() });
+    setShowSuggestions(false);
+  };
 
   const onSearchKey = (e) => {
     if (e.key === "Enter") {
-      if (suggestions.length > 0) {
-        selectSuggestion(suggestions[0]);
-        return;
-      }
-
-      const raw = search.trim();
-      if (!raw) {
-        setSearchParams({});
-        setErrorSearch("");
-        return;
-      }
-      const isValid = /^[A-Za-z0-9]+$/.test(raw);
-      if (!isValid) {
-        setSearchParams({});
-        setErrorSearch("กรุณากรอกรหัส Underlying หรือ Ticker เป็นตัวอักษร/ตัวเลขเท่านั้น");
-        return;
-      }
-      setErrorSearch("");
-      setSearchParams({ symbol: raw.toUpperCase() });
-      setShowSuggestions(false);
+      performSearch();
     }
   };
 
+  /* SEARCH SUGGESTIONS LOGIC */
   const updateSuggestions = (value) => {
+    // Static fallback data to ensure dropdown always shows recommended stocks
+    const fallbackStatic = [
+      { symbol: "NVDA", name: "NVIDIA Corporation" },
+      { symbol: "GOOG", name: "Alphabet Inc." },
+      { symbol: "GOOGL", name: "Alphabet Inc." },
+      { symbol: "AAPL", name: "Apple Inc." },
+      { symbol: "MSFT", name: "Microsoft Corporation" },
+      { symbol: "AMZN", name: "Amazon.com Inc." },
+      { symbol: "META", name: "Meta Platforms Inc." },
+      { symbol: "TSLA", name: "Tesla Inc" }
+    ];
+
+    // Map for quick name lookup if API missing name
+    const nameMap = fallbackStatic.reduce((acc, curr) => {
+      acc[curr.symbol] = curr.name;
+      return acc;
+    }, {});
+
     if (value.length > 0) {
       const filtered = allSymbols.filter(s => s.symbol.startsWith(value));
       setSuggestions(filtered.slice(0, 100));
     } else {
-      setSuggestions(allSymbols.slice(0, 100));
+      let newsSuggestions = [];
+
+      // 1. Try Market News
+      if (marketNews && marketNews.length > 0) {
+        const uniqueTickers = new Set();
+        marketNews.forEach(item => {
+          if (item.ticker && !uniqueTickers.has(item.ticker)) {
+            uniqueTickers.add(item.ticker);
+            const enriched = allSymbols.find(s => s.symbol === item.ticker);
+            // Use Name from Map if available, else API, else Ticker
+            const name = nameMap[item.ticker] || (enriched ? enriched.name : item.ticker);
+
+            newsSuggestions.push({
+              symbol: item.ticker,
+              name: name,
+              logo: (item.quote && item.quote.logo_url) || (enriched ? enriched.logo : null),
+              exchange: enriched ? enriched.exchange : ''
+            });
+          }
+        });
+      }
+
+      if (newsSuggestions.length > 0) {
+        setSuggestions(newsSuggestions.slice(0, 10));
+      } else {
+        // 2. Try Default List with API data but FORCE Names from static map
+        let apiDefaults = DEFAULT_SYMBOLS.map(sym => {
+          const found = allSymbols.find(s => s.symbol === sym);
+          // Even if found in API, prefer our nice static name if available, or fallback to API name
+          const name = nameMap[sym] || (found ? found.name : sym);
+          // Use found logo or null
+          return {
+            symbol: sym,
+            name: name,
+            logo: found ? found.logo : null,
+            exchange: found ? found.exchange : ''
+          };
+        });
+
+        if (apiDefaults.length > 0) {
+          setSuggestions(apiDefaults);
+        } else {
+          setSuggestions(fallbackStatic);
+        }
+      }
     }
     setShowSuggestions(true);
   };
@@ -409,11 +467,7 @@ const News = () => {
     updateSuggestions(search);
   };
 
-  // Close suggestions when clicking outside would be ideal, 
-  // but for now we'll rely on selection or blur (careful with blur vs click)
-  // A simple way is to delay hiding on blur to allow click to register
   const handleSearchBlur = () => {
-    // Delay hiding to allow item click to register
     setTimeout(() => {
       setShowSuggestions(false);
     }, 200);
@@ -430,31 +484,38 @@ const News = () => {
     setSearch("");
     setSearchParams({});
     setSuggestions(allSymbols.slice(0, 100)); // Reset to default suggestions
-    setShowSuggestions(true); // Keep open or close? Usually close if cleared via X, but maybe user wants to search again.
-    // Let's close it if they click X, or maybe keep it open if they want to pick another?
-    // User said "Search" button clears it. 
-    // If I click clear, I probably want to reset.
-    // Let's keep it closed for now unless they focus again.
     setShowSuggestions(false);
   };
 
   let suggestionsContent = null;
   if (showSuggestions && suggestions.length > 0) {
     suggestionsContent = (
-      <div className="absolute top-full left-0 right-0 bg-white border border-gray-200 rounded-xl mt-1 shadow-lg z-50 max-h-60 overflow-y-auto">
+      <div className="absolute top-full left-0 right-0 bg-white border border-gray-200 rounded-xl mt-2 shadow-2xl z-50 max-h-[300px] overflow-y-auto custom-scrollbar">
+        <style>{`
+          .custom-scrollbar::-webkit-scrollbar {
+            width: 6px;
+          }
+          .custom-scrollbar::-webkit-scrollbar-track {
+            background: transparent;
+          }
+          .custom-scrollbar::-webkit-scrollbar-thumb {
+            background-color: #D1D5DB;
+            border-radius: 20px;
+          }
+        `}</style>
         {suggestions.map((s, i) => (
           <div
             key={i}
-            className="px-4 py-2 hover:bg-gray-50 cursor-pointer flex justify-between items-center border-b border-gray-50 last:border-0"
+            className="px-4 py-3 hover:bg-gray-50 cursor-pointer flex justify-between items-center transition-colors border-b border-gray-100 last:border-0"
             onClick={() => selectSuggestion(s)}
           >
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center overflow-hidden flex-shrink-0">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-9 h-9 rounded-full bg-white border border-gray-100 flex items-center justify-center overflow-hidden flex-shrink-0 shadow-sm">
                 {s.logo ? (
                   <img
                     src={s.logo}
                     alt={s.symbol}
-                    className="w-full h-full object-contain"
+                    className="w-full h-full object-contain p-1"
                     onError={(e) => {
                       e.target.style.display = 'none';
                       e.target.nextSibling.style.display = 'block';
@@ -468,59 +529,64 @@ const News = () => {
                   {s.symbol[0]}
                 </span>
               </div>
-              <span className="font-bold text-[#0B102A]">{s.symbol}</span>
-              {s.exchange && (
-                <span className="text-xs font-medium text-gray-400 border border-gray-200 rounded px-1.5 py-0.5 bg-gray-50">
-                  {s.exchange}
-                </span>
-              )}
+              <div className="flex flex-col">
+                <span className="font-bold text-[#0B102A] text-sm md:text-base leading-none">{s.symbol}</span>
+              </div>
             </div>
-            <span className="text-xs text-gray-500 truncate max-w-[150px]">{s.name}</span>
+            <span className="text-xs md:text-sm text-gray-400 font-medium truncate ml-4 text-right flex-shrink max-w-[180px]">
+              {s.name}
+            </span>
           </div>
         ))}
       </div>
     );
   }
 
-  console.log('suggestionsContent', suggestionsContent);
-
   return (
-    <div className="min-h-screen w-full bg-[#F5F5F5] flex justify-center">
-      <div className="w-full max-w-[1248px] px-4 md:px-8 flex flex-col h-full py-10">
+    <div className="min-h-screen w-full bg-[#FAFAFA] flex justify-center pb-20">
+      <div className="w-full max-w-[500px] md:max-w-[1248px] px-4 md:px-8 flex flex-col h-full py-6 md:py-10">
 
         {/* Header Section */}
-        <div className="flex flex-col md:flex-row md:items-start justify-between gap-3 sm:gap-6 mb-4 sm:mb-8">
+        <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-8">
           <div>
-            <h1 className="text-2xl sm:text-3xl font-bold mb-2 text-[#0B102A]">News</h1>
-            <p className="text-[#6B6B6B] text-xs sm:text-sm">Latest market updates, earnings reports, and insights for Underlying Assets</p>
+            <h1 className="text-3xl md:text-4xl font-bold mb-2 text-[#0B102A]">News</h1>
+            <p className="text-[#6B7280] text-sm md:text-base">Latest market updates, earnings reports, and insights for Underlying Assets</p>
           </div>
-          <div className="relative w-full md:w-[300px]">
+          <div className="relative w-full md:w-[320px]">
             <input
               type="text"
               value={search}
               onChange={handleSearchChange}
               onKeyDown={onSearchKey}
               onFocus={handleSearchFocus}
+              onClick={handleSearchFocus}
               onBlur={handleSearchBlur}
               placeholder="Search"
-              className="w-full bg-white pl-4 pr-10 py-2.5 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#0B102A] text-sm shadow-sm"
+              className="w-full bg-white pl-4 pr-10 py-2.5 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#0B102A] text-sm shadow-sm font-sans"
             />
             {selected ? (
-              <button onClick={clearSearch} className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600">
+              <button
+                onClick={clearSearch}
+                className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600 w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 transition-colors"
+                title="Clear Search"
+              >
                 <i className="bi bi-x-lg"></i>
               </button>
             ) : (
-              <i className="bi bi-search absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
+              <button
+                onClick={() => performSearch()}
+                className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-[#0B102A] w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 transition-colors"
+                title="Search"
+              >
+                <i className="bi bi-search" />
+              </button>
             )}
-
-            {/* Suggestions Dropdown */}
             {suggestionsContent}
-
           </div>
         </div>
 
         {/* Main Content */}
-        <div className="flex-1 pb-10">
+        <div className="flex-1 space-y-8">
 
           {selected ? (
             /* Search Result View */
@@ -563,7 +629,9 @@ const News = () => {
                     <div className="flex flex-col gap-4">
                       {symbolNews.length > 0 ? (
                         symbolNews.map((news, idx) => (
-                          <NewsCard key={idx} news={news} />
+                          <div key={idx} className="h-[120px]">
+                            <NewsCard news={news} />
+                          </div>
                         ))
                       ) : (
                         <div className="text-gray-500 text-center py-10">No news available</div>
@@ -575,57 +643,53 @@ const News = () => {
             </div>
           ) : (
             /* Home View */
-            <div className="space-y-8">
+            <div className="space-y-6">
               {/* Top Stories Banner */}
               <div className="space-y-4">
-                <h2 className="text-lg font-bold text-[#0B102A]">Top Stories</h2>
+                <h2 className="text-xl font-bold text-[#0B102A]">Top Stories</h2>
                 {loadingHome ? (
-                  <div className="animate-pulse h-48 bg-gray-200 rounded-2xl" />
-                ) : topStory ? (
+                  <div className="animate-pulse h-64 bg-gray-200 rounded-2xl" />
+                ) : topStory && topStory.news ? (
                   <a href={topStory.news.url} target="_blank" rel="noreferrer" className="block group">
-                    <div className="bg-[#0B102A] rounded-2xl px-5 sm:px-7 md:px-8 py-4 sm:py-5 md:py-6 text-white relative overflow-hidden shadow-lg">
-                      <div className="relative z-10 max-w-3xl pr-20 sm:pr-28 md:pr-36">
+                    <div className="bg-[#0B102A] rounded-2xl p-6 md:p-8 text-white relative overflow-hidden shadow-lg min-h-[280px] flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+                      <div className="relative z-10 flex-1 max-w-3xl">
                         {topStory.ticker && topStory.quote && (
-                          <div className="flex items-center gap-3 mb-3">
-                            <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center overflow-hidden">
+                          <div className="flex items-center gap-3 mb-4">
+                            <div className="w-6 h-6 rounded-full bg-white/20 flex items-center justify-center overflow-hidden">
                               {topStory.quote.logo_url ? (
                                 <img src={topStory.quote.logo_url} alt={topStory.ticker} className="w-full h-full object-contain" />
                               ) : (
-                                <span className="text-sm font-bold text-white">{topStory.ticker[0]}</span>
+                                <span className="text-[10px] font-bold text-white">{topStory.ticker[0]}</span>
                               )}
                             </div>
-                            <div>
-                              <div className="text-sm font-bold text-blue-200">{topStory.ticker}</div>
-                            </div>
+                            <span className="text-sm font-semibold text-blue-100">{topStory.ticker}</span>
                           </div>
                         )}
-                        <h3 className="text-lg md:text-xl font-semibold leading-snug mb-2 group-hover:text-blue-200 transition-colors">
+
+                        <h3 className="text-2xl md:text-3xl font-bold leading-tight mb-4 group-hover:text-blue-200 transition-colors break-words">
                           {topStory.news.title}
                         </h3>
-                        {topStory.news.summary && (
-                          <p className="text-sm text-blue-100/80 mb-3 line-clamp-2">
-                            {topStory.news.summary}
-                          </p>
-                        )}
-                        <div className="flex items-center gap-2 text-xs text-blue-200/80">
+                        <p className="text-blue-100/80 text-sm md:text-base line-clamp-2 mb-6 max-w-2xl break-words">
+                          {topStory.news.summary}
+                        </p>
+
+                        <div className="flex items-center gap-3 text-xs md:text-sm text-blue-200/60">
                           {topStory.news.source && (
-                            <span className="inline-flex items-center px-2 py-0.5 rounded bg-white/10 text-blue-100 font-medium border border-white/10">
+                            <span className="px-2 py-1 rounded bg-white/10 border border-white/5 font-medium text-blue-100">
                               {topStory.news.source}
                             </span>
                           )}
-                          {topStory.news.source && <span>•</span>}
+                          <span>•</span>
                           <span>{timeAgo(topStory.news.published_at)}</span>
                         </div>
                       </div>
-                      <div className="absolute right-4 sm:right-6 md:right-8 top-1/2 transform -translate-y-1/2">
+
+                      {/* Large Right Image/Logo Placeholder */}
+                      <div className="relative z-10 hidden md:flex w-[130px] h-[130px] bg-white rounded-xl items-center justify-center p-4 flex-shrink-0 shadow-2xl shadow-black/20">
                         {topStory.quote && topStory.quote.logo_url ? (
-                          <img
-                            src={topStory.quote.logo_url}
-                            alt="background"
-                            className="w-[64px] h-[64px] sm:w-[80px] sm:h-[80px] md:w-[96px] md:h-[96px] object-contain"
-                          />
+                          <img src={topStory.quote.logo_url} className="w-full h-full object-contain" alt="Logo" />
                         ) : (
-                          <i className="bi bi-newspaper text-[48px] sm:text-[72px] md:text-[96px]"></i>
+                          <i className="bi bi-newspaper text-5xl text-gray-300"></i>
                         )}
                       </div>
                     </div>
@@ -636,19 +700,20 @@ const News = () => {
               </div>
 
               {/* Latest Updates */}
-              <div className="space-y-4">
-                <h2 className="text-lg font-bold text-[#0B102A]">Latest Updates</h2>
-                <div className="flex flex-col gap-4">
+              <div className="space-y-3">
+                <h2 className="text-[18px] font-bold text-[#0B102A]">Latest Updates</h2>
+                <div className="flex flex-col gap-3">
                   {loadingHome ? (
                     Array.from({ length: 3 }).map((_, i) => <div key={i} className="animate-pulse h-24 bg-gray-100 rounded-xl" />)
                   ) : defaultUpdates.length > 0 ? (
                     defaultUpdates.map((item, idx) => (
-                      <NewsCard
-                        key={idx}
-                        ticker={item.ticker}
-                        quote={item.quote}
-                        news={item.news}
-                      />
+                      <div key={idx} className="h-auto">
+                        <NewsCard
+                          ticker={item.ticker}
+                          quote={item.quote}
+                          news={item.news}
+                        />
+                      </div>
                     ))
                   ) : (
                     <div className="text-gray-500">No updates available</div>

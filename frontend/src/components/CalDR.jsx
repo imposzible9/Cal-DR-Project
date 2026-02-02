@@ -582,9 +582,9 @@ export default function DRCal() {
           Calculate DR Fair Value based on Underlying Price, Exchange Rate, and Conversion Ratio.
         </p>
 
-        <div className="w-full min-h-auto lg:min-h-[627px] mt-2 font-sarabun">
+        <div className="w-full mt-2 font-sarabun">
           <div className="flex flex-col lg:flex-row w-full gap-3 sm:gap-4 lg:gap-0">
-            <div className="flex-1 min-h-auto md:min-h-[427px] bg-[#FFFFFF] rounded-t-[12px] md:rounded-tl-[12px] md:rounded-tr-none md:rounded-bl-[12px] md:rounded-br-none shadow-[0_10px_25px_rgba(0,0,0,0.12)] px-4 sm:px-6 pt-6 md:pt-10 pb-6 md:pb-0 border border-[#e0e0e0]">
+            <div className="flex-1 md:min-h-[427px] bg-[#FFFFFF] rounded-t-[12px] md:rounded-tl-[12px] md:rounded-tr-none md:rounded-bl-[12px] md:rounded-br-none shadow-[0_10px_25px_rgba(0,0,0,0.12)] px-4 sm:px-6 pt-6 md:pt-10 pb-6 md:pb-0 border border-[#e0e0e0]">
               <h2 className="font-semibold text-lg sm:text-xl md:text-[26px] text-black mb-3 md:mb-[14px]">Select DR</h2>
               <div className="relative w-full h-[42px] sm:h-[46px] md:h-[48px]">
                 <input
@@ -629,7 +629,7 @@ export default function DRCal() {
                 <p className="font-medium text-[9px] sm:text-[10px] text-[#555] mt-1 line-clamp-2 break-words">
                   {selectedDR ? `Depositary Receipt on ${selectedDR.underlying || selectedDR.underlyingName} Issued by ${selectedDR.issuer}` : "—"}
                 </p>
-                <div className="w-full min-h-auto lg:h-[175px] bg-white border border-[#e0e0e0] rounded-[12px] shadow-lg mt-4 p-3 sm:p-4 relative">
+                <div className="w-full lg:h-[175px] bg-white border border-[#e0e0e0] rounded-[12px] shadow-lg mt-4 p-3 sm:p-4 relative">
                   <p className="font-bold text-[11px] sm:text-[12px] lg:text-[13px] text-[#6B6B6B] break-words">Ratio (DR : Underlying)</p>
                   <p className="font-bold text-lg sm:text-xl lg:text-2xl text-[#111] mt-1">{ratioDR ? `${fmtNum(ratioDR, 0)} : 1` : "—"} </p>
                   <div className="w-full h-px bg-[#9A9A9A] mt-2"></div>
@@ -653,7 +653,7 @@ export default function DRCal() {
             </div>
 
             <div className="flex-1 bg-[#0B102A] rounded-b-[16px] lg:rounded-b-none lg:rounded-tr-[16px] lg:rounded-br-[16px] shadow-lg p-4 sm:p-5 lg:p-6">
-              <div className="w-full min-h-auto lg:h-[253px] bg-white/20 border border-[#9A9A9A] rounded-[12px] shadow-lg p-3 sm:p-6 flex flex-col">
+              <div className="w-full lg:h-[253px] bg-white/20 border border-[#9A9A9A] rounded-[12px] shadow-lg p-3 sm:p-6 flex flex-col">
                 <div className="mb-3 sm:mb-4">
                   <p className="font-bold text-[11px] sm:text-[13px] text-white mb-1">Underlying Price</p>
                   <div className="w-full h-[40px] sm:h-[46px] bg-white/20 border border-[#9A9A9A] rounded-[12px] flex items-center hover:border-[#4AB6FF] transition-colors duration-150">
