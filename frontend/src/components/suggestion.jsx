@@ -8,7 +8,7 @@ const RATINGS_API = import.meta.env.VITE_RATINGS_API;
 // 🔧 MOCK DATA FLAG - ตั้งเป็น true เพื่อใช้ mock data สำหรับทดสอบ winrate
 // เมื่อต้องการใช้ข้อมูลจริง ให้เปลี่ยนกลับเป็น false
 const USE_MOCK_DATA = false;
-const MOCK_RATINGS_API = "http://172.18.1.56:8335/api/mock-rating-history/aapl";
+// const MOCK_RATINGS_API = "http://172.18.1.56:8335/api/mock-rating-history/aapl";
 
 // --- Constants & Helpers ---
 const countryOptions = [
@@ -323,9 +323,18 @@ const RatingHistoryModal = ({ item, timeframe, onClose }) => {
           data = { history: apiData.intraday_history };
         } else {
           // ดึงแบบเดิม (daily)
-          const baseUrl = import.meta.env.VITE_HISTORY_API;
+          const baseUrl = import.meta.env.VITE_HISTORY_API;// http://localhost:8000/ratings
           const tf = timeframe === "1W" ? "1W" : "1D";
-          const url = `${baseUrl}/ratings/history-with-accuracy/${ticker}?timeframe=${tf}&mode=${mode}`;
+          // Use relative path from the base URL (which already contains /ratings prefix if configured)
+          // If baseUrl is http://localhost:8000/ratings, we just need /history-with-accuracy/...
+          // But to be safe and avoid double slash, lets just check.
+          // Correct endpoint is http://localhost:8000/ratings/history-with-accuracy/{ticker}
+
+          // Since VITE_HISTORY_API is now http://localhost:8000/ratings
+          // We should append /history-with-accuracy
+
+          // const url = `${baseUrl}/ratings/history-with-accuracy/${ticker}?timeframe=${tf}&mode=${mode}`;
+          const url = `${baseUrl}/history-with-accuracy/${ticker}?timeframe=${tf}`;
           console.log("🔍 Fetching from URL:", url);
           const response = await fetch(url);
           if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);

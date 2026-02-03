@@ -1511,10 +1511,17 @@ async def background_updater():
             async with httpx.AsyncClient() as client:
                 # Get the full list of DRs
                 try:
-                    r_dr = await client.get(DR_LIST_URL, timeout=20)
-                    r_dr.raise_for_status()
-                    rows = r_dr.json().get("rows", [])
-                    print(f"Found {len(rows)} total items from DR API.")
+                    # Prefer local file to avoid asking source as requested
+                    local_dr_file = os.path.join(os.path.dirname(__file__), "dr_list.json")
+                    if os.path.exists(local_dr_file):
+                        with open(local_dr_file, "r", encoding="utf-8") as f:
+                            rows = json.load(f).get("rows", [])
+                            print(f"[Background] Loaded {len(rows)} items from local DR list.")
+                    else:
+                        r_dr = await client.get(DR_LIST_URL, timeout=20)
+                        r_dr.raise_for_status()
+                        rows = r_dr.json().get("rows", [])
+                        print(f"Found {len(rows)} total items from DR API.")
                 except Exception as dr_e:
                     print(f"❌ Could not fetch DR list: {dr_e}. Retrying in {UPDATE_INTERVAL_SECONDS}s.")
                     await asyncio.sleep(UPDATE_INTERVAL_SECONDS)
@@ -4061,7 +4068,7 @@ def recalc_and_save_accuracy_for_ticker(ticker, timeframe="1D", window_days=90):
         if 'con' in locals() and con:
             con.close()
 
-@app.get("/ratings/history-with-accuracy/{ticker}")
+@app.get("/history-with-accuracy/{ticker}")
 def get_history_with_accuracy(
     ticker: str, 
     timeframe: str = Query("1D", description="Timeframe: 1D or 1W"), 
@@ -4276,7 +4283,7 @@ def get_mock_aapl_history():
     """
     return load_mock_aapl_data()
 
-@app.post("/ratings/recalculate-accuracy/{ticker}")
+@app.post("/recalculate-accuracy/{ticker}")
 def recalculate_accuracy_endpoint(
     ticker: str,
     timeframe: str = Query("1D", description="Timeframe: 1D or 1W"),
@@ -4302,7 +4309,19 @@ def recalculate_accuracy_endpoint(
             "ticker": ticker.upper()
         }, 500
 
-@app.get("/ratings/from-dr-api")
+@app.get("/dr-list")
+def get_local_dr_list():
+    """Returns the locally cached DR list from dr_list.json"""
+    try:
+        local_dr_file = os.path.join(os.path.dirname(__file__), "dr_list.json")
+        if os.path.exists(local_dr_file):
+            with open(local_dr_file, "r", encoding="utf-8") as f:
+                 return json.load(f)
+        return {"count": 0, "rows": []}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/from-dr-api")
 def ratings_from_dr_api():
     """
     Fetches latest ratings, stats, and history from the SQLite DB 
@@ -4410,6 +4429,41 @@ def ratings_from_dr_api():
         if 'con' in locals() and con:
             con.close()
         return {"updated_at": updated_at_str, "count": 0, "rows": []}
+
+@app.get("/api/intraday-history/{ticker}")
+def get_intraday_history(
+    ticker: str,
+    timeframe: str = Query("1D", description="Timeframe: 1D or 1W")
+):
+    """
+    Simulated Intraday History for compatibility.
+    Since we don't have real intraday data in this local setup,
+    we fallback to returning the daily history but formatted to look like intraday/time-based log.
+    
+    In a real scenario, this would query a high-frequency database table.
+    """
+    try:
+        # Fallback to daily history-with-accuracy logic, but just return the list 
+        # structure expected by the frontend for intraday mode
+        # Frontend expects: { "intraday_history": [ ... ] }
+        
+        # Reuse get_history_with_accuracy to fetch data
+        data = get_history_with_accuracy(ticker, timeframe=timeframe)
+        if "error" in data:
+            return {"intraday_history": []}
+            
+        history = data.get("history", [])
+        
+        # Transform strictly to what frontend might expect if it differs,
+        # but based on reading suggestion.jsx, it uses the same fields mostly.
+        # Just ensure top-level key matches.
+        
+        return {
+            "intraday_history": history
+        }
+    except Exception as e:
+        print(f"Error in mock intraday history: {e}")
+        return {"intraday_history": []}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8335)

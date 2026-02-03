@@ -148,6 +148,24 @@ def debug_routes():
         "ratings_routes": ratings_routes
     }
 
+@app.get("/caldr")
+def proxy_caldr():
+    """Proxy /caldr to return local encoded DR list to satisfy frontend defaults."""
+    import os, json
+    # Use ratings_api path or just relative path? ratings_api_dynamic sits next to this file usually
+    try:
+        local_dr_file = os.path.join(os.path.dirname(__file__), "ratings_api_dynamic", "dr_list.json")
+        if not os.path.exists(local_dr_file):
+             # Try same directory
+             local_dr_file = os.path.join(os.path.dirname(__file__), "dr_list.json")
+        
+        if os.path.exists(local_dr_file):
+            with open(local_dr_file, "r", encoding="utf-8") as f:
+                 return json.load(f)
+        return {"count": 0, "rows": []}
+    except Exception as e:
+        return {"error": str(e)}
+
 
 if __name__ == "__main__":
     import uvicorn

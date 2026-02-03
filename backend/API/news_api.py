@@ -18,7 +18,7 @@ NEWS_API_KEY = "a2982e76c7844902b4289a6b08712d89"
 NEWS_TTL_SECONDS = int(os.getenv("NEWS_TTL_SECONDS") or "300")
 FINNHUB_BASE_URL = "https://finnhub.io/api/v1"
 FINNHUB_TOKEN = os.getenv("FINNHUB_TOKEN") or None
-DR_LIST_URL = os.getenv("DR_LIST_URL") or "http://172.17.1.85:8333/dr"
+# DR_LIST_URL = os.getenv("DR_LIST_URL") or "http://172.17.1.85:8333/dr"
 TRADINGVIEW_SCANNER_URL = os.getenv("TRADINGVIEW_SCANNER_URL") or "https://scanner.tradingview.com/america/scan"
 
 app = FastAPI(title="News API")

@@ -14,6 +14,7 @@ import uvicorn
 app = FastAPI(title="DR Calculation API (Cache + Background Refresh + Symbol Map)")
 
 IDEATRADE_BASE = "https://api.ideatrade1.com"
+DR_LIST_FILE = os.path.join(os.path.dirname(__file__), "dr_list.json")
 TV_SCAN_URL = "https://scanner.tradingview.com/global/scan"
 
 # -----------------------------
@@ -727,9 +728,17 @@ async def calculate_dr(dr_symbol: str):
     try:
         assert _idea_client is not None
 
-        r = await _idea_client.get(f"{IDEATRADE_BASE}/caldr")
-        r.raise_for_status()
-        rows = r.json().get("rows", [])
+
+        rows = []
+        if os.path.exists(DR_LIST_FILE):
+             with open(DR_LIST_FILE, "r", encoding="utf-8") as f:
+                 rows = json.load(f).get("rows", [])
+        else:
+             # Fallback (may fail if offline)
+             r = await _idea_client.get(f"{IDEATRADE_BASE}/caldr")
+             r.raise_for_status()
+             rows = r.json().get("rows", [])
+        
         if not rows:
             raise HTTPException(404, "DR list is empty")
 

@@ -9,47 +9,48 @@
 const UNIFIED_API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 // API Endpoints
+// API Endpoints
 export const API_CONFIG = {
-    // Base URLs for each service
-    RATINGS_API: `${UNIFIED_API_URL}/ratings`,
-    EARNINGS_API: `${UNIFIED_API_URL}/earnings`,
-    EARNINGS_API: `${UNIFIED_API_URL}/earnings`,
-    NEWS_API: `${UNIFIED_API_URL}/news`,
-    CALCULATION_API: `${UNIFIED_API_URL}/calculation`,
+    // Base URLs for each service - using env vars
+    RATINGS_API: import.meta.env.VITE_RATINGS_API,
+    EARNINGS_API: import.meta.env.VITE_EARNINGS_API,
+    NEWS_API: import.meta.env.VITE_NEWS_API,
+    CALCULATION_API: import.meta.env.VITE_CAL_API,
 
     // Full endpoint paths
     endpoints: {
         // Ratings endpoints
         ratings: {
-            base: `${UNIFIED_API_URL}/ratings`,
-            fromDrApi: `${UNIFIED_API_URL}/ratings/ratings/from-dr-api`,
+            // Using logic from ratings_api_dynamic.py structure
+            base: import.meta.env.VITE_HISTORY_API,
+            fromDrApi: import.meta.env.VITE_RATINGS_API,
             historyWithAccuracy: (ticker, timeframe) =>
-                `${UNIFIED_API_URL}/ratings/ratings/history-with-accuracy/${ticker}?timeframe=${timeframe}`,
-            track: `${UNIFIED_API_URL}/ratings/api/track`,
+                `${import.meta.env.VITE_HISTORY_API}/history-with-accuracy/${ticker}?timeframe=${timeframe}`,
+            track: `${import.meta.env.VITE_HISTORY_API}/api/track`, // Assuming this exists or needed
         },
 
         // Earnings endpoints
         earnings: {
-            base: `${UNIFIED_API_URL}/earnings`,
-            get: (country) => `${UNIFIED_API_URL}/earnings/api/earnings?country=${country}`,
-            stream: `${UNIFIED_API_URL}/earnings/api/earnings/stream`,
-            refresh: `${UNIFIED_API_URL}/earnings/api/earnings/refresh`,
+            base: import.meta.env.VITE_EARNINGS_API,
+            get: (country) => `${import.meta.env.VITE_EARNINGS_API}?country=${country}`,
+            stream: import.meta.env.VITE_EARNINGS_STREAM_API,
+            refresh: `${import.meta.env.VITE_EARNINGS_API.replace('/api/earnings', '/api/earnings/refresh')}`,
         },
 
         // News endpoints
         news: {
-            base: `${UNIFIED_API_URL}/news`,
-            symbols: `${UNIFIED_API_URL}/news/api/symbols`,
-            getNews: (symbol) => `${UNIFIED_API_URL}/news/api/news/${symbol}`,
-            quote: (symbol) => `${UNIFIED_API_URL}/news/api/finnhub/quote/${symbol}`,
-            companyNews: (symbol) => `${UNIFIED_API_URL}/news/api/finnhub/company-news/${symbol}`,
-            stockOverview: (symbol) => `${UNIFIED_API_URL}/news/api/stock/overview/${symbol}`,
+            base: import.meta.env.VITE_NEWS_API,
+            symbols: `${import.meta.env.VITE_NEWS_API}/api/symbols`,
+            getNews: (symbol) => `${import.meta.env.VITE_NEWS_API}/api/news/${symbol}`,
+            quote: (symbol) => `${import.meta.env.VITE_NEWS_API}/api/finnhub/quote/${symbol}`,
+            companyNews: (symbol) => `${import.meta.env.VITE_NEWS_API}/api/finnhub/company-news/${symbol}`,
+            stockOverview: (symbol) => `${import.meta.env.VITE_NEWS_API}/api/stock/overview/${symbol}`,
         },
 
         // Calculation endpoints
         calculation: {
-            base: `${UNIFIED_API_URL}/calculation`,
-            dr: (symbol) => `${UNIFIED_API_URL}/calculation/api/calc/dr/${encodeURIComponent(symbol)}`,
+            base: import.meta.env.VITE_CAL_API,
+            dr: (symbol) => `${import.meta.env.VITE_CAL_API}/${encodeURIComponent(symbol)}`,
         }
     }
 };
