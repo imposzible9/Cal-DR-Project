@@ -305,9 +305,7 @@ export default function Calendar() {
     }
   }, [seenEarningsIds, newEarningsCount]);
 
-  useEffect(() => {
-    trackPageView('calendar');
-  }, []);
+
 
   // Track search with debounce
   useEffect(() => {

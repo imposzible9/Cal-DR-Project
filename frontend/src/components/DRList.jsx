@@ -204,9 +204,7 @@ export default function DRList() {
   }, [searchTerm]);
 
   /* TRACK PAGE VIEW */
-  useEffect(() => {
-    trackPageView('DR List');
-  }, []);
+
 
   /* LOAD WATCHLIST */
   useEffect(() => {

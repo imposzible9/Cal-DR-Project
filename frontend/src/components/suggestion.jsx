@@ -827,9 +827,7 @@ export default function Suggestion() {
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
-  useEffect(() => {
-    trackPageView('suggestion');
-  }, []);
+
 
   // Track search with debounce
   useEffect(() => {

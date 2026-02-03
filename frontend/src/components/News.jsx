@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import axios from 'axios';
+import { trackSearch, trackClick } from '../utils/tracker';
 
 // Read API base from Vite environment variables. Support multiple names
 // (some projects use VITE_NEWS_API, others VITE_NEWS_API_URL or VITE_API_BASE)
@@ -90,7 +91,13 @@ const NewsCard = ({ ticker, quote, news }) => {
   const containerClasses = "bg-white rounded-xl border border-gray-200 p-4 hover:shadow-md transition-shadow flex flex-row gap-4 items-stretch h-full";
 
   return (
-    <a href={news.url} target="_blank" rel="noreferrer" className="block group h-full">
+    <a
+      href={news.url}
+      target="_blank"
+      rel="noreferrer"
+      className="block group h-full"
+      onClick={() => trackClick("news_card", { url: news.url, title: news.title, ticker: ticker || "market" })}
+    >
       <div className={containerClasses}>
         {ticker && quote && (
           <div className="flex-shrink-0 w-[85px] sm:w-[100px] bg-[#F3F4F6] rounded-xl border border-gray-200 p-2 flex flex-col items-center justify-center text-center gap-1">
@@ -374,6 +381,7 @@ const News = () => {
     }
 
     setErrorSearch("");
+    trackSearch(raw.toUpperCase());
     setSearchParams({ symbol: raw.toUpperCase() });
     setShowSuggestions(false);
   };
@@ -650,7 +658,13 @@ const News = () => {
                 {loadingHome ? (
                   <div className="animate-pulse h-64 bg-gray-200 rounded-2xl" />
                 ) : topStory && topStory.news ? (
-                  <a href={topStory.news.url} target="_blank" rel="noreferrer" className="block group">
+                  <a
+                    href={topStory.news.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="block group"
+                    onClick={() => trackClick("news_top_story", { url: topStory.news.url, title: topStory.news.title, ticker: topStory.ticker })}
+                  >
                     <div className="bg-[#0B102A] rounded-2xl p-6 md:p-8 text-white relative overflow-hidden shadow-lg min-h-[280px] flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
                       <div className="relative z-10 flex-1 max-w-3xl">
                         {topStory.ticker && topStory.quote && (
