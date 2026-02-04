@@ -42,109 +42,7 @@ TRUSTED_SOURCES = {
     "bbc", "cnn", "forbes", "business insider", "techcrunch", "engadget",
     "kaohoon", "thansettakij", "money channel", "efinance thai", "infoquest",
     "settrade", "prachachat", "ประชาชาติ", "กรุงเทพธุรกิจ", "ฐานเศรษฐกิจ",
-    "ข่าวหุ้น", "ทันหุ้น", "bangkok biz news",
-    "xinhua", "global times", "china daily", "south china morning post", "scmp",
-    "korea times", "yonhap", "pulse news",
-    "japan times", "asahi", "mainichi", "yomiuri", "kyodo",
-    "straitstimes", "businesstimes", "cna",
-    "vietnam news", "vnexpress",
-    "taipei times", "focustaiwan",
-    "times of india", "economic times", "hindu business line",
-}
-
-BLOCKED_DOMAINS = {
-    "youtube.com", "youtu.be",
-    "tiktok.com",
-    "facebook.com",
-    "instagram.com",
-    "twitter.com", "x.com",
-    "reddit.com",
-    "pinterest.com",
-    "vimeo.com",
-    "dailymotion.com",
-    "espn.com", # Sports sites often have irrelevant ticker matches
-    "linkedin.com",
-    "medium.com",
-    "quora.com",
-    "pantip.com",
-    "discord.com",
-    "telegram.org",
-    "tumblr.com",
-    "myspace.com",
-    "tripadvisor.com",
-    "yelp.com",
-    "soundcloud.com",
-    "spotify.com",
-    "twitch.tv",
-    "blockdit.com", # Thai social blog
-    "lemon8-app.com",
-}
-
-IRRELEVANT_KEYWORDS = [
-    "giveaway", "sweepstakes", "lottery", "horoscope",
-    "soccer", "football", "basketball", "sport",
-    "celebrity", "gossip", "dating",
-    "sex", "porn",
-    "concert", "ticket",
-    "review", "unboxing", 
-    "how to", "tutorial",
-    "deal", "discount", "coupon",
-    "joker", "slot", "bet", "casino",
-    "ufabet", "pgslot", # Thai gambling keywords
-]
-
-VIDEO_KEYWORDS = [
-    "watch:", "video:", "live:", "stream:",
-    "full episode", "official trailer",
-    "music video", "mv",
-]
-
-STOCK_SUFFIXES = {
-    "us": " stock",
-    "gb": " stock",
-    "au": " stock",
-    "ca": " stock",
-    "in": " stock",
-    "sg": " stock",
-    "th": " หุ้น",
-    "cn": " 股票",
-    "hk": " stock", 
-    "tw": " 股票",
-    "jp": " 株",
-    "kr": " 주식",
-    "vn": " cổ phiếu",
-    "de": " aktie",
-    "fr": " action",
-}
-
-# Mapping for "Stock Market" queries in local languages to improve Google News hits
-LOCAL_MARKET_QUERIES = {
-    "cn": "股市",
-    "hk": "stock market", # HK is mostly English/Bilingual
-    "jp": "株式市場",
-    "kr": "주식 시장",
-    "vn": "thị trường chứng khoán",
-    "th": "ตลาดหุ้น",
-    "tw": "股市",
-    "in": "stock market",
-    "de": "börse",
-    "fr": "bourse",
-    "us": "stock market",
-    "gb": "stock market",
-    "au": "stock market",
-    "sg": "stock market",
-    "ca": "stock market",
-}
-
-COUNTRY_LANG_DEFAULTS = {
-    "CN": "zh-CN",
-    "JP": "ja-JP",
-    "KR": "ko-KR",
-    "TW": "zh-TW",
-    "VN": "vi-VN",
-    "TH": "th",
-    "DE": "de",
-    "FR": "fr",
+    "ข่าวหุ้น", "ทันหุ้น", "bangkok biz news"
 }
 
 def _is_trusted_source(source_name: str) -> bool:
@@ -153,41 +51,15 @@ def _is_trusted_source(source_name: str) -> bool:
     return any(t in s for t in TRUSTED_SOURCES)
 
 def _is_valid_source(item: dict) -> bool:
-    """Filter out unwanted sources like Yahoo Finance and Social Media"""
+    """Filter out unwanted sources like Yahoo Finance"""
     src = (item.get("source") or "").lower()
     url = (item.get("url") or "").lower()
     
-    # 1. Block specific domains
-    for domain in BLOCKED_DOMAINS:
-        if domain in url:
-            return False
-            
-    # 2. Block if source name implies video/social (heuristic)
-    if "tiktok" in src or "youtube" in src:
-        return False
-        
-    # 3. Check for video patterns in URL
-    if "/video/" in url or "/watch?" in url or "/shorts/" in url:
-        return False
-
-    # 4. Check for irrelevant content in title/summary
-    title = (item.get("title") or "").lower()
-    summary = (item.get("summary") or "").lower()
-    full_text = f"{title} {summary}"
-    
-    # Check for video keywords
-    if any(k in title for k in VIDEO_KEYWORDS):
-        return False
-        
-    # Check for spam/irrelevant keywords
-    if any(k in full_text for k in IRRELEVANT_KEYWORDS):
-        return False
+    # Filter out Yahoo
+    if "yahoo" in src or "yahoo" in url:
+        return True 
         
     return True
-
-def _get_exclusion_string() -> str:
-    # Construct -site:domain1 -site:domain2 ...
-    return " ".join([f"-site:{d}" for d in BLOCKED_DOMAINS])
 
 def _mix_news_sources(items: list[dict], limit: int) -> list[dict]:
     """
@@ -238,66 +110,6 @@ def _mix_news_sources(items: list[dict], limit: int) -> list[dict]:
             
     return result
 
-from urllib.parse import urlparse, parse_qs, unquote
-
-def _normalize_url(url: str | None) -> str | None:
-    if not url:
-        return None
-    u = url.strip()
-    try:
-        p = urlparse(u)
-        if not p.scheme:
-            return None
-        if p.netloc.endswith("news.google.com") or p.netloc.endswith("google.com"):
-            qs = parse_qs(p.query)
-            raw = qs.get("url", [None])[0]
-            if raw:
-                cand = unquote(raw)
-                if cand.startswith("http://") or cand.startswith("https://"):
-                    u = cand
-        return u
-    except Exception:
-        return None
-
-def _normalize_source(source: str | None, url: str | None) -> str | None:
-    s = (source or "").strip()
-    if url:
-        try:
-            host = urlparse(url).netloc.lower()
-            host = host[4:] if host.startswith("www.") else host
-            if not s or s.lower() in {"google news", "newsapi", "newsapi.org"}:
-                return host
-        except Exception:
-            pass
-    return s or None
-
-async def _maybe_resolve_redirect(url: str) -> str:
-    try:
-        p = urlparse(url)
-        host = p.netloc.lower()
-        if host.endswith("news.google.com"):
-            assert _client is not None
-            r = await _client.get(url, timeout=5)
-            final = str(r.url)
-            fp = urlparse(final).netloc.lower()
-            if fp and not fp.endswith("news.google.com"):
-                return final
-            try:
-                txt = r.text
-                m = re.search(r'<link[^>]+rel="canonical"[^>]+href="([^"]+)"', txt)
-                if not m:
-                    m = re.search(r'<meta[^>]+property="og:url"[^>]+content="([^"]+)"', txt)
-                if m:
-                    cand = m.group(1)
-                    cp = urlparse(cand).netloc.lower()
-                    if cand.startswith("http") and cp and not cp.endswith("news.google.com"):
-                        return cand
-            except Exception:
-                pass
-    except Exception:
-        pass
-    return url
-
 FALLBACK_SYMBOLS = [
     {"symbol": "AAPL", "name": "Apple Inc.", "logo": "https://s3-symbol-logo.tradingview.com/apple.svg", "country": "US"},
     {"symbol": "MSFT", "name": "Microsoft Corporation", "logo": "https://s3-symbol-logo.tradingview.com/microsoft.svg", "country": "US"},
@@ -343,7 +155,7 @@ app.router.lifespan_context = lifespan
 
 async def init_client():
     global _client
-    _client = httpx.AsyncClient(timeout=10, follow_redirects=True)
+    _client = httpx.AsyncClient(timeout=10)
 
 
 async def close_client():
@@ -359,29 +171,8 @@ async def fetch_news(symbol: str, limit: int, language: str | None, hours: int, 
     
     is_general_market = symbol.lower() in ["stock market", "market", "business"]
     
-    if not is_general_market:
-        # Append stock-related keywords based on country to filter out non-financial news
-        suffix = STOCK_SUFFIXES.get(target_country.lower(), " stock")
-        
-        # Don't append if already present
-        if suffix.strip().lower() not in symbol.lower():
-             search_query = f"{symbol}{suffix}"
-    
-    if is_general_market:
-        # Strict enforcement: Always use specific "Stock Market" query for the country
-        # This overrides generic terms like "business" or "market"
-        # BUT if language is explicitly 'en', use 'stock market' to ensure we get English results
-        if language == 'en':
-            search_query = "stock market"
-        elif country and country.lower() in LOCAL_MARKET_QUERIES:
-            search_query = LOCAL_MARKET_QUERIES[country.lower()]
-        else:
-            # Default fallback if country not in list (though we added most)
-            search_query = "stock market"
-
-    # Apply default language if not provided
-    if not language and country and country.upper() in COUNTRY_LANG_DEFAULTS:
-        language = COUNTRY_LANG_DEFAULTS[country.upper()]
+    if target_country.lower() == "us" and not is_general_market:
+         search_query = f"{symbol} stock"
 
     if not NEWS_API_KEY:
         return await fetch_google_news(search_query, limit, language, hours, country)
@@ -395,15 +186,8 @@ async def fetch_news(symbol: str, limit: int, language: str | None, hours: int, 
     }
     
     if not is_general_market:
-        # params["q"] = search_query
-        # params["sortBy"] = "publishedAt" # Not supported by top-headlines
-        pass
-
-    # ALWAYS apply the search query to filter for specific topics (e.g. "stock market")
-    # even for general category, to avoid broad "business" news that isn't stock related.
-    # User requirement: "All news must be stock market related, no general news"
-    if search_query:
         params["q"] = search_query
+        # params["sortBy"] = "publishedAt" # Not supported by top-headlines
 
     if country:
         params["country"] = country
@@ -411,8 +195,7 @@ async def fetch_news(symbol: str, limit: int, language: str | None, hours: int, 
         params["country"] = "us"
 
     if language:
-        # NewsAPI uses 2-letter codes (e.g., 'zh' not 'zh-CN')
-        params["language"] = language.split('-')[0]
+        params["language"] = language
     
     print(f"Fetching NewsAPI: {NEWS_API_BASE_URL} Params: {params}")
 
@@ -450,9 +233,7 @@ async def fetch_news(symbol: str, limit: int, language: str | None, hours: int, 
             "image_url": a.get("urlToImage"),
             "is_trusted": _is_trusted_source(source.get("name")),
         }
-        item["url"] = _normalize_url(item["url"])
-        item["source"] = _normalize_source(item["source"], item["url"])
-        if item["url"] and _is_valid_source(item):
+        if _is_valid_source(item):
             normalized.append(item)
 
     if not normalized:
@@ -471,20 +252,10 @@ async def _fetch_google_rss_items(query: str, limit: int, language: str | None, 
         hl = f"en-{gl}"
         ceid = f"{gl}:en"
 
-    if language:
-        hl = language
-        # If country is known, construct CEID using it
-        if country:
-            ceid = f"{country.upper()}:{hl}"
-        elif language.lower() == "th":
-            gl = "TH"
-            ceid = "TH:th"
-            
-    # Add time filter to query to ensure freshness (e.g., when:3d)
-    if hours and hours > 0:
-        days = (hours + 23) // 24
-        query += f" when:{days}d"
-
+    if language and language.lower().startswith("th"):
+        hl = "th"
+        gl = "TH"
+        ceid = "TH:th"
     params = {"q": query, "hl": hl, "gl": gl, "ceid": ceid}
     
     try:
@@ -537,11 +308,7 @@ async def _fetch_google_rss_items(query: str, limit: int, language: str | None, 
                 "image_url": None,
                 "is_trusted": _is_trusted_source(source),
             }
-            item["url"] = _normalize_url(item["url"])
-            if item["url"]:
-                item["url"] = await _maybe_resolve_redirect(item["url"])
-            item["source"] = _normalize_source(item["source"], item["url"])
-            if item["url"] and _is_valid_source(item):
+            if _is_valid_source(item):
                 normalized.append(item)
                 # Collect enough items
                 if len(normalized) >= limit * 2:
@@ -559,8 +326,7 @@ async def fetch_google_news(query: str, limit: int, language: str | None, hours:
     # We add -site:yahoo.com to exclude Yahoo from the "Others" query
     # We add site:finance.yahoo.com to specifically get Yahoo for the "Yahoo" query
     
-    exclusions = _get_exclusion_string()
-    query_others = f"{query} -site:yahoo.com -site:finance.yahoo.com {exclusions}"
+    query_others = f"{query} -site:yahoo.com -site:finance.yahoo.com"
     query_yahoo = f"{query} site:finance.yahoo.com"
     
     t_others = _fetch_google_rss_items(query_others, limit, language, hours, country)
@@ -600,44 +366,22 @@ async def fetch_quote(symbol: str):
 
 
 async def fetch_logo(symbol: str):
-    # 1. Try Finnhub with raw symbol first
-    if FINNHUB_TOKEN:
-        try:
-            if _client:
-                r = await _client.get(
-                    f"{FINNHUB_BASE_URL}/stock/profile2",
-                    params={"symbol": symbol.upper(), "token": FINNHUB_TOKEN},
-                )
-                if r.status_code == 200:
-                    data = r.json() or {}
-                    if data.get("logo"):
-                        return data.get("logo")
-        except Exception:
-            pass
+    if not FINNHUB_TOKEN:
+        return None
 
-    # 2. Fallback to Internal List (TradingView/DR)
-    # This covers cases where Finnhub misses (e.g. non-US stocks) or requires suffix
+    assert _client is not None
+
     try:
-        all_symbols = await get_symbols()
-        # Try exact match
-        match = next((s for s in all_symbols if s["symbol"] == symbol.upper()), None)
-        
-        # Try stripping suffix (e.g. PTT.BK -> PTT)
-        if not match and "." in symbol:
-            short_sym = symbol.split(".")[0]
-            match = next((s for s in all_symbols if s["symbol"] == short_sym.upper()), None)
-
-        # Try stripping leading zeros (e.g. 0700 -> 700)
-        if not match and symbol.isdigit() and symbol.startswith("0"):
-            short_sym = str(int(symbol))
-            match = next((s for s in all_symbols if s["symbol"] == short_sym), None)
-
-        if match and match.get("logo"):
-            return match.get("logo")
+        r = await _client.get(
+            f"{FINNHUB_BASE_URL}/stock/profile2",
+            params={"symbol": symbol.upper(), "token": FINNHUB_TOKEN},
+        )
+        if r.status_code != 200:
+            return None
+        data = r.json() or {}
+        return data.get("logo")
     except Exception:
-        pass
-        
-    return None
+        return None
 
 @app.get("/api/news/{symbol}")
 async def get_news(
@@ -647,11 +391,9 @@ async def get_news(
     hours: int = Query(24, ge=1, le=168),
     country: str | None = Query(None, description="Two-letter country code (e.g., us, gb)"),
 ):
-    key = f"news-v10|{symbol.upper()}|{limit}|{language or ''}|{hours}|{country or ''}"
+    key = f"news-v5|{symbol.upper()}|{limit}|{language or ''}|{hours}|{country or ''}"
     cached = _cache_get(key)
     if cached is not None:
-        # Check if cache is "stale but usable" (soft TTL)
-        # For now, we just return it as valid.
         return {
             "symbol": symbol.upper(),
             "total": len(cached["news"]),
@@ -662,29 +404,14 @@ async def get_news(
             "ttl_seconds": NEWS_TTL_SECONDS,
         }
 
-    # Parallel Fetching for Critical Data
-    # If this is a general market query (no quote needed), skip fetch_quote/fetch_logo to save time
-    is_general_query = " OR " in symbol or " " in symbol # Heuristic for search query vs ticker
-    
-    if is_general_query:
-        items = await fetch_news(symbol, limit, language, hours, country)
-        quote = None
-        logo_url = None
-    else:
-        items, quote, logo_url = await asyncio.gather(
-            fetch_news(symbol, limit, language, hours, country),
-            fetch_quote(symbol),
-            fetch_logo(symbol)
-        )
+    items, quote, logo_url = await asyncio.gather(
+        fetch_news(symbol, limit, language, hours, country),
+        fetch_quote(symbol),
+        fetch_logo(symbol)
+    )
 
     payload = {"news": items, "quote": quote, "logo_url": logo_url}
-    
-    # Cache Aggressively for General News (Longer TTL)
-    ttl = NEWS_TTL_SECONDS
-    if is_general_query:
-        ttl = 600 # 10 minutes for general news
-        
-    _cache_set(key, payload, ttl=ttl)
+    _cache_set(key, payload, ttl=NEWS_TTL_SECONDS)
 
     return {
         "symbol": symbol.upper(),
@@ -693,71 +420,12 @@ async def get_news(
         "quote": quote,
         "logo_url": logo_url,
         "cached": False,
-        "ttl_seconds": ttl,
+        "ttl_seconds": NEWS_TTL_SECONDS,
     }
 
 import random
 
-# =============== HELPER FUNCTIONS ===============
-
-EXCHANGE_SUFFIX_MAP = {
-    "SET": ".BK", "mai": ".BK",
-    "HKEX": ".HK",
-    "TSE": ".T",
-    "LSE": ".L", "LSIN": ".L",
-    "SSE": ".SS", "SZSE": ".SZ",
-    "KSE": ".KS", "KOSDAQ": ".KQ",
-    "SGX": ".SI",
-    "TWSE": ".TW",
-    "NSE": ".NS", "BSE": ".BO",
-    "ASX": ".AX",
-    "XETRA": ".DE", "FWB": ".F",
-    "EURONEXT": ".PA",
-    "HOSE": ".HM", "HNX": ".HN",
-}
-
-async def _resolve_finnhub_symbol(symbol: str) -> str:
-    """
-    Resolves the correct Finnhub symbol (with suffix) based on the exchange.
-    """
-    if "." in symbol:
-        return symbol
-        
-    # Look up in our symbol list
-    all_symbols = await get_symbols()
-    match = next((s for s in all_symbols if s["symbol"] == symbol), None)
-    
-    # Try stripping leading zeros for numeric symbols (e.g., 0700 -> 700 for HKEX)
-    if not match and symbol.isdigit() and symbol.startswith("0"):
-        short_sym = str(int(symbol))
-        match = next((s for s in all_symbols if s["symbol"] == short_sym), None)
-        if match:
-            symbol = short_sym # Update symbol to the matched one (e.g., 700)
-    
-    if match:
-        exch = match.get("exchange")
-        suffix = EXCHANGE_SUFFIX_MAP.get(exch)
-        if suffix:
-            return f"{symbol}{suffix}"
-            
-    return symbol
-
 # =============== FINNHUB PROXY ENDPOINTS ===============
-
-async def _get_fallback_query(symbol: str) -> str:
-    """
-    Get a better query string for Google News fallback (e.g. 'Company Name symbol' instead of just 'symbol').
-    """
-    try:
-        all_symbols = await get_symbols()
-        match = next((s for s in all_symbols if s["symbol"] == symbol), None)
-        if match and match.get("name"):
-            # Clean name (remove Inc, Corp, etc to keep it short?)
-            # Or just use full name. Google is smart.
-            return f"{match['name']} {symbol}"
-    except Exception:
-        pass
-    return symbol
 
 async def _require_client():
     if _client is None:
@@ -767,9 +435,6 @@ async def _require_client():
 async def get_quote(symbol: str):
     symbol = symbol.upper()
     
-    # Resolve symbol with suffix for Finnhub
-    finnhub_symbol = await _resolve_finnhub_symbol(symbol)
-    
     # 1. Try Finnhub first
     q = {}
     success = False
@@ -777,14 +442,14 @@ async def get_quote(symbol: str):
     if FINNHUB_TOKEN:
         await _require_client()
         try:
-            r = await _client.get(f"{FINNHUB_BASE_URL}/quote", params={"symbol": finnhub_symbol, "token": FINNHUB_TOKEN})
+            r = await _client.get(f"{FINNHUB_BASE_URL}/quote", params={"symbol": symbol, "token": FINNHUB_TOKEN})
             if r.status_code == 200:
                 q = r.json() or {}
                 # Finnhub often returns c=0 for invalid symbols
                 if q.get("c") != 0:
                      success = True
         except Exception as e:
-            print(f"Finnhub quote exception for {symbol} ({finnhub_symbol}): {e}")
+            print(f"Finnhub quote exception for {symbol}: {e}")
 
     # 2. Fallback to internal list (TradingView data) if Finnhub failed
     if not success:
@@ -796,15 +461,6 @@ async def get_quote(symbol: str):
             # or call the function.
             all_symbols = await get_symbols()
             match = next((s for s in all_symbols if s["symbol"] == symbol), None)
-            
-            # Try stripping suffix (e.g. PTT.BK -> PTT)
-            if not match and "." in symbol:
-                 short_sym = symbol.split(".")[0]
-                 match = next((s for s in all_symbols if s["symbol"] == short_sym), None)
-
-            # Try stripping leading zeros
-            if not match and symbol.isdigit() and symbol.startswith("0"):
-                match = next((s for s in all_symbols if s["symbol"] == str(int(symbol))), None)
             
             if match:
                 print(f"Found fallback data for {symbol}")
@@ -866,18 +522,16 @@ async def get_company_news(
     symbol: str,
     hours: int = Query(24, ge=1, le=168),
     limit: int = Query(20, ge=1, le=50),
-    language: str | None = Query(None),
     country: str | None = Query(None, description="Two-letter country code (e.g., us, gb)"),
 ):
     # Cache check
-    key = f"company_news_v8|{symbol.upper()}|{hours}|{limit}|{country}|{language or ''}"
+    key = f"company_news_v3|{symbol.upper()}|{hours}|{limit}|{country}"
     cached = _cache_get(key)
     if cached:
         return cached
 
     if not FINNHUB_TOKEN:
-        fallback_query = await _get_fallback_query(symbol.upper())
-        items = await fetch_news(fallback_query, limit, language=language, hours=hours, country=country)
+        items = await fetch_news(symbol.upper(), limit, language="en", hours=hours, country=country)
         return {
             "symbol": symbol.upper(),
             "total": len(items),
@@ -885,44 +539,20 @@ async def get_company_news(
         }
 
     await _require_client()
-    
-    finnhub_symbol = await _resolve_finnhub_symbol(symbol.upper())
 
     # Finnhub company-news requires date range (YYYY-MM-DD)
     now_utc = datetime.now(timezone.utc)
     since = now_utc - timedelta(hours=hours)
     params = {
-        "symbol": finnhub_symbol,
+        "symbol": symbol.upper(),
         "from": since.date().isoformat(),
         "to": now_utc.date().isoformat(),
         "token": FINNHUB_TOKEN,
     }
-    
-    try:
-        r = await _client.get(f"{FINNHUB_BASE_URL}/company-news", params=params)
-        if r.status_code != 200:
-            print(f"Finnhub company-news error for {symbol}: {r.status_code} {r.text[:200]}")
-            # Fallback to Google News/NewsAPI
-            fallback_query = await _get_fallback_query(symbol.upper())
-            items = await fetch_news(fallback_query, limit, language=language, hours=hours, country=country)
-            return {
-                "symbol": symbol.upper(),
-                "total": len(items),
-                "news": items,
-            }
-            
-        items = r.json() or []
-    except Exception as e:
-        print(f"Finnhub company-news exception for {symbol}: {e}")
-        # Fallback to Google News/NewsAPI
-        fallback_query = await _get_fallback_query(symbol.upper())
-        items = await fetch_news(fallback_query, limit, language=language, hours=hours, country=country)
-        return {
-            "symbol": symbol.upper(),
-            "total": len(items),
-            "news": items,
-        }
-
+    r = await _client.get(f"{FINNHUB_BASE_URL}/company-news", params=params)
+    if r.status_code != 200:
+        raise HTTPException(r.status_code, f"Finnhub news error: {r.text[:200]}")
+    items = r.json() or []
     # Normalize structure similar to NewsAPI
     normalized = []
     for a in items:
@@ -935,9 +565,7 @@ async def get_company_news(
             "image_url": a.get("image"),
             "is_trusted": _is_trusted_source(a.get("source")),
         }
-        item["url"] = _normalize_url(item["url"])
-        item["source"] = _normalize_source(item["source"], item["url"])
-        if item["url"] and _is_valid_source(item):
+        if _is_valid_source(item):
             normalized.append(item)
             # Collect more for mixing
             if len(normalized) >= limit * 2:
@@ -945,31 +573,10 @@ async def get_company_news(
     
     # Check diversity: If we have too few non-Yahoo items, supplement with Google News
     non_yahoo_count = sum(1 for item in normalized if "yahoo" not in (item.get("source") or "").lower())
-    
-    # Check freshness: If the latest item is older than 6 hours, force supplement
-    is_stale = False
-    if normalized:
+    if non_yahoo_count < 3:
+        print(f"Low diversity for {symbol} from Finnhub ({non_yahoo_count} non-Yahoo). Supplementing with Google News.")
         try:
-            # Finnhub returns unix timestamp in 'datetime' field (which we mapped to 'published_at')
-            # But wait, in the loop above: "published_at": a.get("datetime")
-            # Finnhub 'datetime' is int (unix timestamp).
-            latest_ts = normalized[0].get("published_at")
-            if isinstance(latest_ts, int):
-                if _now() - latest_ts > 6 * 3600: # 6 hours
-                    is_stale = True
-        except Exception:
-            pass
-    else:
-        is_stale = True # No items = stale
-
-    if non_yahoo_count < 3 or is_stale:
-        # print(f"Low diversity or stale for {symbol}. Supplementing with Google News.")
-        try:
-            # Use name + symbol for better precision in Google News if possible
-            # Append "stock" to ensure financial context and avoid irrelevant news (e.g. medical/virus news for SAP)
-            fallback_query = await _get_fallback_query(symbol.upper())
-            exclusions = _get_exclusion_string()
-            query_others = f"{fallback_query} stock -site:yahoo.com -site:finance.yahoo.com {exclusions}"
+            query_others = f"{symbol} stock -site:yahoo.com -site:finance.yahoo.com"
             google_items = await _fetch_google_rss_items(query_others, limit, "en", hours, country)
             normalized.extend(google_items)
         except Exception as e:
@@ -1004,12 +611,10 @@ async def get_stock_overview(
 
     if FINNHUB_TOKEN:
         await _require_client()
-        
-        finnhub_symbol = await _resolve_finnhub_symbol(symbol_upper)
 
         r_quote = await _client.get(
             f"{FINNHUB_BASE_URL}/quote",
-            params={"symbol": finnhub_symbol, "token": FINNHUB_TOKEN},
+            params={"symbol": symbol_upper, "token": FINNHUB_TOKEN},
         )
         if r_quote.status_code != 200:
             raise HTTPException(r_quote.status_code, f"Finnhub quote error: {r_quote.text[:200]}")
@@ -1030,7 +635,7 @@ async def get_stock_overview(
         now_utc = datetime.now(timezone.utc)
         since = now_utc - timedelta(hours=hours)
         params = {
-            "symbol": finnhub_symbol,
+            "symbol": symbol_upper,
             "from": since.date().isoformat(),
             "to": now_utc.date().isoformat(),
             "token": FINNHUB_TOKEN,
@@ -1048,9 +653,7 @@ async def get_stock_overview(
                 "url": a.get("url"),
                 "image_url": a.get("image"),
             }
-            item["url"] = _normalize_url(item["url"])
-            item["source"] = _normalize_source(item["source"], item["url"])
-            if item["url"] and _is_valid_source(item):
+            if _is_valid_source(item):
                 news_items.append(item)
                 # Collect more to allow mixing
                 if len(news_items) >= limit * 2:
@@ -1061,9 +664,7 @@ async def get_stock_overview(
         if non_yahoo_count < 3:
             print(f"Low diversity for {symbol} in Overview. Supplementing.")
             try:
-                # Use finnhub_symbol for better precision
-                exclusions = _get_exclusion_string()
-                query_others = f"{finnhub_symbol} stock -site:yahoo.com -site:finance.yahoo.com {exclusions}"
+                query_others = f"{symbol} stock -site:yahoo.com -site:finance.yahoo.com"
                 google_items = await _fetch_google_rss_items(query_others, limit, "en", hours, country)
                 news_items.extend(google_items)
             except Exception as e:
@@ -1112,7 +713,7 @@ async def get_symbols():
     """
     Fetches the list of available DR symbols and merged with TradingView stocks.
     """
-    key = "dr_tv_symbols_list_v6"
+    key = "dr_tv_symbols_list_v5"
     cached = _cache_get(key)
     if cached is not None:
         return cached
@@ -1140,8 +741,7 @@ async def get_symbols():
                             "name": row.get("underlyingName") or row.get("name") or "",
                             "dr_symbol": row.get("symbol"),
                             "logo": row.get("logo") or row.get("logoUrl") or row.get("image"),
-                            "country": "TH", # DRs are traded in Thailand
-                            "type": "dr"
+                            "country": "TH" # DRs are traded in Thailand
                         })
         except Exception as e:
             print(f"Error fetching DR symbols: {e}")
@@ -1214,18 +814,12 @@ async def get_symbols():
                 existing["change"] = s.get("change", 0)
                 existing["exchange"] = s.get("exchange")
                 existing["country"] = s.get("country")
-                if s.get("type"):
-                    existing["type"] = s.get("type")
             else:
                 merged[s["symbol"]] = s
         
         result = list(merged.values())
-        # Sort by:
-        # 1. Stocks first (type != "dr") - False < True, so type != "dr" is False? No.
-        # We want Stock first. 
-        # is_dr = (type == "dr")
-        # sort key: (is_dr, -market_cap) -> False (0) comes before True (1)
-        result.sort(key=lambda x: (x.get("type") == "dr", -x.get("market_cap", 0)))
+        # Sort by Market Cap Descending (Popularity)
+        result.sort(key=lambda x: x.get("market_cap", 0), reverse=True)
         
         _cache_set(key, result, ttl=3600)
         return result
@@ -1268,7 +862,7 @@ async def _fetch_tradingview_stocks(client, region="america", country_code="US",
             "filter": filters,
             "options": {"lang": "en"},
             "symbols": {"query": {"types": []}, "tickers": []},
-            "columns": ["logoid", "name", "close", "change", "change_abs", "Recommend.All", "volume", "market_cap_basic", "exchange", "type"],
+            "columns": ["logoid", "name", "close", "change", "change_abs", "Recommend.All", "volume", "market_cap_basic", "exchange"],
             "sort": {"sortBy": "market_cap_basic", "sortOrder": "desc"},
             "range": [0, limit] 
         }
@@ -1325,15 +919,14 @@ async def _fetch_tradingview_stocks(client, region="america", country_code="US",
             # ---------------------------------------
 
             # Extract additional data (close, change, change_abs, volume, market_cap)
-            # columns: ["logoid", "name", "close", "change", "change_abs", "Recommend.All", "volume", "market_cap_basic", "exchange", "type"]
-            # indices:     0        1        2        3          4              5             6           7                  8            9
+            # columns: ["logoid", "name", "close", "change", "change_abs", "Recommend.All", "volume", "market_cap_basic", "exchange"]
+            # indices:     0        1        2        3          4              5             6           7                  8
             close = d[2] if len(d) > 2 else 0
             change_pct = d[3] if len(d) > 3 else 0
             change_abs = d[4] if len(d) > 4 else 0
             volume = d[6] if len(d) > 6 else 0
             market_cap = d[7] if len(d) > 7 and d[7] is not None else 0
             exchange = d[8] if len(d) > 8 else None
-            asset_type = d[9] if len(d) > 9 else None
 
             logo_url = None
             if logoid:
@@ -1351,8 +944,7 @@ async def _fetch_tradingview_stocks(client, region="america", country_code="US",
                 "volume": volume,
                 "market_cap": market_cap,
                 "exchange": exchange,
-                "country": country_code,
-                "type": asset_type
+                "country": country_code
             })
             
         return results
@@ -1367,3 +959,4 @@ async def _fetch_tradingview_stocks(client, region="america", country_code="US",
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="localhost", port=8003)
+

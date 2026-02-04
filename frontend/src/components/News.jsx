@@ -4,56 +4,30 @@ import axios from 'axios';
 
 // Read API base from Vite environment variables. Support multiple names
 // (some projects use VITE_NEWS_API, others VITE_NEWS_API_URL or VITE_API_BASE)
-const API_BASE = import.meta.env.VITE_NEWS_API || import.meta.env.VITE_NEWS_API_URL || import.meta.env.VITE_API_BASE || 'http://localhost:8003';
+const API_BASE = import.meta.env.VITE_NEWS_API || import.meta.env.VITE_NEWS_API_URL || import.meta.env.VITE_API_BASE || '';
 const TH_QUERY = "ตลาดหุ้น OR หุ้น OR ดัชนี";
 const EN_QUERY = "stock market";
-const CN_QUERY = "股市";
-const JP_QUERY = "株式市場";
-const DEFAULT_SYMBOLS_MAP = {
-  "All": ["NVDA", "AAPL", "0700", "600519", "7203", "PTT", "SAP", "MC"],
-  "US": ["NVDA", "TSLA", "GOOG", "AAPL", "MSFT", "AMZN", "META", "BABA"],
-  "TH": ["PTT", "DELTA", "AOT", "KBANK", "SCB", "ADVANC", "CPALL", "BDMS"],
-  "CN": ["600519", "601318", "600036", "601857"],
-  "HK": ["0700", "9988", "1299", "0941", "0005"],
-  "JP": ["7203", "6758", "9984", "8306", "7974"],
-  "KR": ["005930", "000660", "035420", "005380"],
-  "VN": ["VIC", "VHM", "VCB", "FPT", "VNM"],
-  "SG": ["D05", "O39", "U11", "Z74"],
-  "TW": ["2330", "2317", "2454", "2308"],
-  "IN": ["RELIANCE", "TCS", "HDFCBANK", "INFY"],
-  "AU": ["BHP", "CBA", "CSL", "NAB"],
-  "GB": ["HSBA", "AZN", "SHE", "BP"],
-  "DE": ["SAP", "SIE", "ALV", "DTE"],
-  "FR": ["MC", "OR", "TTE", "SAN"]
-};
-
-// Common English words/abbreviations to ignore when scanning for tickers in text
-const BLACKLIST_TICKERS = new Set([
-  "A", "I", "T", "S", "Y", "OR", "IT", "US", "UK", "EU", "BE", "ON", "IN", "AT", "TO", "BY", "OF", "UP", "GO", "DO", "AN", "AS", "IF", "MY", "WE", "HE", "NO", "SO", "ME",
-  "THE", "AND", "FOR", "ARE", "BUT", "NOT", "YOU", "ALL", "ANY", "CAN", "HAD", "HAS", "HER", "HIM", "HIS", "HOW", "MAN", "NEW", "NOW", "OLD", "ONE", "OUR", "OUT", "PUT", "SAY", "SHE", "TOO", "USE", "WAY", "WHO", "WHY", "YES", "YET",
-  "CEO", "CFO", "CTO", "IPO", "ETF", "GDP", "CPI", "FED", "USA", "USD", "THB", "CNY", "JPY", "EUR", "GBP"
-]);
-
+const DEFAULT_SYMBOLS = ["NVDA", "TSLA", "GOOG", "AAPL", "MSFT", "AMZN", "META", "BABA"];
 const COUNTRY_OPTIONS = [
-  { code: "All", label: "Global", flag: "🌍" },
-  { code: "US", label: "United States", flag: "🇺🇸" },
-  { code: "TH", label: "Thailand", flag: "🇹🇭" },
-  { code: "CN", label: "China", flag: "🇨🇳" },
-  { code: "HK", label: "Hong Kong", flag: "🇭🇰" },
-  { code: "JP", label: "Japan", flag: "🇯🇵" },
-  { code: "KR", label: "South Korea", flag: "🇰🇷" },
-  { code: "VN", label: "Vietnam", flag: "🇻🇳" },
-  { code: "SG", label: "Singapore", flag: "🇸🇬" },
-  { code: "TW", label: "Taiwan", flag: "🇹🇼" },
-  { code: "IN", label: "India", flag: "🇮🇳" },
-  { code: "AU", label: "Australia", flag: "🇦🇺" },
-  { code: "GB", label: "United Kingdom", flag: "🇬🇧" },
-  { code: "DE", label: "Germany", flag: "🇩🇪" },
-  { code: "FR", label: "France", flag: "🇫🇷" },
+  { code: "All", label: "Global" },
+  { code: "US", label: "United States" },
+  { code: "TH", label: "Thailand" },
+  { code: "CN", label: "China" },
+  { code: "HK", label: "Hong Kong" },
+  { code: "JP", label: "Japan" },
+  { code: "KR", label: "South Korea" },
+  { code: "VN", label: "Vietnam" },
+  { code: "SG", label: "Singapore" },
+  { code: "TW", label: "Taiwan" },
+  { code: "IN", label: "India" },
+  { code: "AU", label: "Australia" },
+  { code: "GB", label: "United Kingdom" },
+  { code: "DE", label: "Germany" },
+  { code: "FR", label: "France" },
 ];
-const CACHE_KEY_HOME = "caldr_news_home_v6";
+const CACHE_KEY_HOME = "caldr_news_home_v4";
 const CACHE_KEY_SEARCH_PREFIX = "caldr_news_search_v2_";
-const CACHE_TTL = 60 * 60 * 1000; // 60 minutes (Increased from 15 to reduce fetching)
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 // Helper for LocalStorage Caching
 const getCache = (key, ignoreTTL = false) => {
@@ -123,7 +97,7 @@ const analyzeSentiment = (text) => {
   return "neutral";
 };
 
-const NewsCard = ({ ticker, quote, news, formatPrice }) => {
+const NewsCard = ({ ticker, quote, news }) => {
   const isPositive = quote && quote.change_pct >= 0;
   const textSentiment = analyzeSentiment(news.title + " " + news.summary);
 
@@ -156,14 +130,7 @@ const NewsCard = ({ ticker, quote, news, formatPrice }) => {
                 <span className="text-sm font-bold text-gray-900">{ticker[0]}</span>
               )}
             </div>
-            <div>
-                <div className="text-sm font-bold text-gray-900">{ticker}</div>
-                {quote.price !== undefined && quote.price !== 0 && formatPrice && (
-                    <div className="text-xs font-semibold text-gray-700">
-                        {formatPrice(quote.price, ticker)}
-                    </div>
-                )}
-            </div>
+            <div className="text-sm font-bold text-gray-900">{ticker}</div>
             <div className={`text-xs font-bold ${isPositive ? 'text-[#137333]' : 'text-[#C5221F]'}`}>
               {isPositive ? '+' : ''}{quote.change_pct?.toFixed(2)}%
             </div>
@@ -204,8 +171,6 @@ const News = () => {
 
   const [search, setSearch] = useState(selected);
   const [country, setCountry] = useState("All");
-  const [showCountryDropdown, setShowCountryDropdown] = useState(false);
-  const countryDropdownRef = React.useRef(null);
   // const [selected, setSelected] = useState(""); 
   const [allSymbols, setAllSymbols] = useState([]);
   const [suggestions, setSuggestions] = useState([]);
@@ -215,15 +180,6 @@ const News = () => {
   const [marketNews, setMarketNews] = useState([]);
   const [defaultUpdates, setDefaultUpdates] = useState([]);
   const [loadingHome, setLoadingHome] = useState(false);
-  const [refreshKey, setRefreshKey] = useState(0);
-
-  // Auto-refresh every 5 minutes
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setRefreshKey(prev => prev + 1);
-    }, 300000); // 5 minutes
-    return () => clearInterval(interval);
-  }, []);
 
   // Data for "Search" view
   const [symbolNews, setSymbolNews] = useState([]);
@@ -258,164 +214,98 @@ const News = () => {
       // 1. Try Cache First (Stale-While-Revalidate)
       const currentCacheKey = `${CACHE_KEY_HOME}_${country}`;
       const cached = getCache(currentCacheKey, true); // Get stale data if available
-      
-      // If we have cached data, show it IMMEDIATELY before starting the fetch
       if (cached) {
-        // Optimistic UI Update
-        if (cached.marketNews) setMarketNews(cached.marketNews);
-        if (cached.defaultUpdates) setDefaultUpdates(cached.defaultUpdates);
-        
-        // If cache is fresh (within TTL) AND not an auto-refresh, stop here to save bandwidth/latency
+        setMarketNews(cached.marketNews);
+        setDefaultUpdates(cached.defaultUpdates);
+        // If cache is fresh, stop here
         const isFresh = getCache(currentCacheKey); 
-        if (isFresh && refreshKey === 0) {
+        if (isFresh) {
             setLoadingHome(false);
             return;
         }
-        
-        // If stale or auto-refresh, we continue to fetch in background but UI is already populated
-        // We set loadingHome to false so user doesn't see spinner while revalidating
-        setLoadingHome(false);
       } else {
-        // Only show spinner if we have absolutely nothing
         setLoadingHome(true);
-        // Clear previous view to avoid confusion (or keep it? better to clear if switching countries completely)
-        setMarketNews([]); 
-        setDefaultUpdates([]);
       }
 
       try {
-        // Parallel Fetching: General News + Company Updates
-        const fetchGeneralNews = async () => {
-            if (country === "All") {
-                // Fetch Major Markets: US/World, Thai, China, Japan
-                const [enRes, thRes, cnRes, jpRes] = await Promise.all([
-                  axios.get(`${API_BASE}/api/news/${encodeURIComponent(EN_QUERY)}`, { params: { limit: 15, language: "en", hours: 72 } }),
-                  axios.get(`${API_BASE}/api/news/${encodeURIComponent(TH_QUERY)}`, { params: { limit: 15, language: "th", hours: 72 } }),
-                  axios.get(`${API_BASE}/api/news/${encodeURIComponent(CN_QUERY)}`, { params: { limit: 10, language: "zh", hours: 72 } }),
-                  axios.get(`${API_BASE}/api/news/${encodeURIComponent(JP_QUERY)}`, { params: { limit: 10, language: "ja", hours: 72 } })
-                ]);
-                return [
-                    ...(enRes.data?.news || []), 
-                    ...(thRes.data?.news || []),
-                    ...(cnRes.data?.news || []),
-                    ...(jpRes.data?.news || [])
-                ];
-            } else if (country === "TH") {
-                const res = await axios.get(`${API_BASE}/api/news/${encodeURIComponent(TH_QUERY)}`, { 
-                    params: { limit: 40, language: "th", hours: 72, country: "th" } 
-                });
-                return res.data?.news || [];
-            } else {
-                const res = await axios.get(`${API_BASE}/api/news/${encodeURIComponent(EN_QUERY)}`, { 
-                    params: { limit: 40, language: "en", hours: 72, country: country.toLowerCase() } 
-                });
-                return res.data?.news || [];
-            }
-        };
-
-        const targetSymbols = (country && DEFAULT_SYMBOLS_MAP[country]) 
-            ? DEFAULT_SYMBOLS_MAP[country] 
-            : DEFAULT_SYMBOLS_MAP["All"];
-
-        const fetchUpdates = async () => {
-            const updatesPromises = targetSymbols.map(async (sym) => {
-              try {
-                const [qRes, nRes] = await Promise.all([
-                  axios.get(`${API_BASE}/api/finnhub/quote/${sym}`),
-                  axios.get(`${API_BASE}/api/finnhub/company-news/${sym}`, { 
-                    params: { 
-                        hours: 72, 
-                        limit: 2,
-                        country: country !== "All" ? country : undefined,
-                        language: "en"
-                    } 
-                  })
-                ]);
-    
-                const articles = nRes.data?.news || [];
-                return articles.slice(0, 2).map(art => ({
-                  ticker: sym,
-                  quote: qRes.data,
-                  news: art
-                }));
-              } catch (e) {
-                console.error(`Failed to load default data for ${sym}`, e);
-                return [];
-              }
-            });
-            return (await Promise.all(updatesPromises)).flat();
-        };
-
-        // Execute fetches incrementally to show UI faster
-        const generalNewsPromise = fetchGeneralNews();
-        const updatesPromise = fetchUpdates();
-
-        // 1. Wait for General News first (Fastest & Most Important)
-        try {
-            const merged = await generalNewsPromise;
-            
-            if (mounted) {
-                merged.sort((a, b) => {
-                  const da = a.published_at ? new Date(a.published_at) : new Date(0);
-                  const db = b.published_at ? new Date(b.published_at) : new Date(0);
-                  return db - da;
-                });
-                
-                const generalNewsWrapped = merged.map(item => ({ news: item }));
-                
-                // Immediate Render: Show General News while waiting for updates
-                // Only if we don't have cached data displayed, or if we want to refresh it
-                setMarketNews(generalNewsWrapped);
-                setLoadingHome(false); // Stop loading spinner immediately
-            }
-
-            // 2. Wait for Company Updates (Slower)
-            const updates = await updatesPromise;
-            
+        let merged = [];
+        
+        if (country === "All") {
+            // Default behavior: US + TH
+            const [enRes, thRes] = await Promise.all([
+              axios.get(`${API_BASE}/api/news/${encodeURIComponent(EN_QUERY)}`, { params: { limit: 20, language: "en", hours: 72 } }),
+              axios.get(`${API_BASE}/api/news/${encodeURIComponent(TH_QUERY)}`, { params: { limit: 20, language: "th", hours: 72 } })
+            ]);
             if (!mounted) return;
+            const enNews = enRes.data?.news || [];
+            const thNews = thRes.data?.news || [];
+            merged = [...enNews, ...thNews];
+        } else if (country === "TH") {
+            // Thailand specific
+            const res = await axios.get(`${API_BASE}/api/news/${encodeURIComponent(TH_QUERY)}`, { 
+                params: { limit: 40, language: "th", hours: 72, country: "th" } 
+            });
+            if (!mounted) return;
+            merged = res.data?.news || [];
+        } else {
+            // Other countries
+            const res = await axios.get(`${API_BASE}/api/news/${encodeURIComponent(EN_QUERY)}`, { 
+                params: { limit: 40, language: "en", hours: 72, country: country.toLowerCase() } 
+            });
+            if (!mounted) return;
+            merged = res.data?.news || [];
+        }
 
-            const toMs = (v) => typeof v === "number" ? v * 1000 : (new Date(v).getTime() || 0);
-            updates.sort((a, b) => toMs(b.news.published_at) - toMs(a.news.published_at));
+        merged.sort((a, b) => {
+          const da = a.published_at ? new Date(a.published_at) : new Date(0);
+          const db = b.published_at ? new Date(b.published_at) : new Date(0);
+          return db - da;
+        });
 
-            // Merge general news and company updates
-            const combinedNews = [
-              ...merged.map(item => ({ news: item })),
-              ...updates
-            ];
+        // Load Default Updates (Mocking the "Latest Updates" list with specific tickers)
+        // We fetch quote + news for DEFAULT_SYMBOLS in Parallel
+        const updatesPromises = DEFAULT_SYMBOLS.map(async (sym) => {
+          try {
+            const [qRes, nRes] = await Promise.all([
+              axios.get(`${API_BASE}/api/finnhub/quote/${sym}`),
+              axios.get(`${API_BASE}/api/finnhub/company-news/${sym}`, { params: { hours: 72, limit: 2 } })
+            ]);
 
-            combinedNews.sort((a, b) => toMs(b.news.published_at) - toMs(a.news.published_at));
+            const articles = nRes.data?.news || [];
+            return articles.slice(0, 2).map(art => ({
+              ticker: sym,
+              quote: qRes.data,
+              news: art
+            }));
+          } catch (e) {
+            console.error(`Failed to load default data for ${sym}`, e);
+            return [];
+          }
+        });
 
-            if (mounted) {
-              // Prevent re-render if data is identical to cache (Deep check logic)
-              let hasChanged = true;
-              if (cached && cached.marketNews && cached.marketNews.length === combinedNews.length) {
-                   const getTitlesHash = (list) => list.map(i => i.news.id || i.news.title).join('|');
-                   const newHash = getTitlesHash(combinedNews);
-                   const oldHash = getTitlesHash(cached.marketNews);
-                   const updatesChanged = updates.length !== cached.defaultUpdates?.length;
-                   
-                   if (newHash === oldHash && !updatesChanged) {
-                       hasChanged = false;
-                   }
-              }
+        const updatesResults = await Promise.all(updatesPromises);
+        const updates = updatesResults.flat();
 
-              if (hasChanged) {
-                setDefaultUpdates(updates);
-                setMarketNews(combinedNews);
-                
-                // Save to Cache
-                setCache(currentCacheKey, {
-                  marketNews: combinedNews,
-                  defaultUpdates: updates
-                });
-                console.log("News updated from fetch (full)");
-              } else {
-                console.log("News identical to cache, skipping update");
-              }
-            }
-        } catch (err) {
-            console.error("Error in incremental fetch:", err);
-            throw err; // Re-throw to be caught by outer catch
+        const toMs = (v) => typeof v === "number" ? v * 1000 : (new Date(v).getTime() || 0);
+        updates.sort((a, b) => toMs(b.news.published_at) - toMs(a.news.published_at));
+
+        // Merge general news and company updates for "Top Stories"
+        const combinedNews = [
+          ...merged.map(item => ({ news: item })), // Wrap general news
+          ...updates // Company news already has { news, ticker, quote }
+        ];
+
+        combinedNews.sort((a, b) => toMs(b.news.published_at) - toMs(a.news.published_at));
+
+        if (mounted) {
+          setDefaultUpdates(updates);
+          setMarketNews(combinedNews);
+          
+          // Save to Cache
+          setCache(currentCacheKey, {
+            marketNews: combinedNews,
+            defaultUpdates: updates
+          });
         }
 
       } catch (e) {
@@ -430,7 +320,7 @@ const News = () => {
     }
 
     return () => { mounted = false; };
-  }, [selected, country, refreshKey]);
+  }, [selected, country]);
 
   // Fetch Search Data
   useEffect(() => {
@@ -502,174 +392,20 @@ const News = () => {
     return () => { mounted = false; };
   }, [selected, allSymbols]); // Added allSymbols dependency for safe match check
 
-  const topStory = useMemo(() => {
-    // Prioritize General Market News (no ticker) for Top Story
-    let story = marketNews.find(item => !item.ticker);
-    
-    // Fallback to first available item
-    if (!story) story = marketNews[0];
-    
-    if (!story) return null;
-
-    // Clone to enrich
-    let enriched = { ...story };
-
-    // Attempt to enrich story with ticker/logo from title if missing
-    if (!enriched.ticker && enriched.news && enriched.news.title) {
-        // Use original text for case-sensitive check
-        const text = (enriched.news.title + " " + (enriched.news.summary || ""));
-        const textUpper = text.toUpperCase();
-        
-        // 1. Look for ticker pattern like "(SNPS)" - Highest Confidence
-        // Support Alphanumeric (e.g. 700, 601398, COM7)
-        const match = enriched.news.title.match(/\(([A-Z0-9]{1,8})\)/);
-        let ticker = match ? match[1] : null;
-
-        // 2. Ticker Scan (Strict)
-        if (!ticker && allSymbols.length > 0) {
-            // Tokenize: allow alphanumeric but exclude pure numbers (to avoid years/amounts)
-            // unless they are long enough (e.g. 5+ digits for CN/KR/JP)
-            const tokens = text.split(/[^A-Za-z0-9]+/);
-            const symbolSet = new Set(allSymbols.map(s => s.symbol));
-            
-            ticker = tokens.find(t => {
-                if (!symbolSet.has(t)) return false;
-                if (BLACKLIST_TICKERS.has(t)) return false;
-                
-                // Heuristics for Safety:
-                // 1. Purely Numeric (e.g. "700", "2024")
-                if (/^[0-9]+$/.test(t)) {
-                    // Only allow if length >= 5 (Safe for CN/KR/JP 5-6 digits like 601398, 005930)
-                    if (t.length >= 5) return true;
-                    // Reject 1-4 digit numbers (Too risky: "2024", "100", "1", "700")
-                    // Unless we are absolutely sure, but for loose scan it's safer to skip.
-                    return false;
-                }
-                
-                // 2. Alphanumeric (Mixed) or Alpha
-                // Check length constraints (e.g. 2-8 chars)
-                if (t.length < 2 || t.length > 8) return false;
-                
-                return true;
-            });
-        }
-
-        // 3. Name Match (Fuzzy) - Fallback if no ticker found
-        // This is expensive, so only do it for Top Story
-        if (!ticker && allSymbols.length > 0) {
-            // Optimization: Filter symbols to likely candidates? No, just iterate.
-            // We want to find the Longest Name that appears in the text to avoid partial matches
-            // e.g. "General" matching "General Motors" (Bad) vs "General Motors" (Good)
-            // So we sort symbols by name length descending? Too slow to sort all.
-            // Instead, just iterate and keep best match.
-            
-            // Pre-process blacklist words for names
-            const IGNORE_NAMES = new Set(["THE", "INC", "CORP", "LTD", "GROUP", "HOLDINGS", "PLC", "NV", "SA", "AG", "COMPANY", "LIMITED"]);
-            
-            let bestMatch = null;
-            let maxLen = 0;
-
-            for (const sym of allSymbols) {
-                if (!sym.name) continue;
-                
-                // Clean name: "Apple Inc." -> "Apple"
-                // But be careful: "Amazon.com" -> "Amazon"
-                // "Advanced Micro Devices" -> "Advanced Micro Devices"
-                
-                // Simple heuristic: Use the first 2 words if length > 1, else 1 word.
-                // Or just use the full name and check if it exists in text.
-                // Many TV names are like "Apple Inc."
-                
-                let cleanName = sym.name
-                    .replace(/,?\s*(Inc\.?|Corp\.?|Corporation|Ltd\.?|Limited|PLC|PCL|Group|Holdings|Company|Co\.?)\b/gi, "")
-                    .replace(/[^a-zA-Z0-9\s]/g, "") // Remove dots/commas
-                    .trim();
-
-                if (cleanName.length < 4) continue; // Skip short names to avoid false positives
-                if (IGNORE_NAMES.has(cleanName.toUpperCase())) continue;
-
-                // Check if cleanName appears in text (Case Insensitive)
-                // Use regex with word boundaries
-                try {
-                    const regex = new RegExp(`\\b${cleanName}\\b`, "i");
-                    if (regex.test(text)) {
-                         if (cleanName.length > maxLen) {
-                             maxLen = cleanName.length;
-                             bestMatch = sym.symbol;
-                         }
-                    }
-                } catch (e) {
-                    // Regex error for weird names
-                }
-            }
-            
-            if (bestMatch) {
-                ticker = bestMatch;
-            }
-        }
-
-        if (ticker) {
-            // Check if we have this symbol in our database
-            const symbolData = allSymbols.find(s => s.symbol === ticker);
-            if (symbolData) {
-                return {
-                    ...enriched,
-                    ticker: ticker,
-                    quote: {
-                        logo_url: symbolData.logo,
-                        change_pct: 0 // Dummy value
-                    }
-                };
-            }
-        }
-    }
-    
-    return enriched;
-  }, [marketNews, allSymbols]);
-
-  const [topStoryQuote, setTopStoryQuote] = useState(null);
-
-  // Fetch real quote for Top Story if it has a ticker but no real quote
-  useEffect(() => {
-    setTopStoryQuote(null); // Reset when story changes
-    if (topStory?.ticker) {
-        // Use backend resolution or direct
-        // If it's a Thai stock, append .BK? Backend handles it via _resolve_finnhub_symbol? 
-        // But /api/finnhub/quote/{symbol} calls backend get_quote which calls _resolve_finnhub_symbol.
-        // So sending "PTT" is fine.
-        
-        axios.get(`${API_BASE}/api/finnhub/quote/${encodeURIComponent(topStory.ticker)}`)
-             .then(res => {
-                 if (res.data && res.data.price !== 0) {
-                     setTopStoryQuote(res.data);
-                 }
-             })
-             .catch(err => console.error("Failed to fetch top story quote", err));
-    }
-  }, [topStory?.ticker]); // Only refetch if ticker changes
-
-  // Merge real quote into topStory
-  const finalTopStory = useMemo(() => {
-      if (!topStory) return null;
-      if (topStoryQuote && topStory.ticker === topStoryQuote.symbol) {
-          return { ...topStory, quote: topStoryQuote };
-      }
-      return topStory;
-  }, [topStory, topStoryQuote]);
-
+  const topStory = useMemo(() => marketNews.find(item => item.ticker), [marketNews]);
   const topStorySentiment = useMemo(() => {
-    if (!finalTopStory) return "neutral";
-    const textSentiment = analyzeSentiment(finalTopStory.news.title + " " + finalTopStory.news.summary);
+    if (!topStory) return "neutral";
+    const textSentiment = analyzeSentiment(topStory.news.title + " " + topStory.news.summary);
     
     // Conflict Resolution for Top Story
-    if (finalTopStory.quote) {
-      const isPositive = finalTopStory.quote.change_pct >= 0;
+    if (topStory.quote) {
+      const isPositive = topStory.quote.change_pct >= 0;
       if (isPositive && textSentiment === "negative") return "neutral";
       if (!isPositive && textSentiment === "positive") return "neutral";
     }
     
     return textSentiment;
-  }, [finalTopStory]);
+  }, [topStory]);
 
 
   const onSearchKey = (e) => {
@@ -700,6 +436,8 @@ const News = () => {
   const updateSuggestions = (value) => {
     let filtered = allSymbols;
     
+    console.log(`Filtering for Country: ${country}, Search: ${value}, Total Symbols: ${allSymbols.length}`);
+    
     // Filter by Country if not "All"
     if (country !== "All") {
       filtered = filtered.filter(s => s.country === country);
@@ -709,13 +447,13 @@ const News = () => {
       filtered = filtered.filter(s => s.symbol.startsWith(value));
     }
     
+    console.log(`Filtered Count: ${filtered.length}`);
+    if (filtered.length > 0) {
+        console.log("Sample:", filtered[0]);
+    }
+    
     setSuggestions(filtered.slice(0, 100));
     setShowSuggestions(true);
-    
-    // Cancel any pending blur to keep it open
-    if (blurTimeoutRef.current) {
-        clearTimeout(blurTimeoutRef.current);
-    }
   };
 
   const handleSearchChange = (e) => {
@@ -724,68 +462,24 @@ const News = () => {
     updateSuggestions(newSearch);
   };
 
-  const inputRef = React.useRef(null);
-  const blurTimeoutRef = React.useRef(null);
-
-  // Handle country switch for smoother transition
-  const handleCountryChange = (code) => {
-    // 1. Close dropdown immediately
-    setShowCountryDropdown(false);
-    
-    // 2. Check Cache synchronously to avoid "stale data" flash
-    const cacheKey = `${CACHE_KEY_HOME}_${code}`;
-    const cached = getCache(cacheKey, true); // Get stale data if available
-
-    if (cached) {
-        // If cache exists, update state IMMEDIATELY -> Instant transition
-        setMarketNews(cached.marketNews);
-        setDefaultUpdates(cached.defaultUpdates);
-        setLoadingHome(false);
-    } else {
-        // If no cache, set loading IMMEDIATELY -> Avoid showing previous country's news
-        setMarketNews([]); // Clear old data
-        setDefaultUpdates([]);
-        setLoadingHome(true);
-    }
-
-    // 3. Update country state (this triggers useEffect for background fetch/validation)
-    setCountry(code);
+  const handleSearchFocus = () => {
+    updateSuggestions(search);
   };
 
   // Update suggestions when country changes
-  // Removed auto-focus and auto-show behavior as per user request
-  // Suggestions will be updated when user focuses the input or types
-
-
-  // Click outside to close country dropdown
   useEffect(() => {
-      const handleClickOutside = (event) => {
-          if (countryDropdownRef.current && !countryDropdownRef.current.contains(event.target)) {
-              setShowCountryDropdown(false);
-          }
-      };
-      document.addEventListener("mousedown", handleClickOutside);
-      return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
+    // Only update if we have a search term or the dropdown is interacting
+    updateSuggestions(search);
+  }, [country]);
 
-  // Close suggestions when clicking outside
+  // Close suggestions when clicking outside would be ideal, 
+  // but for now we'll rely on selection or blur (careful with blur vs click)
+  // A simple way is to delay hiding on blur to allow click to register
   const handleSearchBlur = () => {
-    // Clear any existing timeout
-    if (blurTimeoutRef.current) {
-      clearTimeout(blurTimeoutRef.current);
-    }
     // Delay hiding to allow item click to register
-    blurTimeoutRef.current = setTimeout(() => {
+    setTimeout(() => {
       setShowSuggestions(false);
     }, 200);
-  };
-  
-  // Clear blur timeout if we interact with search
-  const handleSearchFocus = () => {
-    if (blurTimeoutRef.current) {
-        clearTimeout(blurTimeoutRef.current);
-    }
-    updateSuggestions(search);
   };
 
   const selectSuggestion = (s) => {
@@ -811,11 +505,6 @@ const News = () => {
   if (showSuggestions && suggestions.length > 0) {
     suggestionsContent = (
       <div className="absolute top-full left-0 right-0 bg-white border border-gray-200 rounded-xl mt-1 shadow-lg z-50 max-h-60 overflow-y-auto">
-        {search.trim() === "" && (
-            <div className="px-4 py-2 text-xs font-semibold text-gray-400 bg-gray-50 border-b border-gray-100 sticky top-0 z-10">
-                RECOMMENDED
-            </div>
-        )}
         {suggestions.map((s, i) => (
           <div
             key={i}
@@ -856,47 +545,6 @@ const News = () => {
     );
   }
 
-  const getCurrency = (symbol) => {
-    if (!symbol) return "$";
-    // Strip suffix if present (e.g. PTT.BK -> PTT)
-    const rawSymbol = symbol.includes('.') ? symbol.split('.')[0] : symbol;
-
-    // 1. Check if we have match in allSymbols to get Country
-    if (!allSymbols.length) return "$";
-    const match = allSymbols.find(s => s.symbol === rawSymbol);
-    if (!match) return "$"; // Default
-
-    const c = match.country ? match.country.toUpperCase() : "US";
-    switch (c) {
-        case "TH": return "฿";
-        case "CN": return "¥";
-        case "HK": return "HK$";
-        case "JP": return "¥";
-        case "KR": return "₩";
-        case "GB": return "£";
-        case "DE": case "FR": case "EU": return "€";
-        case "IN": return "₹";
-        case "VN": return "₫";
-        case "SG": return "S$";
-        case "TW": return "NT$";
-        case "AU": return "A$";
-        default: return "$";
-    }
-  };
-
-  const formatPrice = (price, symbol) => {
-      if (typeof price !== 'number') return "0.00";
-      
-      const currency = getCurrency(symbol);
-      
-      // Special formatting for high-value currencies (KRW, VND, JPY) - usually no decimals
-      if (["₩", "₫", "¥"].includes(currency)) {
-          return `${currency}${price.toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
-      }
-      
-      return `${currency}${price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  };
-
   return (
     <div className="min-h-screen w-full bg-[#F5F5F5] flex justify-center">
       <div className="w-full max-w-[1248px] px-4 md:px-8 flex flex-col h-full py-10">
@@ -908,60 +556,27 @@ const News = () => {
             <p className="text-[#6B6B6B] text-xs sm:text-sm">Latest market updates, earnings reports, and insights for Underlying Assets</p>
           </div>
           <div className="flex flex-col md:flex-row items-center gap-4 w-full md:w-auto">
-            {/* Country Select (Custom Dropdown with Flags) */}
-            <div className="relative w-full md:w-56" ref={countryDropdownRef}>
-              <button
-                onClick={() => setShowCountryDropdown(!showCountryDropdown)}
-                className="w-full bg-white border border-gray-200 text-[#0B102A] py-2.5 pl-3 pr-10 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#0B102A] text-sm font-medium flex items-center gap-3 shadow-sm hover:border-gray-300 transition-colors"
+            {/* Country Select */}
+            <div className="relative w-full md:w-40">
+              <select
+                value={country}
+                onChange={(e) => setCountry(e.target.value)}
+                className="w-full appearance-none bg-white border border-gray-200 text-[#0B102A] py-2.5 pl-4 pr-10 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#0B102A] text-sm font-medium cursor-pointer hover:border-gray-300 transition-colors shadow-sm"
               >
-                 {country === "All" ? (
-                    <div className="w-6 h-4 flex items-center justify-center text-lg leading-none">🌍</div>
-                 ) : (
-                    <img 
-                        src={`https://flagcdn.com/w40/${country.toLowerCase()}.png`} 
-                        alt={country} 
-                        className="w-6 h-auto object-cover rounded-[2px] shadow-sm border border-gray-100" 
-                    />
-                 )}
-                 <span className="truncate">
-                    {COUNTRY_OPTIONS.find(o => o.code === country)?.label || "Global"}
-                 </span>
-                 <div className="absolute inset-y-0 right-0 flex items-center px-3 text-gray-500 pointer-events-none">
-                    <i className="bi bi-chevron-down text-xs"></i>
-                 </div>
-              </button>
-
-              {showCountryDropdown && (
-                <div className="absolute top-full left-0 right-0 bg-white border border-gray-200 rounded-xl mt-1 shadow-xl z-[60] max-h-[300px] overflow-y-auto custom-scrollbar">
-                    {COUNTRY_OPTIONS.map((opt) => (
-                        <div
-                            key={opt.code}
-                            onClick={() => handleCountryChange(opt.code)}
-                            className={`px-4 py-2.5 cursor-pointer flex items-center gap-3 text-sm transition-colors ${country === opt.code ? 'bg-blue-50 text-blue-700' : 'hover:bg-gray-50 text-[#0B102A]'}`}
-                        >
-                            {opt.code === "All" ? (
-                                <div className="w-6 h-4 flex items-center justify-center text-lg leading-none">🌍</div>
-                            ) : (
-                                <img 
-                                    src={`https://flagcdn.com/w40/${opt.code.toLowerCase()}.png`} 
-                                    alt={opt.code} 
-                                    className="w-6 h-auto object-cover rounded-[2px] shadow-sm border border-gray-100" 
-                                />
-                            )}
-                            <span className="font-medium">{opt.code === "All" ? "Global" : opt.label}</span>
-                            {country === opt.code && (
-                                <i className="bi bi-check-lg ml-auto text-blue-600"></i>
-                            )}
-                        </div>
-                    ))}
-                </div>
-              )}
+                {COUNTRY_OPTIONS.map((opt) => (
+                  <option key={opt.code} value={opt.code}>
+                    {opt.code === "All" ? "Global" : `${opt.code} - ${opt.label}`}
+                  </option>
+                ))}
+              </select>
+              <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-gray-500">
+                <i className="bi bi-chevron-down text-xs"></i>
+              </div>
             </div>
 
             {/* Search Input */}
             <div className="relative w-full md:w-[300px]">
               <input
-                ref={inputRef}
                 type="text"
                 value={search}
                 onChange={handleSearchChange}
@@ -1014,7 +629,7 @@ const News = () => {
                         </div>
                       </div>
                       <div className="relative z-10 text-right">
-                        <div className="text-3xl font-bold">{formatPrice(quote.price, selected)}</div>
+                        <div className="text-3xl font-bold">${quote.price?.toFixed(2)}</div>
                         <div className={`text-sm font-medium ${quote.change_pct >= 0 ? 'text-[#4ADE80]' : 'text-[#F87171]'}`}>
                           {quote.change_pct >= 0 ? '+' : ''}{quote.change_pct?.toFixed(2)}%
                         </div>
@@ -1052,7 +667,7 @@ const News = () => {
                   <a href={topStory.news.url} target="_blank" rel="noreferrer" className="block group">
                     <div className="bg-[#0B102A] rounded-2xl px-5 sm:px-7 md:px-8 py-4 sm:py-5 md:py-6 text-white relative overflow-hidden shadow-lg">
                       <div className="relative z-10 max-w-3xl pr-20 sm:pr-28 md:pr-36">
-                        {topStory.ticker && topStory.quote ? (
+                        {topStory.ticker && topStory.quote && (
                           <div className="flex items-center gap-3 mb-3">
                             <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center overflow-hidden">
                               {topStory.quote.logo_url ? (
@@ -1063,17 +678,9 @@ const News = () => {
                             </div>
                             <div>
                               <div className="text-sm font-bold text-blue-200">{topStory.ticker}</div>
-                              {topStory.quote.price !== undefined && topStory.quote.price !== 0 && (
-                                <div className={`text-xs font-medium ${topStory.quote.change_pct >= 0 ? 'text-[#4ADE80]' : 'text-[#F87171]'}`}>
-                                  {formatPrice(topStory.quote.price, topStory.ticker)} 
-                                  <span className="ml-1">
-                                    {topStory.quote.change_pct >= 0 ? '+' : ''}{topStory.quote.change_pct?.toFixed(2)}%
-                                  </span>
-                                </div>
-                              )}
                             </div>
                           </div>
-                        ) : null}
+                        )}
                         <h3 className="text-lg md:text-xl font-semibold leading-snug mb-2 group-hover:text-blue-200 transition-colors">
                           {topStory.news.title}
                         </h3>
@@ -1092,34 +699,15 @@ const News = () => {
                           <span>{timeAgo(topStory.news.published_at)}</span>
                         </div>
                       </div>
-                      <div className="absolute right-4 sm:right-6 md:right-8 top-1/2 transform -translate-y-1/2 w-[80px] h-[80px] sm:w-[100px] sm:h-[100px] md:w-[120px] md:h-[120px]">
-                        {/* Layer 0: Default Fallback (Source Initial) */}
-                        <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-blue-800 to-blue-900 rounded-lg shadow-md border border-white/10">
-                          <span className="text-3xl sm:text-4xl md:text-5xl font-bold text-white/90">
-                            {topStory.news.source ? topStory.news.source[0].toUpperCase() : "N"}
-                          </span>
-                        </div>
-
-                        {/* Layer 1: Quote Logo (if available) */}
-                        {topStory.quote && topStory.quote.logo_url && (
-                          <div className="absolute inset-0 bg-white rounded-lg p-2 shadow-sm flex items-center justify-center">
-                             <img 
-                                src={topStory.quote.logo_url} 
-                                className="w-full h-full object-contain" 
-                                alt="logo"
-                                onError={(e) => e.target.parentElement.style.display='none'} 
-                             />
-                          </div>
-                        )}
-
-                        {/* Layer 2: News Image (if available) */}
-                        {topStory.news.image_url && (
-                          <img 
-                            src={topStory.news.image_url} 
+                      <div className="absolute right-4 sm:right-6 md:right-8 top-1/2 transform -translate-y-1/2">
+                        {topStory.quote && topStory.quote.logo_url ? (
+                          <img
+                            src={topStory.quote.logo_url}
                             alt="background"
-                            className="absolute inset-0 w-full h-full object-cover rounded-lg shadow-md border border-white/10 bg-white"
-                            onError={(e) => e.target.style.display = 'none'}
+                            className="w-[64px] h-[64px] sm:w-[80px] sm:h-[80px] md:w-[96px] md:h-[96px] object-contain"
                           />
+                        ) : (
+                          <i className="bi bi-newspaper text-[48px] sm:text-[72px] md:text-[96px]"></i>
                         )}
                       </div>
                     </div>
@@ -1135,16 +723,13 @@ const News = () => {
                 <div className="flex flex-col gap-4">
                   {loadingHome ? (
                     Array.from({ length: 3 }).map((_, i) => <div key={i} className="animate-pulse h-24 bg-gray-100 rounded-xl" />)
-                  ) : defaultUpdates && defaultUpdates.length > 0 ? (
-                    defaultUpdates
-                        .filter(item => !topStory || item.news.url !== topStory.news.url) // Prevent duplication
-                        .map((item, idx) => (
+                  ) : defaultUpdates.length > 0 ? (
+                    defaultUpdates.map((item, idx) => (
                       <NewsCard
                         key={idx}
                         ticker={item.ticker}
                         quote={item.quote}
                         news={item.news}
-                        formatPrice={formatPrice}
                       />
                     ))
                   ) : (

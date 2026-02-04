@@ -1,5 +1,4 @@
 from fastapi import FastAPI, Query
-from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import httpx
@@ -2011,19 +2010,6 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 @app.get("/")
 def root():
     return {"status": "ok", "message": "Ratings API is running"}
-
-class TrackEvent(BaseModel):
-    session_id: str | None = None
-    user_id: str | None = None
-    event_type: str
-    event_data: dict | None = None
-    page_path: str | None = None
-    timestamp: str | None = None
-    user_agent: str | None = None
-
-@app.post("/api/track")
-async def track_event(event: TrackEvent):
-    return {"status": "success"}
 
 def calculate_accuracy_from_rating_change(history_rows, window_days=90):
 
