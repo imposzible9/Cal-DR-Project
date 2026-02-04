@@ -22,6 +22,8 @@ DR_LIST_URL = "https://api.ideatrade1.com/caldr"
 ENABLE_DR_FILTER = os.getenv("ENABLE_DR_FILTER", "True").lower() == "true"
 CACHE_FILE = "earnings_cache.json"
 UPDATE_INTERVAL_SECONDS = int(os.getenv("EARNINGS_UPDATE_INTERVAL_SECONDS") or "3600")
+# Show detailed filter warnings (set env SHOW_FILTER_WARNINGS=true to enable)
+SHOW_FILTER_WARNINGS = os.getenv("SHOW_FILTER_WARNINGS", "False").lower() == "true"
 
 FAKE_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -214,8 +216,9 @@ def map_tv_data_to_object(raw_data, valid_tickers: set = None, ticker_mapping: d
             
             if not matched:
                 # Debug: แสดง ticker ที่ไม่ match (แสดงแค่ 10 ตัวแรกเพื่อไม่ให้ log เยอะเกินไป)
-                if len([x for x in mapped_list if not hasattr(x, '_debug_shown')]) < 10:
-                    print(f"  [WARN] Filtered out: logoid='{logoid}', name='{ticker_name}' (not in {len(valid_tickers)} DR tickers)")
+                if SHOW_FILTER_WARNINGS:
+                    if len([x for x in mapped_list if not hasattr(x, '_debug_shown')]) < 10:
+                        print(f"  [WARN] Filtered out: logoid='{logoid}', name='{ticker_name}' (not in {len(valid_tickers)} DR tickers)")
                 continue  # ไม่พบใน whitelist ให้ข้าม
             else:
                 # Debug: แสดง ticker ที่ match ได้ (แสดงแค่ 10 ตัวแรก)
