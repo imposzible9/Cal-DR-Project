@@ -9,7 +9,7 @@ import { useMemo } from 'react';
 
 import { API_CONFIG } from '../config/api';
 
-const API_BASE = API_CONFIG.RATINGS_API; // Unified API
+const API_BASE = API_CONFIG.endpoints.ratings.base; // Unified API (Mapped to /ratings)
 
 // Memoized Summary Section to prevent re-renders (Restored)
 const StatsSummary = React.memo(({ summary, loading, processedPageData, totalViews }) => {
