@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import axios from 'axios';
 
@@ -7,25 +7,100 @@ import axios from 'axios';
 const API_BASE = import.meta.env.VITE_NEWS_API || import.meta.env.VITE_NEWS_API_URL || import.meta.env.VITE_API_BASE || '';
 const TH_QUERY = "ตลาดหุ้น OR หุ้น OR ดัชนี";
 const EN_QUERY = "stock market";
-const DEFAULT_SYMBOLS = ["NVDA", "TSLA", "GOOG", "AAPL", "MSFT", "AMZN", "META", "BABA"];
+
+const COUNTRY_CONFIG = {
+  "US": {
+    query: "stock market",
+    lang: "en",
+    symbols: ["NVDA", "TSLA", "GOOG", "AAPL", "MSFT", "AMZN", "META", "BABA"]
+  },
+  "TH": {
+    query: "ตลาดหุ้น OR หุ้น OR ดัชนี",
+    lang: "th",
+    symbols: [
+      "DELTA.BK", "ADVANC.BK", "TRUE.BK",
+      "KBANK.BK", "SCB.BK", "BBL.BK", "KTB.BK",
+      "PTT.BK", "PTTEP.BK", "GULF.BK", "GPSC.BK",
+      "BDMS.BK", "BH.BK",
+      "CPALL.BK", "CRC.BK", "CPN.BK",
+      "AOT.BK", "BEM.BK"
+    ]
+  },
+  "HK": {
+    query: "Hang Seng Index OR 恆生指數 OR Hong Kong Stock Market",
+    lang: "zh",
+    symbols: ["0700.HK", "9988.HK", "1299.HK", "0005.HK", "3690.HK", "1810.HK"]
+  },
+  "DK": {
+    query: "Aktiemarkedet OR C25",
+    lang: "da",
+    symbols: ["NOVO-B.CO", "MAERSK-B.CO", "DSV.CO", "VWS.CO", "CARL-B.CO", "DANSKE.CO"]
+  },
+  "NL": {
+    query: "Aandelenmarkt OR AEX",
+    lang: "nl",
+    symbols: ["ASML.AS", "SHELL.AS", "INGA.AS", "ADYEN.AS", "PHIA.AS", "HEIA.AS"]
+  },
+  "FR": {
+    query: "Bourse OR CAC 40",
+    lang: "fr",
+    symbols: ["MC.PA", "OR.PA", "TTE.PA", "SAN.PA", "AIR.PA", "RMS.PA"]
+  },
+  "IT": {
+    query: "Borsa Italiana OR FTSE MIB",
+    lang: "it",
+    symbols: ["ENI.MI", "ISP.MI", "ENEL.MI", "UCG.MI", "RACE.MI", "STLAM.MI"]
+  },
+  "JP": {
+    query: "株式市場 OR 日経平均",
+    lang: "ja",
+    symbols: ["7203.T", "6758.T", "9984.T", "8035.T", "6861.T", "6098.T"]
+  },
+  "SG": {
+    query: "Stock Market OR STI",
+    lang: "en",
+    symbols: ["D05.SI", "O39.SI", "U11.SI", "Z74.SI", "C52.SI", "A17U.SI"]
+  },
+  "TW": {
+    query: "股市 OR 台積電",
+    lang: "zh",
+    symbols: ["2330.TW", "2317.TW", "2454.TW", "2308.TW", "2881.TW", "2303.TW"]
+  },
+  "CN": {
+    query: "股市 OR 上證指數",
+    lang: "zh",
+    symbols: ["600519.SS", "601398.SS", "300750.SZ", "600036.SS", "601288.SS", "000858.SZ"]
+  },
+  "VN": {
+    query: "Thị trường chứng khoán OR VN-Index",
+    lang: "vi",
+    symbols: ["VCB.VN", "VIC.VN", "VHM.VN", "HPG.VN", "VNM.VN", "MSN.VN"]
+  }
+};
+
+const DEFAULT_SYMBOLS = COUNTRY_CONFIG["US"].symbols;
 const COUNTRY_OPTIONS = [
-  { code: "All", label: "Global" },
+  { code: "all", label: "All Markets" },
   { code: "US", label: "United States" },
   { code: "TH", label: "Thailand" },
-  { code: "CN", label: "China" },
   { code: "HK", label: "Hong Kong" },
+  { code: "DK", label: "Denmark" },
+  { code: "NL", label: "Netherlands" },
+  { code: "FR", label: "France" },
+  { code: "IT", label: "Italy" },
   { code: "JP", label: "Japan" },
-  { code: "KR", label: "South Korea" },
-  { code: "VN", label: "Vietnam" },
   { code: "SG", label: "Singapore" },
   { code: "TW", label: "Taiwan" },
-  { code: "IN", label: "India" },
-  { code: "AU", label: "Australia" },
-  { code: "GB", label: "United Kingdom" },
-  { code: "DE", label: "Germany" },
-  { code: "FR", label: "France" },
+  { code: "CN", label: "China" },
+  { code: "VN", label: "Vietnam" },
 ];
-const CACHE_KEY_HOME = "caldr_news_home_v4";
+
+const getFlagUrl = (code) => {
+  if (!code || code === 'all') return null;
+  return `https://flagcdn.com/w40/${code.toLowerCase()}.png`;
+};
+
+const CACHE_KEY_HOME = "caldr_news_home_v6";
 const CACHE_KEY_SEARCH_PREFIX = "caldr_news_search_v2_";
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
@@ -40,7 +115,7 @@ const getCache = (key, ignoreTTL = false) => {
       return parsed.data;
     }
     return null;
-  } catch (e) {
+  } catch {
     return null;
   }
 };
@@ -74,46 +149,8 @@ function timeAgo(ts) {
   }
 }
 
-// Simple keyword-based sentiment analysis
-const analyzeSentiment = (text) => {
-  if (!text) return "neutral";
-  const lower = text.toLowerCase();
-  // Expanded keywords for better accuracy
-  const positive = [
-    "surge", "jump", "record", "gain", "profit", "bull", "high", "growth", "boost", "beat", "rally", "soar", "up", "buy", "positive", "strong", "outperform", "upgrade", "lead", "leading", "success", "top", "best", "rebound", "climb", "recover",
-    "expansion", "expand", "funding", "invest", "strategic", "launch", "new", "partner", "deal", "agreement", "contract", "win", "won", "approve", "approval", "settled", "solution", "stable", "innovation", "dividend"
-  ];
-  const negative = [
-    "drop", "fall", "plunge", "loss", "crash", "bear", "low", "cut", "miss", "risk", "down", "sell", "negative", "fail", "decline", "weak", "underperform", "downgrade", "warn", "warning", "fear", "panic", "worst", "slide", "tumble", "slump", "retreat", "mixed", "volatile", "uncertain",
-    "scrapped", "shut", "close", "halt", "suspend", "ban", "lawsuit", "sue", "probe", "investigation", "breach", "hack", "attack", "debt", "bankrupt", "layoff", "fire", "terminate", "delay", "struggle",
-    "punish", "penalty", "fine", "slow", "slower", "pressure", "concern", "problem", "trouble", "hard", "tough", "hurt", "damage", "hit", "weigh", "impact"
-  ];
-  
-  const posCount = positive.filter(w => lower.includes(w)).length;
-  const negCount = negative.filter(w => lower.includes(w)).length;
-  
-  if (posCount > negCount) return "positive";
-  if (negCount > posCount) return "negative";
-  return "neutral";
-};
-
 const NewsCard = ({ ticker, quote, news }) => {
   const isPositive = quote && quote.change_pct >= 0;
-  const textSentiment = analyzeSentiment(news.title + " " + news.summary);
-
-  // Logic to resolve conflict between Price and Text Sentiment
-  let sentiment = textSentiment;
-  if (quote) {
-    // If Stock is Green but Text says Negative -> Override to Neutral (or Positive if weak negative)
-    // This prevents the "Green Price / Red Border" confusion
-    if (isPositive && textSentiment === "negative") {
-      sentiment = "neutral"; 
-    }
-    // If Stock is Red but Text says Positive -> Override to Neutral
-    if (!isPositive && textSentiment === "positive") {
-      sentiment = "neutral";
-    }
-  }
 
   // Define classes based on sentiment
   const containerClasses = "bg-white rounded-xl border border-gray-200 p-6 hover:shadow-md transition-shadow flex flex-col md:flex-row gap-6 items-start";
@@ -170,7 +207,27 @@ const News = () => {
   const selected = searchParams.get("symbol") || "";
 
   const [search, setSearch] = useState(selected);
-  const [country, setCountry] = useState("All");
+  const [country, setCountry] = useState("all");
+  const [showCountryMenu, setShowCountryMenu] = useState(false);
+  const countryMenuRef = useRef(null);
+  const searchContainerRef = useRef(null);
+
+  // Close menus when clicking outside
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (countryMenuRef.current && !countryMenuRef.current.contains(event.target)) {
+        setShowCountryMenu(false);
+      }
+      if (searchContainerRef.current && !searchContainerRef.current.contains(event.target)) {
+        setShowSuggestions(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [countryMenuRef, searchContainerRef]);
+
   // const [selected, setSelected] = useState(""); 
   const [allSymbols, setAllSymbols] = useState([]);
   const [suggestions, setSuggestions] = useState([]);
@@ -218,42 +275,38 @@ const News = () => {
         setMarketNews(cached.marketNews);
         setDefaultUpdates(cached.defaultUpdates);
         // If cache is fresh, stop here
-        const isFresh = getCache(currentCacheKey); 
-        if (isFresh) {
-            setLoadingHome(false);
-            return;
-        }
       } else {
         setLoadingHome(true);
       }
 
       try {
         let merged = [];
+        let symbolsToFetch = DEFAULT_SYMBOLS;
         
-        if (country === "All") {
-            // Default behavior: US + TH
-            const [enRes, thRes] = await Promise.all([
-              axios.get(`${API_BASE}/api/news/${encodeURIComponent(EN_QUERY)}`, { params: { limit: 20, language: "en", hours: 72 } }),
-              axios.get(`${API_BASE}/api/news/${encodeURIComponent(TH_QUERY)}`, { params: { limit: 20, language: "th", hours: 72 } })
-            ]);
-            if (!mounted) return;
-            const enNews = enRes.data?.news || [];
-            const thNews = thRes.data?.news || [];
-            merged = [...enNews, ...thNews];
-        } else if (country === "TH") {
-            // Thailand specific
-            const res = await axios.get(`${API_BASE}/api/news/${encodeURIComponent(TH_QUERY)}`, { 
-                params: { limit: 40, language: "th", hours: 72, country: "th" } 
+        if (country === "all") {
+            // Fetch from optimized backend endpoint
+            const res = await axios.get(`${API_BASE}/api/news/global`, { 
+                params: { limit: 5, trusted_only: true } 
             });
-            if (!mounted) return;
             merged = res.data?.news || [];
         } else {
-            // Other countries
-            const res = await axios.get(`${API_BASE}/api/news/${encodeURIComponent(EN_QUERY)}`, { 
-                params: { limit: 40, language: "en", hours: 72, country: country.toLowerCase() } 
-            });
-            if (!mounted) return;
-            merged = res.data?.news || [];
+            // Specific country
+            const config = COUNTRY_CONFIG[country];
+            if (config) {
+                symbolsToFetch = config.symbols;
+                const res = await axios.get(`${API_BASE}/api/news/${encodeURIComponent(config.query)}`, { 
+                    params: { limit: 40, language: config.lang, hours: 72, country: country.toLowerCase(), trusted_only: true } 
+                });
+                if (!mounted) return;
+                merged = res.data?.news || [];
+            } else {
+                // Fallback
+                const res = await axios.get(`${API_BASE}/api/news/${encodeURIComponent(EN_QUERY)}`, { 
+                    params: { limit: 40, language: "en", hours: 72, country: country.toLowerCase(), trusted_only: true } 
+                });
+                if (!mounted) return;
+                merged = res.data?.news || [];
+            }
         }
 
         merged.sort((a, b) => {
@@ -262,50 +315,65 @@ const News = () => {
           return db - da;
         });
 
-        // Load Default Updates (Mocking the "Latest Updates" list with specific tickers)
-        // We fetch quote + news for DEFAULT_SYMBOLS in Parallel
-        const updatesPromises = DEFAULT_SYMBOLS.map(async (sym) => {
-          try {
-            const [qRes, nRes] = await Promise.all([
-              axios.get(`${API_BASE}/api/finnhub/quote/${sym}`),
-              axios.get(`${API_BASE}/api/finnhub/company-news/${sym}`, { params: { hours: 72, limit: 2 } })
-            ]);
+        // Load Default Updates (Optimized Batch Fetch)
+        try {
+            const batchParams = {
+                symbols: symbolsToFetch,
+                hours: 72,
+                limit: 2
+            };
+            
+            // Pass country context if specific country is selected
+            if (country !== "all") {
+                const config = COUNTRY_CONFIG[country];
+                if (config) {
+                    batchParams.country = country.toLowerCase();
+                    batchParams.language = config.lang;
+                }
+            }
 
-            const articles = nRes.data?.news || [];
-            return articles.slice(0, 2).map(art => ({
-              ticker: sym,
-              quote: qRes.data,
-              news: art
-            }));
-          } catch (e) {
-            console.error(`Failed to load default data for ${sym}`, e);
-            return [];
-          }
-        });
+            const batchRes = await axios.post(`${API_BASE}/api/batch-ticker-data`, batchParams);
+            
+            if (mounted) {
+                const updates = batchRes.data?.data || [];
+                setDefaultUpdates(updates);
 
-        const updatesResults = await Promise.all(updatesPromises);
-        const updates = updatesResults.flat();
+                const toMs = (v) => typeof v === "number" ? v * 1000 : (new Date(v).getTime() || 0);
 
-        const toMs = (v) => typeof v === "number" ? v * 1000 : (new Date(v).getTime() || 0);
-        updates.sort((a, b) => toMs(b.news.published_at) - toMs(a.news.published_at));
+                // Merge general news and company updates for "Top Stories"
+                const combinedNews = [
+                  ...merged.map(item => ({ news: item })), // Wrap general news
+                  ...updates // Company news already has { news, ticker, quote }
+                ];
 
-        // Merge general news and company updates for "Top Stories"
-        const combinedNews = [
-          ...merged.map(item => ({ news: item })), // Wrap general news
-          ...updates // Company news already has { news, ticker, quote }
-        ];
+                combinedNews.sort((a, b) => toMs(b.news.published_at) - toMs(a.news.published_at));
+                
+                const newCacheData = {
+                  marketNews: combinedNews,
+                  defaultUpdates: updates
+                };
 
-        combinedNews.sort((a, b) => toMs(b.news.published_at) - toMs(a.news.published_at));
-
-        if (mounted) {
-          setDefaultUpdates(updates);
-          setMarketNews(combinedNews);
-          
-          // Save to Cache
-          setCache(currentCacheKey, {
-            marketNews: combinedNews,
-            defaultUpdates: updates
-          });
+                // Check if data actually changed to avoid unnecessary re-renders
+                let hasChanged = true;
+                if (cached) {
+                    // Simple string comparison for deep equality
+                    // Note: This assumes deterministic ordering, which JSON.stringify usually provides for simple objects
+                    const cachedStr = JSON.stringify({ marketNews: cached.marketNews, defaultUpdates: cached.defaultUpdates });
+                    const newStr = JSON.stringify(newCacheData);
+                    if (cachedStr === newStr) {
+                        hasChanged = false;
+                    }
+                }
+                
+                if (hasChanged) {
+                    setMarketNews(combinedNews);
+                    setDefaultUpdates(updates);
+                    // Save to Cache
+                    setCache(currentCacheKey, newCacheData);
+                }
+            }
+        } catch (e) {
+            console.error("Failed to load batch updates", e);
         }
 
       } catch (e) {
@@ -337,10 +405,10 @@ const News = () => {
         setErrorSearch("");
         
         // If fresh, stop
-        if (getCache(cacheKey)) {
-            setLoadingSearch(false);
-            return;
-        }
+        // if (getCache(cacheKey)) {
+        //     setLoadingSearch(false);
+        //     return;
+        // }
         // If stale, keep fetching in background
       } else {
         setLoadingSearch(true);
@@ -365,14 +433,25 @@ const News = () => {
         const newQuote = qRes.data || null;
         const newNews = nRes.data?.news || [];
 
-        setQuote(newQuote);
-        setSymbolNews(newNews);
-
-        // Save to Cache
-        setCache(cacheKey, {
+        const newCacheData = {
           quote: newQuote,
           symbolNews: newNews
-        });
+        };
+
+        let hasChanged = true;
+        if (cached) {
+             const cachedStr = JSON.stringify({ quote: cached.quote, symbolNews: cached.symbolNews });
+             const newStr = JSON.stringify(newCacheData);
+             if (cachedStr === newStr) {
+                 hasChanged = false;
+             }
+        }
+
+        if (hasChanged) {
+            setQuote(newQuote);
+            setSymbolNews(newNews);
+            setCache(cacheKey, newCacheData);
+        }
 
       } catch (e) {
         console.error("Search error:", e);
@@ -393,21 +472,6 @@ const News = () => {
   }, [selected, allSymbols]); // Added allSymbols dependency for safe match check
 
   const topStory = useMemo(() => marketNews.find(item => item.ticker), [marketNews]);
-  const topStorySentiment = useMemo(() => {
-    if (!topStory) return "neutral";
-    const textSentiment = analyzeSentiment(topStory.news.title + " " + topStory.news.summary);
-    
-    // Conflict Resolution for Top Story
-    if (topStory.quote) {
-      const isPositive = topStory.quote.change_pct >= 0;
-      if (isPositive && textSentiment === "negative") return "neutral";
-      if (!isPositive && textSentiment === "positive") return "neutral";
-    }
-    
-    return textSentiment;
-  }, [topStory]);
-
-
   const onSearchKey = (e) => {
     if (e.key === "Enter") {
       if (suggestions.length > 0) {
@@ -436,20 +500,43 @@ const News = () => {
   const updateSuggestions = (value) => {
     let filtered = allSymbols;
     
-    console.log(`Filtering for Country: ${country}, Search: ${value}, Total Symbols: ${allSymbols.length}`);
-    
     // Filter by Country if not "All"
-    if (country !== "All") {
+    if (country !== "all") {
       filtered = filtered.filter(s => s.country === country);
+      
+      // Strict filter for Thailand: Show ONLY Thai Stock Market symbols (ending with .BK)
+      // This excludes DRs (which might be tagged as TH but lack .BK suffix)
+      if (country === "TH") {
+        filtered = filtered.filter(s => s.symbol.endsWith(".BK"));
+      }
     }
     
     if (value.length > 0) {
       filtered = filtered.filter(s => s.symbol.startsWith(value));
     }
-    
-    console.log(`Filtered Count: ${filtered.length}`);
-    if (filtered.length > 0) {
-        console.log("Sample:", filtered[0]);
+
+    // Prioritize configured symbols (e.g. for Thailand)
+    if (country !== "all" && COUNTRY_CONFIG[country] && COUNTRY_CONFIG[country].symbols) {
+        const preferredTickers = COUNTRY_CONFIG[country].symbols; // Ordered list
+        const preferredSet = new Set(preferredTickers);
+        
+        const preferred = [];
+        const others = [];
+        
+        filtered.forEach(s => {
+            if (preferredSet.has(s.symbol)) {
+                preferred.push(s);
+            } else {
+                others.push(s);
+            }
+        });
+
+        // Sort preferred by index in preferredTickers to maintain specific order
+        preferred.sort((a, b) => {
+            return preferredTickers.indexOf(a.symbol) - preferredTickers.indexOf(b.symbol);
+        });
+
+        filtered = [...preferred, ...others];
     }
     
     setSuggestions(filtered.slice(0, 100));
@@ -464,22 +551,6 @@ const News = () => {
 
   const handleSearchFocus = () => {
     updateSuggestions(search);
-  };
-
-  // Update suggestions when country changes
-  useEffect(() => {
-    // Only update if we have a search term or the dropdown is interacting
-    updateSuggestions(search);
-  }, [country]);
-
-  // Close suggestions when clicking outside would be ideal, 
-  // but for now we'll rely on selection or blur (careful with blur vs click)
-  // A simple way is to delay hiding on blur to allow click to register
-  const handleSearchBlur = () => {
-    // Delay hiding to allow item click to register
-    setTimeout(() => {
-      setShowSuggestions(false);
-    }, 200);
   };
 
   const selectSuggestion = (s) => {
@@ -557,47 +628,79 @@ const News = () => {
           </div>
           <div className="flex flex-col md:flex-row items-center gap-4 w-full md:w-auto">
             {/* Country Select */}
-            <div className="relative w-full md:w-40">
-              <select
-                value={country}
-                onChange={(e) => setCountry(e.target.value)}
-                className="w-full appearance-none bg-white border border-gray-200 text-[#0B102A] py-2.5 pl-4 pr-10 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#0B102A] text-sm font-medium cursor-pointer hover:border-gray-300 transition-colors shadow-sm"
+            <div className="relative w-full md:w-56" ref={countryMenuRef}>
+              <button
+                type="button"
+                onClick={() => setShowCountryMenu(!showCountryMenu)}
+                className="w-full bg-white border border-gray-200 text-[#0B102A] py-2.5 pl-4 pr-10 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#0B102A] text-sm font-medium cursor-pointer hover:border-gray-300 transition-colors shadow-sm flex items-center gap-3 text-left"
               >
-                {COUNTRY_OPTIONS.map((opt) => (
-                  <option key={opt.code} value={opt.code}>
-                    {opt.code === "All" ? "Global" : `${opt.code} - ${opt.label}`}
-                  </option>
-                ))}
-              </select>
-              <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-gray-500">
-                <i className="bi bi-chevron-down text-xs"></i>
-              </div>
+                <div className="w-5 flex-shrink-0 flex items-center justify-center">
+                  {country !== 'all' ? (
+                    <img src={getFlagUrl(country)} alt={country} className="w-5 h-3.5 object-cover rounded-[2px] shadow-sm" />
+                  ) : (
+                    <i className="bi bi-globe text-gray-400"></i>
+                  )}
+                </div>
+                <span className="truncate">{COUNTRY_OPTIONS.find(o => o.code === country)?.label}</span>
+                
+                <div className="absolute inset-y-0 right-0 flex items-center px-3 text-gray-500 pointer-events-none">
+                  <i className={`bi bi-chevron-down text-xs transition-transform ${showCountryMenu ? "rotate-180" : ""}`}></i>
+                </div>
+              </button>
+
+              {showCountryMenu && (
+                <div className="absolute z-50 w-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg max-h-80 overflow-y-auto">
+                  {COUNTRY_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.code}
+                      onClick={() => {
+                        setCountry(opt.code);
+                        setShowCountryMenu(false);
+                      }}
+                      className={`w-full px-4 py-2.5 hover:bg-gray-50 cursor-pointer flex items-center gap-3 text-sm transition-colors text-left ${
+                        country === opt.code ? "bg-gray-50 font-semibold text-[#0B102A]" : "text-gray-700"
+                      }`}
+                    >
+                      <div className="w-5 flex-shrink-0 flex items-center justify-center">
+                        {opt.code !== 'all' ? (
+                          <img src={getFlagUrl(opt.code)} alt={opt.code} className="w-5 h-3.5 object-cover rounded-[2px] shadow-sm" />
+                        ) : (
+                          <i className="bi bi-globe text-gray-400 text-lg"></i>
+                        )}
+                      </div>
+                      <span className="flex-1 truncate">{opt.label}</span>
+                      {country === opt.code && (
+                         <i className="bi bi-check-lg text-[#0B102A]"></i>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Search Input */}
-            <div className="relative w-full md:w-[300px]">
+            <div className="relative w-full md:w-[300px]" ref={searchContainerRef}>
               <input
                 type="text"
                 value={search}
                 onChange={handleSearchChange}
-              onKeyDown={onSearchKey}
-              onFocus={handleSearchFocus}
-              onBlur={handleSearchBlur}
-              placeholder="Search"
-              className="w-full bg-white pl-4 pr-10 py-2.5 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#0B102A] text-sm shadow-sm"
-            />
-            {selected ? (
-              <button onClick={clearSearch} className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600">
-                <i className="bi bi-x-lg"></i>
-              </button>
-            ) : (
-              <i className="bi bi-search absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
-            )}
+                onKeyDown={onSearchKey}
+                onFocus={handleSearchFocus}
+                placeholder={country === 'all' ? "Search stocks..." : `Search ${country} stocks...`}
+                className="w-full bg-white pl-4 pr-10 py-2.5 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#0B102A] text-sm shadow-sm"
+              />
+              {search ? (
+                <button onClick={clearSearch} className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                  <i className="bi bi-x-lg"></i>
+                </button>
+              ) : (
+                <i className="bi bi-chevron-down absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 pointer-events-none text-xs" />
+              )}
 
-            {/* Suggestions Dropdown */}
-            {suggestionsContent}
+              {/* Suggestions Dropdown */}
+              {suggestionsContent}
 
-          </div>
+            </div>
         </div>
       </div>
 

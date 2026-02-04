@@ -53,7 +53,7 @@ const extractSymbol = (str) => {
   if (strUpper.includes(" ") && strUpper.length > 10) {
 
     const words = strUpper.split(/\s+/);
-    if (words[0] && /^[A-Z0-9.\-]{1,6}$/.test(words[0])) {
+    if (words[0] && /^[A-Z0-9.-]{1,6}$/.test(words[0])) {
       return words[0];
     }
   }
@@ -522,7 +522,7 @@ export default function Calendar() {
                 return currentSeenIds;
               });
             } else if (data.type === 'heartbeat') {
-
+              return;
             } else if (data.type === 'connected') {
               console.log('✅ [SSE]', data.message);
             }

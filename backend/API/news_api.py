@@ -14,8 +14,9 @@ from dotenv import load_dotenv
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env'))
 
 NEWS_API_BASE_URL = "https://newsapi.org/v2/top-headlines"
-NEWS_API_KEY = "a2982e76c7844902b4289a6b08712d89"
+NEWS_API_KEY = os.getenv("NEWS_API_KEY") or "a2982e76c7844902b4289a6b08712d89"
 NEWS_TTL_SECONDS = int(os.getenv("NEWS_TTL_SECONDS") or "300")
+SEARCHAPI_KEY = os.getenv("SEARCHAPI_KEY")
 FINNHUB_BASE_URL = "https://finnhub.io/api/v1"
 FINNHUB_TOKEN = os.getenv("FINNHUB_TOKEN") or None
 DR_LIST_URL = os.getenv("DR_LIST_URL") or "http://172.17.1.85:8333/dr"
@@ -42,7 +43,12 @@ TRUSTED_SOURCES = {
     "bbc", "cnn", "forbes", "business insider", "techcrunch", "engadget",
     "kaohoon", "thansettakij", "money channel", "efinance thai", "infoquest",
     "settrade", "prachachat", "ประชาชาติ", "กรุงเทพธุรกิจ", "ฐานเศรษฐกิจ",
-    "ข่าวหุ้น", "ทันหุ้น", "bangkok biz news"
+    "ข่าวหุ้น", "ทันหุ้น", "bangkok biz news",
+    "經濟通", "香港經濟日報", "now 財經", "雅虎財經"
+}
+
+GOOGLE_FINANCE_COUNTRIES = {
+    "hk", "th", "nl", "cn", "fr", "it", "jp", "sg", "tw", "vn", "dk"
 }
 
 def _is_trusted_source(source_name: str) -> bool:
@@ -123,6 +129,52 @@ FALLBACK_SYMBOLS = [
     {"symbol": "AMD", "name": "Advanced Micro Devices, Inc.", "logo": "https://s3-symbol-logo.tradingview.com/advanced-micro-devices.svg", "country": "US"}
 ]
 
+ADDITIONAL_FALLBACK_SYMBOLS = [
+    # HK
+    {"symbol": "0700.HK", "name": "Tencent Holdings Ltd", "country": "HK"},
+    {"symbol": "9988.HK", "name": "Alibaba Group Holding Limited", "country": "HK"},
+    {"symbol": "3690.HK", "name": "Meituan", "country": "HK"},
+    {"symbol": "1299.HK", "name": "AIA Group Limited", "country": "HK"},
+    # TH
+    {"symbol": "PTT.BK", "name": "PTT Public Company Limited", "country": "TH"},
+    {"symbol": "CPALL.BK", "name": "CP All Public Company Limited", "country": "TH"},
+    {"symbol": "AOT.BK", "name": "Airports of Thailand Public Company Limited", "country": "TH"},
+    {"symbol": "ADVANC.BK", "name": "Advanced Info Service Public Company Limited", "country": "TH"},
+    {"symbol": "DELTA.BK", "name": "Delta Electronics (Thailand) Public Company Limited", "country": "TH"},
+    {"symbol": "TRUE.BK", "name": "True Corporation Public Company Limited", "country": "TH"},
+    {"symbol": "KBANK.BK", "name": "Kasikornbank Public Company Limited", "country": "TH"},
+    {"symbol": "SCB.BK", "name": "SCB X Public Company Limited", "country": "TH"},
+    {"symbol": "BBL.BK", "name": "Bangkok Bank Public Company Limited", "country": "TH"},
+    {"symbol": "KTB.BK", "name": "Krung Thai Bank Public Company Limited", "country": "TH"},
+    {"symbol": "PTTEP.BK", "name": "PTT Exploration and Production Public Company Limited", "country": "TH"},
+    {"symbol": "GULF.BK", "name": "Gulf Energy Development Public Company Limited", "country": "TH"},
+    {"symbol": "GPSC.BK", "name": "Global Power Synergy Public Company Limited", "country": "TH"},
+    {"symbol": "BDMS.BK", "name": "Bangkok Dusit Medical Services Public Company Limited", "country": "TH"},
+    {"symbol": "BH.BK", "name": "Bumrungrad Hospital Public Company Limited", "country": "TH"},
+    {"symbol": "CRC.BK", "name": "Central Retail Corporation Public Company Limited", "country": "TH"},
+    {"symbol": "CPN.BK", "name": "Central Pattana Public Company Limited", "country": "TH"},
+    {"symbol": "BEM.BK", "name": "Bangkok Expressway and Metro Public Company Limited", "country": "TH"},
+    # NL
+    {"symbol": "ASML.AS", "name": "ASML Holding N.V.", "country": "NL"},
+    {"symbol": "SHELL.AS", "name": "Shell plc", "country": "NL"},
+    # FR
+    {"symbol": "MC.PA", "name": "LVMH Moet Hennessy Louis Vuitton", "country": "FR"},
+    {"symbol": "TTE.PA", "name": "TotalEnergies SE", "country": "FR"},
+    # IT
+    {"symbol": "ENEL.MI", "name": "Enel S.p.A.", "country": "IT"},
+    # JP
+    {"symbol": "7203.T", "name": "Toyota Motor Corporation", "country": "JP"},
+    {"symbol": "6758.T", "name": "Sony Group Corporation", "country": "JP"},
+    # SG
+    {"symbol": "D05.SI", "name": "DBS Group Holdings Ltd", "country": "SG"},
+    # TW
+    {"symbol": "2330.TW", "name": "Taiwan Semiconductor Manufacturing Company", "country": "TW"},
+    # VN
+    {"symbol": "VIC.VN", "name": "Vingroup Joint Stock Company", "country": "VN"},
+    # DK
+    {"symbol": "NOVO-B.CO", "name": "Novo Nordisk A/S", "country": "DK"}
+]
+
 
 def _now() -> float:
     return time.time()
@@ -157,6 +209,9 @@ async def init_client():
     global _client
     _client = httpx.AsyncClient(timeout=10)
 
+    # Start background task
+    asyncio.create_task(background_news_updater())
+
 
 async def close_client():
     global _client
@@ -164,7 +219,196 @@ async def close_client():
         await _client.aclose()
 
 
-async def fetch_news(symbol: str, limit: int, language: str | None, hours: int, country: str | None):
+async def background_news_updater():
+    """
+    Periodically fetches news for all markets and updates the cache.
+    This ensures that user requests are served instantly from cache.
+    """
+    print("Background news updater started")
+    
+    # Wait for app startup
+    await asyncio.sleep(5)
+    
+    while True:
+        try:
+            print("Running background news refresh...")
+            start_time = time.time()
+            
+            # 1. Update Global News (Aggregated)
+            # This matches the parameters used in get_global_news endpoint
+            global_limit = 5
+            global_trusted = True
+            global_key = f"news-global-v2|{global_limit}|{global_trusted}"
+            
+            global_tasks = []
+            for config in GLOBAL_MARKET_CONFIG:
+                # We also want to cache the individual country news while we are at it
+                # Matches parameters in News.jsx for specific country view
+                # params: { limit: 40, language: config.lang, hours: 72, country: country.toLowerCase(), trusted_only: true } 
+                country_limit = 40
+                country_hours = 72
+                country_trusted = True
+                
+                # We can't easily cache the endpoint result directly because it wraps fetch_news.
+                # But we can pre-fetch the data so fetch_news (if cached) would be fast?
+                # Actually fetch_news is NOT cached. The endpoint get_news caches.
+                # So we should manually populate the cache keys that get_news uses.
+                
+                # Fetch data
+                items = await fetch_news(
+                    symbol=config["query"],
+                    limit=country_limit, # Use the larger limit to cover both global and country views
+                    language=config["lang"],
+                    hours=country_hours,
+                    country=config["code"].lower()
+                )
+                
+                # Filter for trusted
+                trusted_items = [i for i in items if i.get("is_trusted")]
+                
+                # Update "get_news" cache (Country View)
+                # key = f"news-v7|{symbol.upper()}|{limit}|{language or ''}|{hours}|{country or ''}|{trusted_only}"
+                country_key = f"news-v7|{config['query'].upper()}|{country_limit}|{config['lang']}|{country_hours}|{config['code'].lower()}|{country_trusted}"
+                
+                # We need quote and logo for the full payload, but for now just news is better than nothing?
+                # The get_news endpoint fetches quote and logo too. 
+                # Let's just cache the news part? No, the cache stores the whole payload.
+                # It's better to let the first user hit populate the full cache if complex, 
+                # OR we simulate the full fetch.
+                
+                # Simulating full fetch for Country View
+                # But to save resources, let's focus on the GLOBAL AGGREGATION first which is the home page.
+                
+                # For Global Aggregation, we need the items list.
+                global_tasks.append(items) # Add raw items (unfiltered) to list, we filter later
+                
+            global_results = global_tasks # Since we awaited sequentially above (to be gentle), this is already a list of lists.
+            # Ideally we should gather parallel, but let's be gentle on rate limits for background task.
+            # Actually, fetch_news does sequential fallbacks, so parallel is okay if limited.
+            
+            merged = []
+            for items in global_results:
+                if global_trusted:
+                    items = [i for i in items if i.get("is_trusted")]
+                merged.extend(items)
+                
+            merged.sort(key=lambda x: x.get("published_at") or "", reverse=True)
+            
+            # Update "get_global_news" cache
+            _cache_set(global_key, merged, ttl=600)
+            print(f"Updated global news cache with {len(merged)} items")
+
+            # 2. Update Default Batch Ticker Data (Home Page Updates)
+            # Matches News.jsx: { symbols: DEFAULT_SYMBOLS, hours: 72, limit: 2 }
+            # And for each country...
+            
+            # Default US
+            us_symbols = ["NVDA", "TSLA", "GOOG", "AAPL", "MSFT", "AMZN", "META", "BABA"]
+            batch_req = BatchTickerRequest(symbols=us_symbols, hours=72, limit=2)
+            # We can just call the function handler directly? No, it expects request object.
+            # Let's call the logic manually.
+            
+            # Replicate get_batch_ticker_data logic
+            symbols_key = ",".join(sorted(batch_req.symbols))
+            batch_key = f"batch-data-v3|{symbols_key}|{batch_req.hours}|{batch_req.limit}|{batch_req.country}|{batch_req.language}"
+            
+            # Fetch
+            batch_tasks = []
+            for sym in batch_req.symbols:
+                batch_tasks.append(get_company_news(
+                    sym, 
+                    hours=batch_req.hours, 
+                    limit=batch_req.limit, 
+                    country=batch_req.country, 
+                    language=batch_req.language,
+                    force_refresh=True
+                ))
+            
+            # We also need quotes
+            quote_tasks = [get_quote(s) for s in batch_req.symbols]
+            
+            batch_news_results = await asyncio.gather(*batch_tasks)
+            batch_quote_results = await asyncio.gather(*quote_tasks)
+            
+            final_data = []
+            for i, sym in enumerate(batch_req.symbols):
+                news_data = batch_news_results[i]
+                quote = batch_quote_results[i]
+                news_items = news_data.get("news", []) if isinstance(news_data, dict) else []
+                
+                if news_items:
+                    final_data.append({
+                        "ticker": sym,
+                        "quote": quote,
+                        "news": news_items[0]
+                    })
+            
+            final_data.sort(key=lambda x: (x["news"].get("published_at") or ""), reverse=True)
+            _cache_set(batch_key, final_data, ttl=300)
+            print(f"Updated default batch data cache with {len(final_data)} items")
+
+            elapsed = time.time() - start_time
+            print(f"Background refresh took {elapsed:.2f}s")
+            
+        except Exception as e:
+            print(f"Background news updater error: {e}")
+            
+        # Sleep for 4 minutes (less than TTL of 5-10 mins) to ensure freshness
+        await asyncio.sleep(240) 
+
+
+
+async def fetch_google_finance_news(query: str, limit: int, language: str | None, hours: int, country: str | None):
+    if not SEARCHAPI_KEY:
+        # print("SEARCHAPI_KEY missing, skipping Google Finance")
+        return []
+
+    assert _client is not None
+
+    params = {
+        "engine": "google_finance",
+        "q": query,
+        "api_key": SEARCHAPI_KEY
+    }
+    
+    if country:
+        params["gl"] = country.lower()
+    if language:
+        params["hl"] = language.lower()
+
+    print(f"Fetching Google Finance (SearchAPI): {query} Params: {params}")
+
+    try:
+        r = await _client.get("https://www.searchapi.io/api/v1/search", params=params)
+        if r.status_code != 200:
+            print(f"SearchAPI error: {r.status_code} {r.text[:100]}")
+            return []
+            
+        data = r.json()
+        news_results = data.get("news", [])
+        
+        normalized = []
+        for a in news_results:
+            item = {
+                "title": a.get("title"),
+                "summary": a.get("snippet") or a.get("description"),
+                "published_at": a.get("date"), 
+                "source": a.get("source"),
+                "url": a.get("link"),
+                "image_url": a.get("thumbnail"),
+                "is_trusted": _is_trusted_source(a.get("source")),
+            }
+            if _is_valid_source(item):
+                normalized.append(item)
+                
+        return normalized[:limit]
+        
+    except Exception as e:
+        print(f"Google Finance fetch error: {e}")
+        return []
+
+
+async def fetch_news(symbol: str, limit: int, language: str | None, hours: int, country: str | None, company_name: str | None = None):
     # Enhance query to ensure relevance, especially for common words (e.g. "LOVE", "BEST")
     search_query = symbol
     target_country = country if country else "us"
@@ -174,7 +418,47 @@ async def fetch_news(symbol: str, limit: int, language: str | None, hours: int, 
     if target_country.lower() == "us" and not is_general_market:
          search_query = f"{symbol} stock"
 
+    # Special handling for Google Finance Countries (HK, TH, NL, etc.)
+    # Primary: Google Finance (SearchAPI)
+    # Fallback: Bing RSS -> Google RSS
+    # EXCLUDE: NewsAPI (Strictly ignored for these countries)
+    if country and country.lower() in GOOGLE_FINANCE_COUNTRIES:
+        # 1. Google Finance (SearchAPI)
+        gf_items = await fetch_google_finance_news(symbol, limit, language, hours, country)
+        if gf_items:
+            return gf_items
+            
+        # Prepare Fallback Query (Use Company Name if available for better Bing/Google results)
+        fallback_query = search_query
+        if company_name:
+            # Clean company name: remove common legal suffixes iteratively
+            cleaned = company_name.strip()
+            # Expanded suffix list for global coverage
+            suffixes = r'(?i)\s+(ltd|inc|corp|corporation|plc|limited|holding|holdings|group|company|public company limited|pcl|nv|sa|se|ag|spa|s\.p\.a\.|ab|asa)\.?$'
+            while True:
+                new_cleaned = re.sub(suffixes, '', cleaned)
+                if new_cleaned == cleaned:
+                    break
+                cleaned = new_cleaned.strip()
+            
+            if cleaned:
+                fallback_query = cleaned
+        
+        print(f"Fallback news query for {symbol}: {fallback_query}")
+
+        # 2. Google RSS (Fallback - Preferred over Bing for better local relevance)
+        google_items = await fetch_google_news(fallback_query, limit, language, hours, country)
+        if google_items:
+            return google_items
+
+        # 3. Bing RSS (Fallback)
+        return await fetch_bing_news(fallback_query, limit, language, hours, country)
+
     if not NEWS_API_KEY:
+        # Try Bing first, then Google
+        bing_items = await fetch_bing_news(search_query, limit, language, hours, country)
+        if bing_items:
+            return bing_items
         return await fetch_google_news(search_query, limit, language, hours, country)
 
     assert _client is not None
@@ -211,14 +495,26 @@ async def fetch_news(symbol: str, limit: int, language: str | None, hours: int, 
     try:
         r = await _client.get(NEWS_API_BASE_URL, params=params)
     except Exception:
+        # Fallback
+        bing_items = await fetch_bing_news(search_query, limit, language, hours, country)
+        if bing_items:
+            return bing_items
         return await fetch_google_news(search_query, limit, language, hours, country)
 
     if r.status_code != 200:
+        # Fallback
+        bing_items = await fetch_bing_news(search_query, limit, language, hours, country)
+        if bing_items:
+            return bing_items
         return await fetch_google_news(search_query, limit, language, hours, country)
 
     data = r.json()
     articles = data.get("articles") or []
     if not articles:
+        # Fallback
+        bing_items = await fetch_bing_news(search_query, limit, language, hours, country)
+        if bing_items:
+            return bing_items
         return await fetch_google_news(search_query, limit, language, hours, country)
 
     normalized = []
@@ -237,9 +533,136 @@ async def fetch_news(symbol: str, limit: int, language: str | None, hours: int, 
             normalized.append(item)
 
     if not normalized:
+        # Try Bing News as a fallback before Google (or in parallel?)
+        # User requested Bing, so let's try it.
+        bing_items = await fetch_bing_news(search_query, limit, language, hours, country)
+        if bing_items:
+            return bing_items
+            
         return await fetch_google_news(search_query, limit, language, hours, country)
 
     return _mix_news_sources(normalized, limit)
+
+async def _fetch_bing_rss_items(query: str, limit: int, language: str | None, hours: int, country: str | None):
+    assert _client is not None
+    
+    # Handle "OR" queries by splitting and merging
+    if " OR " in query:
+        sub_queries = query.split(" OR ")
+        tasks = [_fetch_bing_rss_items(sq.strip(), limit, language, hours, country) for sq in sub_queries]
+        results = await asyncio.gather(*tasks)
+        
+        # Merge and deduplicate
+        merged = []
+        seen_urls = set()
+        
+        # Flatten results
+        all_items = [item for sublist in results for item in sublist]
+        
+        # Sort by date descending (newest first)
+        all_items.sort(key=lambda x: x.get("published_at") or "", reverse=True)
+        
+        for item in all_items:
+            url = item.get("url")
+            if url and url not in seen_urls:
+                seen_urls.add(url)
+                merged.append(item)
+                
+        return merged[:limit]
+
+    # Map country to Bing's cc param (e.g. US, HK, GB)
+    cc = "US"
+    if country:
+        cc = country.upper()
+        
+    # Base URL
+    url = "https://www.bing.com/news/search"
+    params = {
+        "q": query,
+        "format": "rss",
+        "cc": cc
+    }
+    
+    # Debug log
+    print(f"Fetching Bing RSS: {query} Params: {params}")
+    
+    try:
+        r = await _client.get(url, params=params)
+        if r.status_code != 200:
+            print(f"Bing RSS failed with {r.status_code}")
+            return []
+            
+        import xml.etree.ElementTree as ET
+        # Bing RSS uses a dynamic namespace for 'News' prefix, which is annoying.
+        # We will parse ignoring namespaces or by checking tag suffix.
+        
+        try:
+            root = ET.fromstring(r.text)
+        except Exception:
+            # XML parsing failed
+            return []
+
+        channel = root.find("channel")
+        items = channel.findall("item") if channel is not None else []
+        
+        normalized = []
+        since_dt = None
+        if hours and hours > 0:
+            since_dt = datetime.now(timezone.utc) - timedelta(hours=hours)
+            
+        for it in items:
+            title = (it.findtext("title") or "").strip()
+            link = (it.findtext("link") or "").strip()
+            desc = (it.findtext("description") or "").strip()
+            pub_date_str = (it.findtext("pubDate") or "").strip()
+            
+            # Extract Source and Image from namespaced tags
+            source_name = "Bing News"
+            image_url = None
+            
+            for child in it:
+                if child.tag.endswith("Source"):
+                    source_name = child.text or source_name
+                elif child.tag.endswith("Image"):
+                    image_url = child.text
+            
+            # Parse Date
+            published_at = None
+            if pub_date_str:
+                try:
+                    dt = parsedate_to_datetime(pub_date_str)
+                    if since_dt and dt < since_dt:
+                        continue
+                    published_at = dt.isoformat()
+                except Exception:
+                    pass
+            
+            # Create item
+            item = {
+                "title": title,
+                "summary": desc,
+                "published_at": published_at,
+                "source": source_name,
+                "url": link,
+                "image_url": image_url,
+                "is_trusted": _is_trusted_source(source_name),
+            }
+            
+            if _is_valid_source(item):
+                normalized.append(item)
+                
+            if len(normalized) >= limit:
+                break
+                
+        return normalized
+        
+    except Exception as e:
+        print(f"Bing RSS error: {e}")
+        return []
+
+async def fetch_bing_news(query: str, limit: int, language: str | None, hours: int, country: str | None):
+    # Bing is simpler than Google, just one call usually enough
+    return await _fetch_bing_rss_items(query, limit, language, hours, country)
 
 async def _fetch_google_rss_items(query: str, limit: int, language: str | None, hours: int, country: str | None):
     assert _client is not None
@@ -252,11 +675,20 @@ async def _fetch_google_rss_items(query: str, limit: int, language: str | None, 
         hl = f"en-{gl}"
         ceid = f"{gl}:en"
 
-    if language and language.lower().startswith("th"):
-        hl = "th"
-        gl = "TH"
-        ceid = "TH:th"
+    # Support all languages, not just Thai
+    if language:
+        # Use the provided language code (e.g., 'it', 'th', 'fr', 'zh')
+        # Google News usually expects 'hl' as the language code
+        # and 'ceid' as COUNTRY:LANGUAGE
+        lang_code = language.lower()
+        hl = lang_code
+        if country:
+            ceid = f"{country.upper()}:{lang_code}"
+
     params = {"q": query, "hl": hl, "gl": gl, "ceid": ceid}
+    
+    # Debug log
+    print(f"Fetching Google RSS: {query} Params: {params}")
     
     try:
         r = await _client.get("https://news.google.com/rss/search", params=params)
@@ -390,8 +822,9 @@ async def get_news(
     language: str | None = Query(None),
     hours: int = Query(24, ge=1, le=168),
     country: str | None = Query(None, description="Two-letter country code (e.g., us, gb)"),
+    trusted_only: bool = Query(False, description="Filter only trusted sources"),
 ):
-    key = f"news-v5|{symbol.upper()}|{limit}|{language or ''}|{hours}|{country or ''}"
+    key = f"news-v7|{symbol.upper()}|{limit}|{language or ''}|{hours}|{country or ''}|{trusted_only}"
     cached = _cache_get(key)
     if cached is not None:
         return {
@@ -410,6 +843,10 @@ async def get_news(
         fetch_logo(symbol)
     )
 
+    # Apply trusted filter if requested
+    if trusted_only:
+        items = [i for i in items if i.get("is_trusted")]
+
     payload = {"news": items, "quote": quote, "logo_url": logo_url}
     _cache_set(key, payload, ttl=NEWS_TTL_SECONDS)
 
@@ -422,6 +859,125 @@ async def get_news(
         "cached": False,
         "ttl_seconds": NEWS_TTL_SECONDS,
     }
+
+# =============== NEW OPTIMIZED ENDPOINTS ===============
+
+GLOBAL_MARKET_CONFIG = [
+    {"code": "US", "query": "stock market", "lang": "en"},
+    {"code": "TH", "query": "ตลาดหุ้น OR หุ้น OR ดัชนี", "lang": "th"},
+    {"code": "HK", "query": "Hang Seng Index OR 恆生指數 OR Hong Kong Stock Market", "lang": "zh"},
+    {"code": "DK", "query": "Aktiemarkedet OR C25", "lang": "da"},
+    {"code": "NL", "query": "Aandelenmarkt OR AEX", "lang": "nl"},
+    {"code": "FR", "query": "Bourse OR CAC 40", "lang": "fr"},
+    {"code": "IT", "query": "Borsa Italiana OR FTSE MIB", "lang": "it"},
+    {"code": "JP", "query": "株式市場 OR 日経平均", "lang": "ja"},
+    {"code": "SG", "query": "Stock Market OR STI", "lang": "en"},
+    {"code": "TW", "query": "股市 OR 台積電", "lang": "zh"},
+    {"code": "CN", "query": "股市 OR 上證指數", "lang": "zh"},
+    {"code": "VN", "query": "Thị trường chứng khoán OR VN-Index", "lang": "vi"}
+]
+
+@app.get("/api/news/global")
+async def get_global_news(
+    limit: int = Query(5, ge=1, le=20),
+    trusted_only: bool = Query(True)
+):
+    """
+    Fetch news from all major markets in parallel.
+    Aggregates results server-side to reduce frontend requests.
+    """
+    key = f"news-global-v2|{limit}|{trusted_only}"
+    cached = _cache_get(key)
+    if cached:
+        return {"news": cached, "cached": True}
+        
+    tasks = []
+    for config in GLOBAL_MARKET_CONFIG:
+        tasks.append(fetch_news(
+            symbol=config["query"],
+            limit=limit,
+            language=config["lang"],
+            hours=72,
+            country=config["code"].lower()
+        ))
+        
+    results = await asyncio.gather(*tasks)
+    
+    # Flatten and trusted filter is already applied if we passed it? 
+    # fetch_news doesn't take trusted_only param, we must filter here.
+    # Actually fetch_news returns raw list.
+    
+    merged = []
+    for items in results:
+        if trusted_only:
+            items = [i for i in items if i.get("is_trusted")]
+        merged.extend(items)
+        
+    # Sort by date
+    merged.sort(key=lambda x: x.get("published_at") or "", reverse=True)
+    
+    _cache_set(key, merged, ttl=600) # Cache for 10 minutes
+    
+    return {"news": merged, "cached": False}
+
+from pydantic import BaseModel
+
+class BatchTickerRequest(BaseModel):
+    symbols: list[str]
+    hours: int = 72
+    limit: int = 2
+    country: str | None = None
+    language: str | None = None
+
+@app.post("/api/batch-ticker-data")
+async def get_batch_ticker_data(req: BatchTickerRequest):
+    """
+    Fetch quote and latest news for multiple symbols in one go.
+    """
+    # Create unique key for caching this batch request?
+    # Batch requests can vary wildly, so maybe short cache or no cache if user specific?
+    # Let's try to cache individual components or just the whole thing for short time.
+    symbols_key = ",".join(sorted(req.symbols))
+    key = f"batch-data-v3|{symbols_key}|{req.hours}|{req.limit}|{req.country}|{req.language}"
+    
+    cached = _cache_get(key)
+    if cached:
+        return {"data": cached, "cached": True}
+
+    async def fetch_one(sym):
+        try:
+            quote, news_data = await asyncio.gather(
+                get_quote(sym),
+                get_company_news(sym, hours=req.hours, limit=req.limit, country=req.country, language=req.language)
+            )
+            news_items = news_data.get("news", []) if isinstance(news_data, dict) else []
+            # Normalize news items to limit
+            return {
+                "ticker": sym,
+                "quote": quote,
+                "news": news_items[0] if news_items else None # Return only top news for "Latest Updates" card
+            }
+        except Exception as e:
+            print(f"Batch fetch error for {sym}: {e}")
+            return None
+
+    tasks = [fetch_one(s) for s in req.symbols]
+    results = await asyncio.gather(*tasks)
+    
+    # Filter out None and entries with no news? 
+    # The frontend expects {ticker, quote, news}. 
+    # If news is missing, maybe we skip or show just quote?
+    # Frontend logic: updates.map... NewsCard uses news.title.
+    # So we need news.
+    
+    final_data = [r for r in results if r and r.get("news")]
+    
+    # Sort by news time
+    final_data.sort(key=lambda x: (x["news"].get("published_at") or ""), reverse=True)
+    
+    _cache_set(key, final_data, ttl=300) # 5 mins
+    
+    return {"data": final_data, "cached": False}
 
 import random
 
@@ -523,15 +1079,53 @@ async def get_company_news(
     hours: int = Query(24, ge=1, le=168),
     limit: int = Query(20, ge=1, le=50),
     country: str | None = Query(None, description="Two-letter country code (e.g., us, gb)"),
+    language: str | None = Query(None, description="Language code (e.g., en, th)"),
+    force_refresh: bool = False # Internal use mainly
 ):
     # Cache check
-    key = f"company_news_v3|{symbol.upper()}|{hours}|{limit}|{country}"
-    cached = _cache_get(key)
-    if cached:
-        return cached
+    key = f"company_news_v4|{symbol.upper()}|{hours}|{limit}|{country}|{language}"
+    if not force_refresh:
+        cached = _cache_get(key)
+        if cached:
+            return cached
+
+    # Special handling for Google Finance Countries (Bypass Finnhub)
+    if country and country.lower() in GOOGLE_FINANCE_COUNTRIES:
+        # Use passed language or default to 'en'
+        lang = language if language else "en"
+        
+        # Look up company name for better fallback queries
+        company_name = None
+        try:
+            all_syms = await get_symbols()
+            match = next((s for s in all_syms if s["symbol"] == symbol.upper()), None)
+            if match:
+                company_name = match.get("name") or match.get("description")
+        except Exception as e:
+            print(f"Error looking up company name for {symbol}: {e}")
+
+        # Force fetch_news which uses SearchAPI for these countries
+        items = await fetch_news(symbol.upper(), limit, language=lang, hours=hours, country=country, company_name=company_name)
+        
+        # Also fetch quote data (from fallback/internal if needed)
+        q_data = await get_quote(symbol.upper())
+        quote = {k: v for k, v in q_data.items() if k != "logo_url" and k != "symbol"} if q_data else None
+        logo_url = q_data.get("logo_url") if q_data else None
+
+        result = {
+            "symbol": symbol.upper(),
+            "total": len(items),
+            "news": items,
+            "quote": quote,
+            "logo_url": logo_url
+        }
+        _cache_set(key, result, ttl=NEWS_TTL_SECONDS)
+        return result
 
     if not FINNHUB_TOKEN:
-        items = await fetch_news(symbol.upper(), limit, language="en", hours=hours, country=country)
+        # Use passed language or default to 'en'
+        lang = language if language else "en"
+        items = await fetch_news(symbol.upper(), limit, language=lang, hours=hours, country=country)
         return {
             "symbol": symbol.upper(),
             "total": len(items),
@@ -608,6 +1202,37 @@ async def get_stock_overview(
     quote = None
     news_items = []
     logo_url = None
+
+    if country and country.lower() in GOOGLE_FINANCE_COUNTRIES:
+        # Use specialized logic (SearchAPI for news, robust get_quote for data)
+        q_data = await get_quote(symbol_upper)
+        
+        # Separate logo_url from quote data
+        logo_url = q_data.get("logo_url")
+        quote_obj = {k: v for k, v in q_data.items() if k != "logo_url" and k != "symbol"}
+        
+        # Look up company name for better fallback queries
+        company_name = None
+        try:
+            all_syms = await get_symbols()
+            match = next((s for s in all_syms if s["symbol"] == symbol_upper), None)
+            if match:
+                company_name = match.get("name") or match.get("description")
+        except Exception as e:
+            print(f"Error looking up company name for {symbol}: {e}")
+
+        # Fetch news using SearchAPI
+        news_list = await fetch_news(symbol_upper, limit, language or "en", hours, country, company_name=company_name)
+        
+        return {
+            "symbol": symbol_upper,
+            "quote": quote_obj,
+            "logo_url": logo_url,
+            "news": {
+                "total": len(news_list),
+                "items": news_list,
+            },
+        }
 
     if FINNHUB_TOKEN:
         await _require_client()
@@ -713,7 +1338,7 @@ async def get_symbols():
     """
     Fetches the list of available DR symbols and merged with TradingView stocks.
     """
-    key = "dr_tv_symbols_list_v5"
+    key = "dr_tv_symbols_list_v11"
     cached = _cache_get(key)
     if cached is not None:
         return cached
@@ -754,14 +1379,12 @@ async def get_symbols():
             {"region": "china", "country": "CN", "limit": 500},
             {"region": "hongkong", "country": "HK", "limit": 500},
             {"region": "japan", "country": "JP", "limit": 500},
-            {"region": "korea", "country": "KR", "limit": 500},
             {"region": "vietnam", "country": "VN", "limit": 500},
             {"region": "singapore", "country": "SG", "limit": 500},
             {"region": "taiwan", "country": "TW", "limit": 500},
-            {"region": "india", "country": "IN", "limit": 500},
-            {"region": "australia", "country": "AU", "limit": 500},
-            {"region": "uk", "country": "GB", "limit": 500},
-            {"region": "germany", "country": "DE", "limit": 500},
+            {"region": "denmark", "country": "DK", "limit": 200},
+            {"region": "netherlands", "country": "NL", "limit": 200},
+            {"region": "italy", "country": "IT", "limit": 200},
             {"region": "france", "country": "FR", "limit": 500}
         ]
         
@@ -786,6 +1409,10 @@ async def get_symbols():
         
         # Add fallback symbols first
         for s in FALLBACK_SYMBOLS:
+            merged[s["symbol"]] = s.copy()
+            
+        # Add additional fallback symbols (global)
+        for s in ADDITIONAL_FALLBACK_SYMBOLS:
             merged[s["symbol"]] = s.copy()
 
         # Add DR symbols
@@ -845,10 +1472,14 @@ async def _fetch_tradingview_stocks(client, region="america", country_code="US",
         subtypes = ["common", "preference", "etf", "reit"]
         
         filters = [
-            {"left": "type", "operation": "in_range", "right": ["stock", "dr", "fund"]},
-            # {"left": "exchange", "operation": "in_range", "right": exchange_filter},
             {"left": "average_volume_10d_calc", "operation": "greater", "right": min_volume}
         ]
+
+        if region == "thailand":
+             # For Thailand, user wants ONLY Thai stocks, no DRs or Funds
+             filters.append({"left": "type", "operation": "in_range", "right": ["stock"]})
+        else:
+             filters.append({"left": "type", "operation": "in_range", "right": ["stock", "dr", "fund"]})
         
         if exchange_filter:
             filters.append({"left": "exchange", "operation": "in_range", "right": exchange_filter})
@@ -898,8 +1529,6 @@ async def _fetch_tradingview_stocks(client, region="america", country_code="US",
                 continue
                 
             symbol = row.get("s", "").split(":")[-1] # NASDAQ:AAPL -> AAPL
-            logoid = d[0]
-            name = d[1]
             
             # --- Additional Filtering Heuristics ---
             # 1. Thai Specific Filters
@@ -911,6 +1540,12 @@ async def _fetch_tradingview_stocks(client, region="america", country_code="US",
                 # Removed "name == symbol" check because many valid Thai stocks have name=symbol in TV data
                 # if name.strip().upper() == symbol.strip().upper():
                 #    continue
+                
+                # Append .BK suffix for Thai stocks AFTER filtering
+                symbol = f"{symbol}.BK"
+
+            logoid = d[0]
+            name = d[1]
 
             # 2. General Filters
             # Exclude if name is empty

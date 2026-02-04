@@ -137,7 +137,7 @@ const renderPriceWithCurrency = (price, currency) => {
 
 // --- Components ---
 
-const FilterDropdown = ({ label, value, options, onSelect }) => {
+const FilterDropdown = ({ value, options, onSelect }) => {
   const [isOpen, setIsOpen] = useState(false);
   const ref = useRef(null);
   useEffect(() => {
@@ -230,7 +230,7 @@ const RatingHistoryModal = ({ item, timeframe, onClose }) => {
   const [currentPrice, setCurrentPrice] = useState(item?.last || 0);
   const [currentChange, setCurrentChange] = useState(item?.change || 0);
   const [currentChangePercent, setCurrentChangePercent] = useState(item?.percentChange || 0);
-  const [currentRating, setCurrentRating] = useState(timeframe === "1W" ? (item?.ratingWeek || "Unknown") : (item?.ratingDay || "Unknown"));
+  const [, setCurrentRating] = useState(timeframe === "1W" ? (item?.ratingWeek || "Unknown") : (item?.ratingDay || "Unknown"));
 
   // Store raw history data (unfiltered)
   const [rawHistoryData, setRawHistoryData] = useState([]);
@@ -600,7 +600,6 @@ export default function Suggestion() {
   const [filterRating, setFilterRating] = useState(null);
   const [changeFilter, setChangeFilter] = useState("All");
   const [selectedItem, setSelectedItem] = useState(null);
-  const [loading, setLoading] = useState(true);
   const [sortConfig, setSortConfig] = useState({ key: null, direction: "asc" });
   const [lastUpdateTime, setLastUpdateTime] = useState(null);
 
@@ -759,11 +758,9 @@ export default function Suggestion() {
           });
         });
         setData(Array.from(underlyingMap.values()));
-        setLoading(false);
       } catch (err) {
         if (isMounted) {
           console.error('Error fetching data:', err);
-          setLoading(false);
         }
       }
     }
@@ -923,7 +920,7 @@ export default function Suggestion() {
                     </div>
                   )}
                 </div>
-                <FilterDropdown label="Rating change" value={changeFilter} options={CHANGE_OPTIONS} onSelect={(val) => { setChangeFilter(val); trackFilter('rating_change', val); }} />
+                <FilterDropdown value={changeFilter} options={CHANGE_OPTIONS} onSelect={(val) => { setChangeFilter(val); trackFilter('rating_change', val); }} />
               </div>
               <div className="relative w-full md:w-auto">
                 <input type="text" placeholder="Search DR..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="bg-white pl-4 pr-10 py-2 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#0B102A] w-full md:w-64 text-sm shadow-sm h-[37.33px]" />

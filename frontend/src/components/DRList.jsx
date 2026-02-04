@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback, useTransition, useRef } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import swipeImg from "../assets/swipe.png";
 import { trackFilter, trackSearch, trackStockView } from "../utils/tracker";
 
@@ -110,8 +110,6 @@ export default function DRList() {
 
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [isPending, startTransition] = useTransition();
 
   /* DR FILTER */
   const [drFilter, setDrFilter] = useState("all");
@@ -190,13 +188,13 @@ export default function DRList() {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed)) setWatchlist(parsed);
       }
-    } catch { }
+    } catch (e) { void e; }
   }, []);
 
   useEffect(() => {
     try {
       localStorage.setItem("dr_watchlist", JSON.stringify(watchlist));
-    } catch { }
+    } catch (e) { void e; }
   }, [watchlist]);
 
   useEffect(() => {
@@ -265,10 +263,9 @@ export default function DRList() {
             setLoading(false);
           }
         }
-      } catch { }
+      } catch (e) { void e; }
 
       try {
-        setIsRefreshing(true);
         const res = await fetch(API_URL);
         const json = await res.json();
         const rows = json.rows || [];
@@ -313,13 +310,12 @@ export default function DRList() {
 
         try {
           localStorage.setItem(CACHE_KEY, JSON.stringify({ ts: Date.now(), rows: formatted }));
-        } catch { }
+        } catch (e) { void e; }
       } catch (err) {
         console.error(err);
       } finally {
         if (mounted) {
           setLoading(false);
-          setIsRefreshing(false);
         }
       }
     };
@@ -566,34 +562,6 @@ export default function DRList() {
   /* ───────────────────────────────────────────────
       TABLE HEADER & ROWS
   ─────────────────────────────────────────────── */
-
-  const renderHeaderCell = (key, label) => {
-    if (!visibleColumns[key]) return null;
-    const isActive = sortConfig.key === key;
-    const direction = sortConfig.direction;
-    const numericCols = ["open", "high", "low", "last", "change", "pct", "bid", "offer", "vol", "value", "marketCap"];
-    const basicDrCols = ["issuerName", "marketCap", "underlyingName", "ytdChange", "ytdPercentChange", "conversionRatio", "divYield", "exchange", "securityTypeName", "outstandingShare"];
-    const rightAlignCols = [...numericCols, ...basicDrCols];
-    const alignClass = rightAlignCols.includes(key) ? "text-right justify-end" : "text-left";
-    const extraStyle = key === "dr" ? "sticky left-0 z-20 bg-[#f4f4f4]" : "";
-
-    return (
-      <th
-        key={key}
-        className={`py-4 px-6 whitespace-nowrap ${alignClass} text-sm font-bold cursor-pointer select-none ${extraStyle}`}
-        onClick={() => {
-          let dir = "asc";
-          if (sortConfig.key === key && sortConfig.direction === "asc") dir = "desc";
-          setSortConfig({ key, direction: dir });
-        }}
-      >
-        <div className={`flex gap-1 w-full ${rightAlignCols.includes(key) ? "justify-end" : "justify-start"}`}>
-          {label}
-          {isActive && <span>{direction === "asc" ? "▲" : "▼"}</span>}
-        </div>
-      </th>
-    );
-  };
 
   const renderRow = (row, index) => {
     const fundamentalKeys = ["issuerName", "marketCap", "underlyingName", "ytdChange", "ytdPercentChange", "conversionRatio", "divYield", "exchange", "securityTypeName", "outstandingShare"];
