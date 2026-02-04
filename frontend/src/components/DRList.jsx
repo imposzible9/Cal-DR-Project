@@ -82,18 +82,18 @@ const extractSymbol = (str) => {
 };
 
 const countryOptions = [
-  { code: "all", label: "All Markets" },
-  { code: "US", label: "US United States" },
-  { code: "HK", label: "HK Hong Kong" },
-  { code: "DK", label: "DK Denmark" },
-  { code: "NL", label: "NL Netherlands" },
-  { code: "FR", label: "FR France" },
-  { code: "IT", label: "IT Italy" },
-  { code: "JP", label: "JP Japan" },
-  { code: "SG", label: "SG Singapore" },
-  { code: "TW", label: "TW Taiwan" },
-  { code: "CN", label: "CN China" },
-  { code: "VN", label: "VN Vietnam" },
+  { code: "all", label: "All Markets", flag: null },
+  { code: "US", label: "US United States", flag: "us" },
+  { code: "HK", label: "HK Hong Kong", flag: "hk" },
+  { code: "DK", label: "DK Denmark", flag: "dk" },
+  { code: "NL", label: "NL Netherlands", flag: "nl" },
+  { code: "FR", label: "FR France", flag: "fr" },
+  { code: "IT", label: "IT Italy", flag: "it" },
+  { code: "JP", label: "JP Japan", flag: "jp" },
+  { code: "SG", label: "SG Singapore", flag: "sg" },
+  { code: "TW", label: "TW Taiwan", flag: "tw" },
+  { code: "CN", label: "CN China", flag: "cn" },
+  { code: "VN", label: "VN Vietnam", flag: "vn" },
 ];
 
 /* ───────────────────────────────────────────────
@@ -383,7 +383,24 @@ export default function DRList() {
               onClick={() => setShowCountryMenu((prev) => !prev)}
               className="flex items-center justify-between gap-2 sm:gap-3 rounded-xl border border-gray-200 bg-white px-2.5 sm:px-3 py-1.5 sm:py-2 text-[11px] sm:text-xs md:text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#0B102A] w-full sm:min-w-[160px] md:min-w-[180px] h-[35px] md:h-[37.33px]"
             >
-              <span className="truncate text-[11px] sm:text-xs md:text-sm">{selectedCountryOption.label}</span>
+              <span className="truncate text-[11px] sm:text-xs md:text-sm flex items-center gap-2">
+                {selectedCountryOption.flag ? (
+                  <img
+                    src={`https://flagcdn.com/${selectedCountryOption.flag}.svg`}
+                    srcSet={`https://flagcdn.com/w40/${selectedCountryOption.flag}.png 2x, https://flagcdn.com/w20/${selectedCountryOption.flag}.png 1x`}
+                    alt="flag"
+                    className="w-5 h-5 object-contain rounded-sm"
+                    onError={(e) => { if (!e.target.dataset.fallback) { e.target.dataset.fallback = '1'; e.target.src = `https://flagcdn.com/w40/${selectedCountryOption.flag}.png`; } }}
+                  />
+                ) : (selectedCountryOption.code === 'all' || selectedCountryOption.code === 'All') ? (
+                  <svg className="w-5 h-5" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden>
+                    <circle cx="12" cy="12" r="10" fill="#00ADEF" />
+                    <path d="M6.5 13c-.2-1.2.4-2.6 1.4-3.3 1-.7 2.2-.6 3.4-.3 1.2.3 2.1.8 2.9 1.6.8.8 1.1 1.6.9 2.5-.2.9-1 1.6-1.8 1.9-.8.3-1.9.2-3.1-.2-1.2-.4-2.3-1-3.6-1.2z" fill="#7EE787" />
+                    <path d="M12 2a10 10 0 0 1 8 4 10 10 0 0 1-2 12 10 10 0 0 1-6 2 10 10 0 0 1-6-2 10 10 0 0 1 4-16" fill="#0077C8" opacity="0.18" />
+                  </svg>
+                ) : null}
+                <span>{selectedCountryOption.label}</span>
+              </span>
               <svg
                 className={`h-3.5 w-3.5 sm:h-4 sm:w-4 flex-shrink-0 transition-transform`}
                 fill="none"
@@ -410,8 +427,25 @@ export default function DRList() {
                     className={`flex w-full items-center justify-between px-3 sm:px-4 py-1 sm:py-1.5 text-left text-[11px] sm:text-xs md:text-sm transition-colors ${opt.code === countryFilter ? "bg-[#EEF2FF] text-[#0B102A] font-semibold" : "text-gray-700 hover:bg-gray-50"
                       }`}
                   >
-                    <span>{opt.label}</span>
-                    {opt.code === countryFilter && <i className="bi bi-check-lg text-[#0B102A] text-sm"></i>}
+                    <span className="flex items-center gap-2">
+                      {opt.flag ? (
+                        <img
+                          src={`https://flagcdn.com/${opt.flag}.svg`}
+                          srcSet={`https://flagcdn.com/w40/${opt.flag}.png 2x, https://flagcdn.com/w20/${opt.flag}.png 1x`}
+                          alt="flag"
+                          className="w-5 h-5 object-contain rounded-sm"
+                          onError={(e) => { if (!e.target.dataset.fallback) { e.target.dataset.fallback = '1'; e.target.src = `https://flagcdn.com/w40/${opt.flag}.png`; } }}
+                        />
+                        ) : (opt.code === 'all' || opt.code === 'All') ? (
+                        <svg className="w-5 h-5" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden>
+                          <circle cx="12" cy="12" r="10" fill="#00ADEF" />
+                          <path d="M6.5 13c-.2-1.2.4-2.6 1.4-3.3 1-.7 2.2-.6 3.4-.3 1.2.3 2.1.8 2.9 1.6.8.8 1.1 1.6.9 2.5-.2.9-1 1.6-1.8 1.9-.8.3-1.9.2-3.1-.2-1.2-.4-2.3-1-3.6-1.2z" fill="#7EE787" />
+                          <path d="M12 2a10 10 0 0 1 8 4 10 10 0 0 1-2 12 10 10 0 0 1-6 2 10 10 0 0 1-6-2 10 10 0 0 1 4-16" fill="#0077C8" opacity="0.18" />
+                        </svg>
+                      ) : null}
+                      <span>{opt.label}</span>
+                    </span>
+                    {/* Removed check icon per request */}
                   </button>
                 ))}
               </div>
