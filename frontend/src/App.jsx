@@ -28,7 +28,7 @@ function App() {
     // Global Heartbeat around every 60 seconds to keep user "Active"
     const interval = setInterval(() => {
       trackHeartbeat();
-    }, 60000);
+    }, 300000); // 5 minutes
 
     return () => clearInterval(interval);
   }, []);

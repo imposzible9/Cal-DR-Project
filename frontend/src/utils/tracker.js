@@ -226,7 +226,7 @@ export const trackFavorite = (ticker, action) => {
  * Track Heartbeat (Keep Alive)
  */
 export const trackHeartbeat = () => {
-    sendTrackingEvent('heartbeat', { ts: Date.now() });
+    sendTrackingEvent('heartbeat', { ts: new Date().toLocaleString() });
 };
 
 export default {

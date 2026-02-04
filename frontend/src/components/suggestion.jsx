@@ -1,17 +1,14 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
-import { trackPageView, trackSearch, trackFilter, trackStockView, trackClick } from "../utils/tracker";
-
-// const API_URL = "http://172.17.1.85:8333/dr";
-const API_URL = "https://api.ideatrade1.com/caldr";
+import { trackPageView, trackFilter, trackSearch } from "../utils/tracker";
 
 
-// const RATINGS_API = "http://172.18.1.56:8335/ratings/from-dr-api";
-const RATINGS_API = "https://api.ideatrade1.com/caldr?ratings=true";
+const API_URL = import.meta.env.VITE_DR_LIST_API;
+const RATINGS_API = import.meta.env.VITE_RATINGS_API;
 
 // 🔧 MOCK DATA FLAG - ตั้งเป็น true เพื่อใช้ mock data สำหรับทดสอบ winrate
 // เมื่อต้องการใช้ข้อมูลจริง ให้เปลี่ยนกลับเป็น false
 const USE_MOCK_DATA = false;
-const MOCK_RATINGS_API = "http://172.18.1.56:8335/api/mock-rating-history/aapl";
+// const MOCK_RATINGS_API = "http://172.18.1.56:8335/api/mock-rating-history/aapl";
 
 // --- Constants & Helpers ---
 const countryOptions = [
@@ -130,8 +127,8 @@ const formatInt = (n) => {
 const renderPriceWithCurrency = (price, currency) => {
   return (
     <div className="flex items-baseline justify-end gap-0.5">
-      <span className="font-medium text-gray-800 text-[14.4px] font-mono">{formatPrice(price)}</span>
-      <span className="text-[14.4px] text-gray-600 font-normal uppercase">{currency}</span>
+      <span className="font-medium text-gray-800 text-xs sm:text-[14.4px] font-mono">{formatPrice(price)}</span>
+      <span className="text-xs sm:text-[14.4px] text-gray-600 font-normal uppercase">{currency}</span>
     </div>
   );
 };
@@ -148,15 +145,15 @@ const FilterDropdown = ({ label, value, options, onSelect }) => {
   }, []);
   const currentLabel = options.find(o => o.val === value)?.label || value;
   return (
-    <div className="relative z-[60]" ref={ref}>
-      <button onClick={() => setIsOpen(!isOpen)} className="flex items-center justify-between gap-2 px-4 py-2 bg-white border border-gray-200 rounded-xl text-sm min-w-[140px] hover:border-gray-300 transition-colors shadow-sm h-[37.33px]">
+    <div className="relative z-[60] flex-1 sm:flex-initial sm:w-auto" ref={ref}>
+      <button onClick={() => setIsOpen(!isOpen)} className="flex items-center justify-between gap-2 px-3 sm:px-4 py-2 bg-white border border-gray-200 rounded-xl text-xs sm:text-sm w-full sm:min-w-[140px] md:min-w-[180px] hover:border-gray-300 transition-colors shadow-sm h-[37.33px]">
         <span className="text-gray-800 font-medium truncate">{currentLabel}</span>
-        <svg className={`w-4 h-4 text-gray-400 transition-transform ${isOpen ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+        <svg className={`h-4 w-4 shrink-0 transition-transform text-gray-500 ${isOpen ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" /></svg>
       </button>
       {isOpen && (
-        <div className="absolute top-full left-0 mt-1 w-full bg-white border border-gray-100 rounded-xl shadow-lg z-[100] py-1 overflow-hidden">
+        <div className="absolute top-full left-0 mt-1 w-full bg-white border border-gray-100 rounded-xl shadow-lg z-200 py-1 overflow-hidden">
           {options.map((opt) => (
-            <button key={opt.val} onClick={() => { onSelect(opt.val); setIsOpen(false); }} className={`w-full text-left px-4 py-1.5 text-sm flex items-center gap-2 hover:bg-gray-50 ${value === opt.val ? "text-[#0B102A] font-semibold bg-gray-50" : "text-gray-800"}`}>
+            <button key={opt.val} onClick={() => { onSelect(opt.val); setIsOpen(false); }} className={`w-full text-left px-4 py-1.5 text-xs sm:text-sm flex items-center gap-2 hover:bg-gray-50 ${value === opt.val ? "text-[#0B102A] font-semibold bg-gray-50" : "text-gray-800"}`}>
               {opt.color && <span className={`w-2 h-2 rounded-full ${opt.color}`}></span>}{opt.label}
             </button>
           ))}
@@ -167,27 +164,27 @@ const FilterDropdown = ({ label, value, options, onSelect }) => {
 };
 
 const RatingChangeCell = ({ prev, current, showChange }) => {
-  if (!current || current === "Unknown") return <span className="text-gray-300">-</span>;
+  if (!current || current === "Unknown") return <span className="text-gray-300 text-xs sm:text-sm">-</span>;
   const prevDisplay = prev && prev !== "Unknown" ? prev : "-";
   const prevTextColor = prev && prev !== "Unknown" ? getRatingTextColor(prev) : "text-gray-400";
   const shouldShowPrev = showChange;
 
   return (
     <div className="flex items-center justify-center h-full relative">
-      <div className={`flex items-center gap-2 transition-all duration-500 ease-[cubic-bezier(0.25,0.8,0.25,1)] ${shouldShowPrev ? "opacity-100" : "opacity-0 w-0 overflow-hidden"}`}>
-        <div className={`text-[14.4px] font-bold text-center ${prevTextColor}`} style={{ minWidth: '85px', width: '85px' }}>
-          <span className="whitespace-nowrap">
+      <div className={`flex items-center gap-1.5 sm:gap-2.5 transition-all duration-500 ease-[cubic-bezier(0.25,0.8,0.25,1)] ${shouldShowPrev ? "opacity-100" : "opacity-0 w-0 overflow-hidden"}`}>
+        <div className={`text-[11px] sm:text-[14.4px] font-bold text-center ${prevTextColor}`} style={{ minWidth: '80px', width: '80px' }}>
+          <span className="whitespace-nowrap text-[10px] sm:text-sm">
             {prevDisplay}
           </span>
         </div>
-        <div className="flex items-center justify-center mx-1" style={{ minWidth: '20px', width: '20px' }}>
-          <svg className="w-4 h-4 text-[#9CA3AF]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <div className="flex items-center justify-center mx-1 sm:mx-1.5" style={{ minWidth: '20px', width: '20px' }}>
+          <svg className="w-3 h-3 sm:w-4 sm:h-4 text-[#9CA3AF]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
           </svg>
         </div>
       </div>
-      <div className="flex justify-center ml-2" style={{ minWidth: '85px', width: '85px' }}>
-        <span className={`px-2 py-1 rounded text-[14.4px] font-bold whitespace-nowrap text-center transition-all duration-500 ${getRatingStyle(current)}`}>
+      <div className="flex justify-center ml-1.5 sm:ml-2.5" style={{ minWidth: '80px', width: '80px' }}>
+        <span className={`px-1.5 sm:px-2 py-0.5 sm:py-1 rounded text-[10px] sm:text-[14.4px] font-bold whitespace-nowrap text-center transition-all duration-500 ${getRatingStyle(current)}`}>
           {current}
         </span>
       </div>
@@ -201,7 +198,7 @@ const Tooltip = ({ show, position, children }) => {
 
   return (
     <div
-      className="fixed z-[5000] pointer-events-none transition-opacity duration-200"
+      className="fixed z-[5000] pointer-events-none transition-opacity duration-200 hidden sm:block"
       style={{
         left: `${position.x}px`,
         top: `${position.y - 10}px`,
@@ -211,7 +208,7 @@ const Tooltip = ({ show, position, children }) => {
     >
       <div className="bg-[#0B102A] text-white text-xs font-medium px-3 py-2 rounded-lg shadow-xl border border-white/10 backdrop-blur-sm whitespace-nowrap relative">
         <div className="flex items-center gap-2">
-          <svg className="w-3.5 h-3.5 text-blue-300 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg className="w-3.5 h-3.5 text-blue-300 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
           <span className="text-blue-50">{children}</span>
@@ -224,71 +221,145 @@ const Tooltip = ({ show, position, children }) => {
 
 // --- RatingHistoryModal ---
 const RatingHistoryModal = ({ item, timeframe, onClose }) => {
+  const [mode, setMode] = useState('intraday'); // Default to 'intraday'
   const [filterRating, setFilterRating] = useState(null);
   const [historyData, setHistoryData] = useState([]);
   const [accuracy, setAccuracy] = useState({ accuracy: 0, correct: 0, incorrect: 0, total: 0 });
   const [loading, setLoading] = useState(true);
-  const [currentPrice, setCurrentPrice] = useState(item?.last || 0);
-  const [currentChange, setCurrentChange] = useState(item?.change || 0);
-  const [currentChangePercent, setCurrentChangePercent] = useState(item?.percentChange || 0);
-  const [currentRating, setCurrentRating] = useState(timeframe === "1W" ? (item?.ratingWeek || "Unknown") : (item?.ratingDay || "Unknown"));
+  // Initialize header values from the table's selected row (use the processed/display fields)
+  const [currentPrice, setCurrentPrice] = useState(item?.sortPrice ?? item?.last ?? 0);
+  const [currentChange, setCurrentChange] = useState(item?.displayChange ?? item?.change ?? 0);
+  const [currentChangePercent, setCurrentChangePercent] = useState(item?.displayPct ?? item?.percentChange ?? 0);
+  const [currentRating, setCurrentRating] = useState(
+    timeframe === "1W" ? (item?.ratingWeek ?? item?.technicalRating ?? "Unknown") : (item?.ratingDay ?? item?.technicalRating ?? "Unknown")
+  );
+  const [logoError, setLogoError] = useState(false);
 
   // Store raw history data (unfiltered)
   const [rawHistoryData, setRawHistoryData] = useState([]);
 
+  // Function to convert company name to TradingView logo format
+  const getLogoSlug = (name) => {
+    if (!name) return '';
+
+    let cleanName = name;
+
+    // Remove Thai text (บริษัท or หุ้นสามัญของบริษัท)
+    cleanName = cleanName.replace(/^(บริษัท|หุ้นสามัญของบริษัท)\s*/i, '');
+
+    // Extract company name before parentheses (AMZN) or other markers
+    // "AMAZON.COM, INC. (AMZN)" -> "AMAZON.COM, INC."
+    cleanName = cleanName.replace(/\s*\([^)]+\)\s*$/g, '');
+
+    // Special handling for company names with multiple parts separated by comma
+    // "BECTON, DICKINSON AND COMPANY" -> keep "BECTON, DICKINSON"
+    // "AMAZON.COM, INC." -> "AMAZON"
+
+    // First, check if it has .COM or .INC before comma
+    const comMatch = cleanName.match(/^([A-Z][A-Z0-9&]*?)\.(?:COM|INC)/i);
+    if (comMatch) {
+      // For "AMAZON.COM, INC." -> "AMAZON" (remove .COM/.INC)
+      cleanName = comMatch[1];
+    } else {
+      // For other cases, check for comma pattern
+      const commaMatch = cleanName.match(/^([A-Z][A-Z0-9&\s]*?),\s*([A-Z][A-Z0-9&\s]*?)(?:,|\s+(?:AND|&)\s+)/i);
+      if (commaMatch) {
+        // For "BECTON, DICKINSON AND COMPANY" -> "BECTON, DICKINSON"
+        cleanName = commaMatch[1] + ', ' + commaMatch[2];
+      } else {
+        // For simple cases, extract first word before comma or space
+        const simpleMatch = cleanName.match(/^([A-Z][A-Z0-9&]*?)(?:\s*,|\s+)/i);
+        if (simpleMatch) {
+          cleanName = simpleMatch[1];
+        }
+      }
+    }
+
+    // Convert to lowercase
+    let slug = cleanName.toLowerCase();
+
+    // Remove common suffixes (iterative removal for nested cases)
+    const suffixes = [
+      'incorporated', 'incorporation', 'corporation', 'corp',
+      'company', 'limited', 'ltd', 'plc', 'group', 'holdings', 'holding',
+      'international', 'technologies', 'technology', 'tech',
+      'systems', 'solutions', 'software', 'inc', 'co'
+    ];
+
+    for (let i = 0; i < 3; i++) {
+      suffixes.forEach(suffix => {
+        const regex = new RegExp(`\\b${suffix}\\.?\\b`, 'gi');
+        slug = slug.replace(regex, ' ');
+      });
+      slug = slug.replace(/\s+/g, ' ').trim();
+    }
+
+    // Clean up: replace spaces with hyphens, remove special characters
+    slug = slug
+      .replace(/\s+/g, '-')
+      .replace(/[^a-z0-9-]/g, '')
+      .replace(/-+/g, '-')
+      .replace(/^-+|-+$/g, '');
+
+    return slug;
+  };
+
   useEffect(() => {
     if (!item) return;
 
-    async function fetchHistoryWithAccuracy() {
+    async function fetchHistory() {
       setLoading(true);
       try {
         const ticker = item.displaySymbol || item.symbol;
-        const tf = timeframe === "1W" ? "1W" : "1D";
+        let data = null;
+        if (mode === "intraday") {
+          // ดึงจาก /api/intraday-history/{ticker}?timeframe=...
+          const baseUrl = import.meta.env.VITE_HISTORY_API;
+          const url = `${baseUrl}/api/intraday-history/${ticker}?timeframe=${timeframe}`;
+          console.log("🔍 Fetching INTRADAY from URL:", url);
+          const response = await fetch(url);
+          if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+          const apiData = await response.json();
+          data = { history: apiData.intraday_history };
+        } else {
+          // ดึงแบบเดิม (daily)
+          const baseUrl = import.meta.env.VITE_HISTORY_API;// http://localhost:8000/ratings
+          const tf = timeframe === "1W" ? "1W" : "1D";
+          // Use relative path from the base URL (which already contains /ratings prefix if configured)
+          // If baseUrl is http://localhost:8000/ratings, we just need /history-with-accuracy/...
+          // But to be safe and avoid double slash, lets just check.
+          // Correct endpoint is http://localhost:8000/ratings/history-with-accuracy/{ticker}
 
-        // Use local API for development
-        const baseUrl = "http://localhost:8000/ratings";
-        const url = `${baseUrl}/ratings/history-with-accuracy/${ticker}?timeframe=${tf}`;
-        console.log("🔍 Fetching from URL:", url);
+          // Since VITE_HISTORY_API is now http://localhost:8000/ratings
+          // We should append /history-with-accuracy
 
-        const response = await fetch(url);
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
+          // const url = `${baseUrl}/ratings/history-with-accuracy/${ticker}?timeframe=${tf}&mode=${mode}`;
+          const url = `${baseUrl}/history-with-accuracy/${ticker}?timeframe=${tf}`;
+          console.log("🔍 Fetching from URL:", url);
+          const response = await fetch(url);
+          if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+          data = await response.json();
         }
 
-        const data = await response.json();
-        console.log("📦 API Response:", data);
-        console.log("📊 History items count:", data.history?.length || 0);
-
-        if (data.history && Array.isArray(data.history)) {
-          // Store raw data (unfiltered)
+        if (data && Array.isArray(data.history) && data.history.length > 0) {
           setRawHistoryData(data.history);
-          setAccuracy(data.accuracy || { accuracy: 0, correct: 0, incorrect: 0, total: 0 });
-          setCurrentPrice(data.price || 0);
-          setCurrentChange(data.change || 0);
-          setCurrentChangePercent(data.changePercent || 0);
-          setCurrentRating(data.current_rating || "Unknown");
+          setAccuracy(data.accuracy ?? { accuracy: 0, correct: 0, incorrect: 0, total: 0 });
         } else {
-          // Handle empty or no data response
-          console.log("ℹ️ No history data available for this ticker");
           setRawHistoryData([]);
-          setAccuracy({ accuracy: 0, correct: 0, incorrect: 0, total: 0 });
-          // Use item data as fallback
-          setCurrentPrice(data.price || item?.last || 0);
-          setCurrentChange(data.change || item?.change || 0);
-          setCurrentChangePercent(data.changePercent || item?.percentChange || 0);
-          setCurrentRating(data.current_rating || (timeframe === "1W" ? (item?.ratingWeek || "Unknown") : (item?.ratingDay || "Unknown")));
+          setAccuracy(data?.accuracy ?? { accuracy: 0, correct: 0, incorrect: 0, total: 0 });
         }
       } catch (error) {
-        console.error("Error fetching history with accuracy:", error);
+        console.error("Error fetching history:", error);
       } finally {
         setLoading(false);
       }
     }
 
-    fetchHistoryWithAccuracy();
-  }, [item, timeframe]);
+    fetchHistory();
+  }, [item, timeframe, mode]);
 
   // Filter history data based on filterRating (client-side filtering)
+  // Use the same strength+threshold logic as backend (CHANGE_THRESHOLD=2.0)
   useEffect(() => {
     if (!rawHistoryData || rawHistoryData.length === 0) {
       setHistoryData([]);
@@ -296,88 +367,179 @@ const RatingHistoryModal = ({ item, timeframe, onClose }) => {
       return;
     }
 
-    let filtered = filterNeutralFromHistory(rawHistoryData);
+    // สร้าง enriched history โดยคำนวณค่า open-based change percent
+    // Important: build ordered array newest-first so pairing (Exit = newest, Entry = previous) aligns correctly
+    // Use explicit sort by timestamp/date descending to avoid depending on API order
+    const ordered = (rawHistoryData || []).slice().sort((a, b) => {
+      const at = new Date(a.timestamp ?? a.date).getTime() || 0;
+      const bt = new Date(b.timestamp ?? b.date).getTime() || 0;
+      return bt - at; // newest first
+    });
+    const enriched = ordered.map((curr, idx, arr) => {
+      const next = arr[idx + 1] || {}; // next is older item (Entry)
+      // Include price as a fallback so Entry shows correct value when 'open' is null
+      const prev_open = (next && (next.at_price ?? next.open ?? next.prev_close ?? next.result_price ?? next.price)) ?? null;
+      // Normalize rating fields so UI can show Signal: prev -> curr
+      const ratingNow = curr.daily_rating ?? curr.rating ?? curr.dailyRating ?? curr.rating_day ?? null;
+      // Prefer the explicit 'prev' value on the current record if provided,
+      // otherwise fall back to the next (older) record's rating.
+      const ratingPrev = curr.prev ?? next.daily_rating ?? next.rating ?? next.dailyRating ?? next.rating_day ?? null;
+      // DEBUG: log prev value for troubleshooting
+      // console.log('DEBUG prev:', ratingPrev, 'raw:', next);
+      const prev_timestamp = next.timestamp ?? next.date ?? null;
+      const curr_open = (curr.at_price ?? curr.open ?? curr.result_price ?? curr.price) ?? null;
+      let change_pct_open = null;
+      let change_abs_open = null;
+      if (prev_open != null && curr_open != null && Number(prev_open) !== 0) {
+        change_abs_open = Number(curr_open) - Number(prev_open);
+        change_pct_open = (change_abs_open / Number(prev_open)) * 100;
+      }
 
-    if (filterRating) {
-      filtered = filtered.filter(item => item.rating === filterRating);
+      return {
+        ...curr,
+        // signal fields used by UI
+        rating: ratingNow,
+        prev: ratingPrev,
+        prev_timestamp: prev_timestamp,
+        prev_open: prev_open,
+        result_open: curr_open,
+        change_pct_open: change_pct_open, // may be null
+        change_abs_open: change_abs_open,
+      };
+    });
+
+    // Filter out neutral/unknown as before (works because fields preserved)
+    let filtered = filterNeutralFromHistory(enriched);
+
+    // If in intraday mode, only show items from the latest timestamp's date (use overall newest item)
+    if (mode === 'intraday' && enriched.length > 0) {
+      const latestOverall = enriched[0]; // enriched is sorted newest-first
+      const latestDate = new Date(latestOverall.timestamp ?? latestOverall.date);
+      if (!isNaN(latestDate.getTime())) {
+        const latestDay = latestDate.toDateString();
+        filtered = filtered.filter(it => {
+          const d = new Date(it.timestamp ?? it.date);
+          return !isNaN(d.getTime()) && d.toDateString() === latestDay;
+        });
+      }
     }
 
+    // Apply rating filter after restricting to the day's entries so filters only consider that day
+    if (filterRating) filtered = filtered.filter(item => item.rating === filterRating);
+
+    // `enriched` is newest-first and `filtered` now contains only same-day items when in intraday mode
     setHistoryData(filtered);
 
-    // คำนวณ accuracy สำหรับข้อมูลที่กรองแล้ว
-    if (filtered.length > 0) {
-      let correct = 0;
-      let incorrect = 0;
-
-      filtered.forEach((item) => {
-        // ดึง rating ปัจจุบันและ rating ก่อนหน้า
-        const ratingPrev = item.prev?.toLowerCase() || "";
-        const ratingCurr = item.rating?.toLowerCase() || "";
-        const changePct = item.change_pct || 0;
-
-        // ข้ามถ้าไม่มี rating
-        if (!ratingPrev || !ratingCurr) {
-          return;
-        }
-
-        const scorePrev = RATING_SCORE[ratingPrev] || 0;
-        const scoreCurr = RATING_SCORE[ratingCurr] || 0;
-        const ratingDirection = scoreCurr - scorePrev;
-
-        // กำหนด sentiment ของ rating (positive or negative)
-        const isCurrPositive = scoreCurr >= 4; // Buy, Strong Buy
-
-        // ตรวจสอบว่าทำนายถูกหรือไม่
-        let isCorrect = false;
-
-        if (ratingDirection === 0) {
-          // Rating ไม่เปลี่ยน (Buy→Buy, Sell→Sell)
-          if (isCurrPositive) {
-            // Buy/Strong Buy rating: ราคาควรขึ้น
-            isCorrect = changePct > 0;
-          } else {
-            // Sell/Strong Sell rating: ราคาควรลง
-            isCorrect = changePct < 0;
-          }
-        } else {
-          // Rating เปลี่ยน
-          if (ratingDirection > 0 && changePct > 0) {
-            // Rating ↑ และ ราคา ↑
-            isCorrect = true;
-          } else if (ratingDirection < 0 && changePct < 0) {
-            // Rating ↓ และ ราคา ↓
-            isCorrect = true;
-          }
-        }
-
-        if (isCorrect) {
-          correct += 1;
-        } else {
-          incorrect += 1;
-        }
-      });
-
-      const total = correct + incorrect;
-      const accuracy_pct = total > 0 ? (correct / total * 100) : 0;
-
-      setAccuracy({
-        accuracy: Math.round(accuracy_pct),
-        correct: correct,
-        incorrect: incorrect,
-        total: total
-      });
-    } else {
-      setAccuracy({ accuracy: 0, correct: 0, incorrect: 0, total: 0 });
-    }
+    // คำนวณ accuracy โดยใช้ข้อมูลที่จะแสดง (filtered)
+    const acc = calculateAccuracy(filtered, 2.0);
+    setAccuracy(acc);
   }, [rawHistoryData, filterRating]);
+
+  // Calculate accuracy based on history rows
+  const calculateAccuracy = (historyRows, changeThreshold = 2.0) => {
+    if (!historyRows || historyRows.length === 0) {
+      return { accuracy: 0, correct: 0, incorrect: 0, total: 0 };
+    }
+
+    let correct = 0;
+    let incorrect = 0;
+
+    const strengthMap = {
+      "strong sell": -2,
+      "sell": -1,
+      "neutral": 0,
+      "buy": 1,
+      "strong buy": 2
+    };
+
+    const ratingStrength = (rtext) => {
+      if (!rtext) return null;
+      const rl = String(rtext).toLowerCase().trim();
+      if (rl in strengthMap) return strengthMap[rl];
+      if (rl.includes("strong") && rl.includes("sell")) return strengthMap["strong sell"];
+      if (rl.includes("strong") && rl.includes("buy")) return strengthMap["strong buy"];
+      if (rl.includes("sell")) return strengthMap["sell"];
+      if (rl.includes("buy")) return strengthMap["buy"];
+      if (rl.includes("neutral")) return strengthMap["neutral"];
+      return null;
+    };
+
+    // Use index-based iteration to allow open-based calculation from consecutive rows
+    for (let i = 0; i < historyRows.length; i++) {
+      const row = historyRows[i];
+      // support different key names from API / storage
+      const ratingRaw = row.daily_rating ?? row.rating ?? row.dailyRating ?? row.rating_day ?? null;
+      const prevRaw = row.daily_prev ?? row.prev ?? row.dailyPrev ?? row.prev_rating ?? null;
+
+      // Prefer open-based change if available; otherwise fallback to existing change_pct
+      let changeVal = null;
+      if (row.change_pct_open != null && !Number.isNaN(Number(row.change_pct_open))) {
+        changeVal = Number(row.change_pct_open);
+      } else if (row.change_pct != null && !Number.isNaN(Number(row.change_pct))) {
+        changeVal = Number(row.change_pct);
+      } else if (row.changePct != null && !Number.isNaN(Number(row.changePct))) {
+        changeVal = Number(row.changePct);
+      } else if (row.change != null && !Number.isNaN(Number(row.change))) {
+        changeVal = Number(row.change);
+      } else {
+        // If no reliable change value, try to compute from this row and next row open values
+        const next = historyRows[i + 1] || {};
+        const prev_open = next.open ?? next.prev_close ?? next.result_price ?? next.prev_open ?? null;
+        const curr_open = row.open ?? row.result_price ?? row.price ?? null;
+        if (prev_open != null && curr_open != null && Number(prev_open) !== 0) {
+          changeVal = ((Number(curr_open) - Number(prev_open)) / Number(prev_open)) * 100;
+        }
+      }
+
+      if (changeVal === null || changeVal === undefined) continue;
+
+      if (!ratingRaw || !prevRaw) continue;
+
+      const strNow = ratingStrength(ratingRaw);
+      const strPrev = ratingStrength(prevRaw);
+
+      if (strNow === null || strPrev === null) continue;
+
+      const delta = strNow - strPrev;
+
+      // ข้ามถ้า rating ไม่เปลี่ยนและ price ไม่เปลี่ยน (threshold 0.01% เหมือน backend)
+      const ratingNotChanged = String(ratingRaw).toLowerCase().trim() === String(prevRaw).toLowerCase().trim();
+      const priceNotChanged = Math.abs(changeVal) < 0.01;
+      if (ratingNotChanged && priceNotChanged) continue;
+
+      let isCorrect = false;
+      if (delta > 0) {
+        isCorrect = (changeVal >= changeThreshold);
+      } else if (delta < 0) {
+        isCorrect = (changeVal <= -changeThreshold);
+      } else {
+        if (strNow > 0) {
+          isCorrect = (changeVal >= changeThreshold);
+        } else if (strNow < 0) {
+          isCorrect = (changeVal <= -changeThreshold);
+        } else {
+          continue;
+        }
+      }
+
+      if (isCorrect) correct += 1; else incorrect += 1;
+    }
+
+    const total = correct + incorrect;
+    const accuracy = total > 0 ? (correct / total) * 100 : 0;
+
+    return {
+      accuracy: Math.round(accuracy),
+      correct,
+      incorrect,
+      total,
+    };
+  };
 
   if (!item) return null;
 
   const handleRatingFilterClick = (rating) => {
-    const newRating = filterRating === rating ? null : rating;
-    setFilterRating(newRating);
-    // 📊 Track modal filter selection
-    trackClick('modal_filter_rating', { rating: newRating || 'clear', symbol: item?.displaySymbol });
+    setFilterRating(filterRating === rating ? null : rating);
   };
 
   const formatModalDate = (dateStr) => {
@@ -398,41 +560,70 @@ const RatingHistoryModal = ({ item, timeframe, onClose }) => {
     }
   };
 
+  const formatModalTime = (dateStr) => {
+    if (!dateStr) return "";
+    try {
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return dateStr;
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } catch {
+      return dateStr;
+    }
+  };
+
   return (
-    <div className="fixed inset-0 z-[2000] flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-[#0B102A]/40 backdrop-blur-md transition-opacity" onClick={onClose}></div>
-      <div className="relative bg-white w-full max-w-[600px] rounded-3xl shadow-2xl overflow-hidden">
+    <div className="fixed inset-0 z-[2000] flex items-center justify-center p-2 sm:p-4">
+      <div className="absolute inset-0 bg-[#0B102A]/40 backdrop-blur-sm transition-opacity" onClick={onClose}></div>
+      <div className="relative bg-white w-full max-w-[600px] rounded-2xl sm:rounded-3xl shadow-2xl overflow-hidden max-h-[95vh] sm:max-h-[90vh] overflow-y-auto">
 
         {/* Header Section - Dark Theme */}
-        <div className="bg-[#0B102A] px-6 py-5">
+        <div className="bg-[#0B102A] px-3 sm:px-6 py-3 sm:py-5">
           <div className="flex justify-between items-center mb-2">
-            <div className="flex items-center gap-3">
-              <div className="w-14 h-14 bg-gray-700 rounded-lg flex items-center justify-center">
-                <span className="text-white text-xl font-bold">{item.displaySymbol?.[0] || "?"}</span>
+            <div className="flex items-center gap-2 sm:gap-3 flex-1 min-w-0">
+              <div className="w-10 h-10 sm:w-14 sm:h-14 flex items-center justify-center shrink-0 overflow-hidden">
+                {!logoError ? (
+                  <img
+                    src={(() => {
+                      const companyName = item.underlyingName || item.displayName || item.description || '';
+                      const slug = getLogoSlug(companyName);
+                      const url = `https://s3-symbol-logo.tradingview.com/${slug}.svg`;
+                      console.log('📸 Company:', companyName);
+                      console.log('📸 Logo Slug:', slug);
+                      console.log('📸 Logo URL:', url);
+                      return url;
+                    })()}
+                    alt={item.displaySymbol}
+                    className="w-full h-full object-contain rounded-xl"
+                    onError={() => {
+                      console.log('❌ Logo failed to load for:', item.displaySymbol);
+                      setLogoError(true);
+                    }}
+                    onLoad={() => console.log('✅ Logo loaded successfully for:', item.displaySymbol)}
+                  />
+                ) : (
+                  <span className="text-white text-base sm:text-xl font-bold">{item.displaySymbol?.[0] || "?"}</span>
+                )}
               </div>
-              <div>
-                <h3 className="text-[26px] font-bold text-white">{item.displaySymbol}</h3>
-                <p className="text-sm text-gray-400 mt-0">{item.displayName}</p>
+              <div className="flex-1 min-w-0">
+                <h3 className="text-lg sm:text-[26px] font-bold text-white truncate">{item.displaySymbol}</h3>
+                <p className="text-[11px] sm:text-sm text-gray-400 mt-0 truncate">{item.displayName}</p>
               </div>
             </div>
-            <div className="text-right">
-              <div className="text-[22px] font-bold text-white">${formatPrice(currentPrice)}</div>
-              <div className={`text-sm font-medium mt-0 ${currentChangePercent >= 0 ? "text-[#27AE60]" : "text-[#EB5757]"}`}>
+            <div className="text-right shrink-0 ml-2">
+              <div className="text-base sm:text-[22px] font-bold text-white">${formatPrice(currentPrice)}</div>
+              <div className={`text-[10px] sm:text-sm font-medium mt-0 ${currentChangePercent >= 0 ? "text-[#27AE60]" : "text-[#EB5757]"}`}>
                 {currentChange >= 0 ? "+" : ""}{formatPrice(currentChange)} ({currentChangePercent >= 0 ? "+" : ""}{formatPct(currentChangePercent)}%)
               </div>
             </div>
           </div>
 
-          <div className="flex justify-between items-center mb-1 mt-0">
-            <p className="text-xs text-gray-400">Filter Accuracy</p>
-            <p className="text-xs text-gray-400">Auto-selected : Current Signal</p>
-          </div>
+
 
           {/* Filter Accuracy Section */}
           <div>
 
             {/* Rating Buttons */}
-            <div className="flex gap-2 mb-2">
+            <div className="flex gap-1.5 sm:gap-2 mb-2 overflow-x-auto pb-1">
               {["Strong Sell", "Sell", "Buy", "Strong Buy"].map((rating) => {
                 const isSelected = filterRating === rating;
                 const isSell = rating === "Sell" || rating === "Strong Sell";
@@ -453,7 +644,7 @@ const RatingHistoryModal = ({ item, timeframe, onClose }) => {
                   <button
                     key={rating}
                     onClick={() => handleRatingFilterClick(rating)}
-                    className={`px-4 py-2 rounded-lg text-xs font-bold border-2 transition-all ${selectedClasses}`}
+                    className={`px-2 sm:px-4 py-1.5 sm:py-2 rounded-lg text-[10px] sm:text-xs font-bold border-2 transition-all whitespace-nowrap ${selectedClasses}`}
                   >
                     {rating}
                   </button>
@@ -462,23 +653,23 @@ const RatingHistoryModal = ({ item, timeframe, onClose }) => {
             </div>
 
             {/* Accuracy Metrics */}
-            <div className="border border-gray-600 rounded-lg p-3 bg-gray-800/50">
-              <div className="flex items-center gap-8">
-                <div className="flex items-center gap-4">
-                  <div className="text-center px-4">
-                    <div className="text-3xl font-bold text-[#EB5757]">{Math.round(accuracy.accuracy)}%</div>
-                    <div className="text-xs text-white mt-1">accuracy</div>
+            <div className="border border-gray-600 rounded-lg p-2 sm:p-3 bg-gray-800/50">
+              <div className="flex items-center gap-4 sm:gap-8">
+                <div className="flex items-center gap-2 sm:gap-4">
+                  <div className="text-center px-2 sm:px-4">
+                    <div className="text-2xl sm:text-3xl font-bold text-[#EB5757]">{Math.round(accuracy.accuracy)}%</div>
+                    <div className="text-[10px] sm:text-xs text-white mt-0.5 sm:mt-1">accuracy</div>
                   </div>
-                  <div className="h-12 w-px bg-gray-500"></div>
+                  <div className="h-8 sm:h-12 w-px bg-gray-500"></div>
                 </div>
-                <div className="flex flex-col gap-2 text-sm">
-                  <div className="flex items-center gap-2">
-                    <div className="w-3 h-3 rounded-full bg-[#27AE60]"></div>
-                    <span className="text-white font-medium">Correct : {accuracy.correct}</span>
+                <div className="flex flex-col gap-1.5 sm:gap-2 text-xs sm:text-sm">
+                  <div className="flex items-center gap-1.5 sm:gap-2">
+                    <div className="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-[#27AE60]"></div>
+                    <span className="text-white font-medium text-[11px] sm:text-sm">Correct : {accuracy.correct}</span>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <div className="w-3 h-3 rounded-full bg-[#EB5757]"></div>
-                    <span className="text-white font-medium">Incorrect : {accuracy.incorrect}</span>
+                  <div className="flex items-center gap-1.5 sm:gap-2">
+                    <div className="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-[#EB5757]"></div>
+                    <span className="text-white font-medium text-[11px] sm:text-sm">Incorrect : {accuracy.incorrect}</span>
                   </div>
                 </div>
               </div>
@@ -487,17 +678,32 @@ const RatingHistoryModal = ({ item, timeframe, onClose }) => {
         </div>
 
         {/* Timeline Section - Light Theme */}
-        <div className="bg-white p-6 max-h-[60vh] overflow-y-auto">
+        <div className="bg-white p-3 sm:p-6 max-h-[50vh] sm:max-h-[60vh] overflow-y-auto">
+          <div className="sm:mb-7 mb-4 flex items-center justify-center">
+            <div className="flex items-center gap-3 w-full sm:w-auto">
+              <button
+                onClick={() => setMode('intraday')}
+                className={`w-1/2 sm:w-[263px] h-9 sm:h-[47px] rounded-lg text-[10px] sm:text-sm font-semibold px-0 py-0 sm:px-4 sm:py-0 shadow-md transition ${mode === 'intraday' ? 'bg-[#0B102A] text-white' : 'bg-white text-gray-700 border border-gray-200'}`}
+              >
+                Intraday (time)
+              </button>
+              <button
+                onClick={() => setMode('daily')}
+                className={`w-1/2 sm:w-[263px] h-9 sm:h-[47px] rounded-lg text-[10px] sm:text-sm font-semibold px-0 py-0 sm:px-4 sm:py-0 shadow-md transition ${mode === 'daily' ? 'bg-[#0B102A] text-white' : 'bg-white text-gray-700 border border-gray-200'}`}
+              >
+                Daily (Open-to-Open)
+              </button>
+            </div>
+          </div>
           {loading ? (
-            <div className="py-20 text-center">
-              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#0B102A] mx-auto"></div>
-              <p className="text-gray-400 mt-4">Loading history...</p>
+            <div className="py-12 sm:py-20 text-center">
+              <div className="animate-spin rounded-full h-10 w-10 sm:h-12 sm:w-12 border-b-2 border-[#0B102A] mx-auto"></div>
+              <p className="text-gray-400 mt-3 sm:mt-4 text-sm">Loading history...</p>
             </div>
           ) : historyData.length > 0 ? (
             <div className="relative">
-              <div className="absolute left-[15px] top-0 w-[2px] bg-gray-200" style={{ height: `${(historyData.length - 1) * 200 + 18}px` }}></div>
-
-              <div className="space-y-6">
+              <div className="space-y-4 sm:space-y-6 relative">
+                <div className="absolute left-[14px] sm:left-[16px] w-[2px] bg-gray-200" style={{ top: '20px', bottom: '150px' }}></div>
                 {historyData.map((log, idx) => {
                   const scorePrev = RATING_SCORE[(log.prev || "").toLowerCase()] || 0;
                   const scoreCurr = RATING_SCORE[(log.rating || "").toLowerCase()] || 0;
@@ -508,54 +714,65 @@ const RatingHistoryModal = ({ item, timeframe, onClose }) => {
                   if (isPositive) dotColor = "bg-[#27AE60]";
                   else if (isNegative) dotColor = "bg-[#EB5757]";
 
-                  const changePct = log.change_pct || 0;
+                  const changePct = (log.change_pct_open ?? log.change_pct ?? log.changePct ?? log.change ?? 0);
 
                   return (
-                    <div key={idx} className="relative pl-12">
+                    <div key={idx} className="relative pl-9 sm:pl-12">
                       {/* Timeline Dot and Date */}
-                      <div className="flex items-center mb-2">
-                        <div className={`absolute left-[16px] w-9 h-9 rounded-full ${dotColor} flex items-center justify-center`} style={{ transform: 'translateX(-50%)' }}>
-                          <div className="w-5 h-5 rounded-full bg-white"></div>
+                      <div className="flex items-center mb-1.5 sm:mb-2">
+                        <div className={`absolute left-[14px] sm:left-[16px] w-7 h-7 sm:w-9 sm:h-9 rounded-full ${dotColor} flex items-center justify-center`} style={{ transform: 'translateX(-50%)' }}>
+                          <div className="w-4 h-4 sm:w-5 sm:h-5 rounded-full bg-white"></div>
                         </div>
-                        <span className="text-sm font-semibold text-gray-900">{formatModalDate(log.timestamp || log.date)}</span>
+                        <span className="text-xs sm:text-sm font-semibold text-gray-900">{formatModalDate(log.timestamp || log.date)}</span>
                       </div>
 
                       {/* Content Card */}
-                      <div className="bg-white rounded-xl p-4 shadow-lg">
+                      <div className="bg-white rounded-lg sm:rounded-xl p-3 sm:p-4 shadow-lg">
                         {/* Signal Change */}
-                        <div className="mb-3 flex items-center gap-2">
-                          <div className="px-2 py-1 bg-gray-100 rounded text-xs text-gray-600 font-medium">Signal</div>
-                          <span className={`text-sm font-bold ${getRatingTextColor(log.prev)}`}>{log.prev || "Unknown"}</span>
-                          <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <div className="mb-2 sm:mb-3 flex items-center gap-1.5 sm:gap-2 flex-wrap">
+                          <div className="px-1.5 sm:px-2 py-0.5 sm:py-1 bg-gray-100 rounded text-[10px] sm:text-xs text-gray-600 font-medium">Signal</div>
+                          <span className={`text-xs sm:text-sm font-bold ${getRatingTextColor(log.prev)}`}>{log.prev ?? log.rating ?? "Unknown"}</span>
+                          <svg className="w-3 h-3 sm:w-4 sm:h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
                           </svg>
-                          <span className={`text-sm font-bold ${getRatingTextColor(log.rating)}`}>{log.rating}</span>
+                          <span className={`text-xs sm:text-sm font-bold ${getRatingTextColor(log.rating)}`}>{log.rating}</span>
                         </div>
 
                         {/* Horizontal Divider */}
-                        <div className="border-b border-gray-300 mb-2"></div>
+                        <div className="border-b border-gray-300 mb-1.5 sm:mb-2"></div>
 
                         {/* Price Info */}
-                        <div className="flex items-start justify-between">
+                        <div className="flex items-start justify-between text-xs sm:text-base">
                           <div className="flex flex-col">
-                            <div className="text-sm text-gray-500 mb-0">Prev Close</div>
-                            <div className="text-lg font-semibold text-gray-900 font-mono">${formatPrice(log.prev_close || 0)}</div>
+                            <div className="text-[10px] sm:text-sm text-gray-500 mb-0">{mode === 'intraday' ? 'Entry' : 'Open Price'}</div>
+                            <div className="text-[10px] sm:text-xs text-gray-700 mb-1">
+                              {mode === 'intraday' ? (
+                                <>
+                                  {formatModalDate(log.prev_timestamp ?? historyData[idx + 1]?.timestamp ?? historyData[idx + 1]?.date ?? null)}{' '}
+                                  {formatModalTime(log.prev_timestamp ?? historyData[idx + 1]?.timestamp ?? historyData[idx + 1]?.date ?? null)}
+                                </>
+                              ) : (
+                                formatModalDate(historyData[idx + 1]?.timestamp ?? historyData[idx + 1]?.date ?? null)
+                              )}
+                            </div>
+                            <div className="text-sm sm:text-lg font-semibold text-gray-900 font-mono">${formatPrice(log.prev_open ?? log.prev_close ?? 0)}</div>
                           </div>
-                          <div className="flex items-center -space-x-3 text-gray-500 pt-5">
-                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <div className="flex items-center -space-x-2 sm:-space-x-3 text-gray-500 pt-3 sm:pt-5">
+                            <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                             </svg>
-                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                             </svg>
-                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                             </svg>
                           </div>
                           <div className="text-right flex flex-col">
-                            <div className="text-sm text-gray-500 mb-0">Result</div>
-                            <div className="text-lg font-semibold text-gray-900 font-mono">${formatPrice(log.result_price || 0)}</div>
-                            <div className={`text-sm font-semibold mt-0 font-mono ${changePct >= 0 ? "text-[#27AE60]" : "text-[#EB5757]"}`}>
+                            <div className="text-[10px] sm:text-sm text-gray-500 mb-0">{mode === 'intraday' ? 'Exit' : 'Open Price'}</div>
+                            <div className="text-[10px] sm:text-xs text-gray-700 mb-1">{mode === 'intraday' ? formatModalTime(log.timestamp ?? log.date) : formatModalDate(log.timestamp ?? log.date)}</div>
+                            <div className="text-sm sm:text-lg font-semibold text-gray-900 font-mono">${formatPrice(log.result_open ?? log.result_price ?? 0)}</div>
+                            <div className={`text-xs sm:text-sm font-semibold mt-0 font-mono ${changePct >= 0 ? "text-[#27AE60]" : "text-[#EB5757]"}`}>
                               ({changePct >= 0 ? "+" : ""}{formatPct(changePct)}%)
                             </div>
                           </div>
@@ -567,22 +784,22 @@ const RatingHistoryModal = ({ item, timeframe, onClose }) => {
               </div>
             </div>
           ) : (
-            <div className="py-20 text-center">
-              <div className="bg-blue-50 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6">
-                <svg className="w-10 h-10 text-blue-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div className="py-12 sm:py-20 text-center">
+              <div className="bg-blue-50 w-16 h-16 sm:w-20 sm:h-20 rounded-full flex items-center justify-center mx-auto mb-4 sm:mb-6">
+                <svg className="w-8 h-8 sm:w-10 sm:h-10 text-blue-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
               </div>
-              <h4 className="text-gray-900 font-bold text-lg">No signal changes yet</h4>
-              <p className="text-gray-400 text-sm mt-2">We'll notify you as soon as the technical trend shifts.</p>
+              <h4 className="text-gray-900 font-bold text-base sm:text-lg">No signal changes yet</h4>
+              <p className="text-gray-400 text-xs sm:text-sm mt-2">We'll notify you as soon as the technical trend shifts.</p>
             </div>
           )}
 
           {/* Close Button */}
-          <div className="mt-6 flex justify-end">
+          <div className="mt-4 sm:mt-6 flex justify-end">
             <button
               onClick={onClose}
-              className="px-6 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg text-sm font-medium transition-colors"
+              className="px-4 sm:px-6 py-1.5 sm:py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg text-xs sm:text-sm font-medium transition-colors"
             >
               close
             </button>
@@ -613,27 +830,23 @@ export default function Suggestion() {
   const [tooltipPosition, setTooltipPosition] = useState({ x: 0, y: 0 });
   const tableRef = useRef(null);
 
-  // 📊 Track page view on mount
-  useEffect(() => {
-    trackPageView('suggestion');
-  }, []);
-
-  // 📊 Track search with debounce
-  useEffect(() => {
-    const trimmedSearch = searchTerm.trim();
-    if (trimmedSearch.length >= 2) {
-      const timeout = setTimeout(() => {
-        trackSearch(trimmedSearch);
-      }, 500);
-      return () => clearTimeout(timeout);
-    }
-  }, [searchTerm]);
-
   useEffect(() => {
     const handler = (e) => { if (countryDropdownRef.current && !countryDropdownRef.current.contains(e.target)) setShowCountryMenu(false); };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, []);
+
+
+
+  // Track search with debounce
+  useEffect(() => {
+    const t = setTimeout(() => {
+      if (searchTerm.trim().length >= 2) {
+        trackSearch(searchTerm.trim());
+      }
+    }, 500);
+    return () => clearTimeout(t);
+  }, [searchTerm]);
 
   useEffect(() => {
     let isMounted = true;
@@ -775,18 +988,11 @@ export default function Suggestion() {
 
   const handleSort = (key) => {
     setSortConfig((prev) => {
-      let newConfig;
       if (prev.key === key) {
-        if (prev.direction === "asc") newConfig = { key, direction: "desc" };
-        else newConfig = { key: null, direction: "asc" };
-      } else {
-        newConfig = { key, direction: "asc" };
+        if (prev.direction === "asc") return { key, direction: "desc" };
+        return { key: null, direction: "asc" };
       }
-      // 📊 Track sort action
-      if (newConfig.key) {
-        trackClick('sort', { column: newConfig.key, direction: newConfig.direction });
-      }
-      return newConfig;
+      return { key, direction: "asc" };
     });
   };
 
@@ -871,8 +1077,8 @@ export default function Suggestion() {
     const upColor = active && direction === "asc" ? "#FFFFFF" : "rgba(255, 255, 255, 0.4)";
     const downColor = active && direction === "desc" ? "#FFFFFF" : "rgba(255, 255, 255, 0.4)";
     return (
-      <div className="flex items-center ml-0 flex-shrink-0">
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" className="w-[12px] h-[12px] transition-all duration-200">
+      <div className="flex items-center ml-0 shrink-0">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" className="w-[10px] sm:w-[12px] h-[10px] sm:h-[12px] transition-all duration-200">
           <path d="M14 2.256V30c-2.209 0-4-1.791-4-4V13H4.714c-.633 0-.949-.765-.502-1.212l9.607-9.607C13.886 2.114 14 2.162 14 2.256z" fill={upColor} />
           <path d="M27.788 20.212l-9.6 9.6C18.118 29.882 18 29.832 18 29.734V2c2.209 0 4 1.791 4 4v13h5.286C27.918 19 28.235 19.765 27.788 20.212z" fill={downColor} />
         </svg>
@@ -883,10 +1089,9 @@ export default function Suggestion() {
   const handleRatingFilterClick = (rating) => {
     if (filterRating === rating) {
       setFilterRating(null);
-      trackFilter('rating_filter', 'clear');
     } else {
       setFilterRating(rating);
-      trackFilter('rating_filter', rating);
+      trackFilter('rating', rating);
     }
   };
   const RATINGS_OPTIONS = ["Strong Buy", "Buy", "Sell", "Strong Sell"];
@@ -896,35 +1101,37 @@ export default function Suggestion() {
   return (
     <div className="h-screen w-full bg-[#f5f5f5] overflow-hidden flex justify-center">
       <div className="w-full max-w-[1248px] flex flex-col h-full">
-        <div className="pt-10 pb-0 px-0 flex-shrink-0" style={{ overflow: 'visible', zIndex: 100 }}>
-          <div className="w-[1040px] max-w-full mx-auto scale-[1.2] origin-top" style={{ overflow: 'visible' }}>
-            <h1 className="text-3xl font-bold mb-3 text-black">Suggestion</h1>
-            <p className="text-[#6B6B6B] mb-8 text-sm md:text-base">Technical Ratings (Underlying Assets)</p>
+        <div className="pt-6 md:pt-10 pb-0 px-4 md:px-0 shrink-0" style={{ overflow: 'visible', zIndex: 100 }}>
+          <div className="w-full md:w-[1040px] max-w-full mx-auto md:scale-[1.2] md:origin-top" style={{ overflow: 'visible' }}>
+            <h1 className="text-2xl md:text-3xl font-bold mb-2 md:mb-3 text-black">Suggestion</h1>
+            <p className="text-[#6B6B6B] mb-6 md:mb-8 text-sm md:text-base">Technical Ratings (Underlying Assets)</p>
 
             {/* Filters Row */}
-            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-2">
-              <div className="flex flex-col sm:flex-row items-center gap-3">
-                <div className="flex bg-white p-1 rounded-xl border border-gray-200 shadow-sm h-[37.33px]">
-                  <button onClick={() => { setTimeframe("1D"); trackFilter('timeframe', '1D'); }} className={`px-3 py-1 rounded-lg text-sm font-medium transition-all ${timeframe === "1D" ? "bg-[#0B102A] text-white shadow-md" : "text-gray-800 hover:bg-gray-50"}`}>1 Day</button>
-                  <button onClick={() => { setTimeframe("1W"); trackFilter('timeframe', '1W'); }} className={`px-3 py-1 rounded-lg text-sm font-medium transition-all ${timeframe === "1W" ? "bg-[#0B102A] text-white shadow-md" : "text-gray-800 hover:bg-gray-50"}`}>1 Week</button>
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 md:gap-4 mb-2">
+              <div className="flex flex-col sm:flex-row sm:items-center gap-3 w-full md:w-auto">
+                <div className="flex bg-white p-1 rounded-xl border border-gray-200 shadow-sm h-[37.33px] w-full sm:w-auto">
+                  <button onClick={() => { setTimeframe("1D"); trackFilter('timeframe', '1D'); }} className={`flex-1 sm:flex-none px-3 py-1 rounded-lg text-xs sm:text-sm font-medium transition-all h-full ${timeframe === "1D" ? "bg-[#0B102A] text-white shadow-md" : "text-gray-800 hover:bg-gray-50"}`}>1 Day</button>
+                  <button onClick={() => { setTimeframe("1W"); trackFilter('timeframe', '1W'); }} className={`flex-1 sm:flex-none px-3 py-1 rounded-lg text-xs sm:text-sm font-medium transition-all h-full ${timeframe === "1W" ? "bg-[#0B102A] text-white shadow-md" : "text-gray-800 hover:bg-gray-50"}`}>1 Week</button>
                 </div>
-                <div className="relative z-[200]" ref={countryDropdownRef} style={{ isolation: 'isolate', overflow: 'visible' }}>
-                  <button type="button" onClick={() => setShowCountryMenu((prev) => !prev)} className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 min-w-[180px] h-[37.33px]">
-                    <span>{selectedCountryLabel}</span>
-                    <svg className={`h-4 w-4 transition-transform text-gray-500 ${showCountryMenu ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" /></svg>
-                  </button>
-                  {showCountryMenu && (
-                    <div className="absolute left-0 top-full z-[9999] mt-2 w-56 max-h-72 overflow-auto rounded-2xl border border-gray-200 bg-white shadow-[0_10px_30px_rgba(15,23,42,0.15)] py-1" style={{ transform: 'translateZ(0)' }}>
-                      {countryOptions.map((opt) => (
-                        <button key={opt.code} onClick={() => { setCountry(opt.code); setShowCountryMenu(false); trackFilter('country', opt.label); }} className={`flex w-full items-center justify-between px-4 py-1.5 text-left text-sm transition-colors ${country === opt.code ? "bg-[#EEF2FF] text-[#0B102A] font-semibold" : "text-gray-700 hover:bg-gray-50"}`}>
-                          <span>{opt.label}</span>
-                          {country === opt.code && <i className="bi bi-check-lg text-[#0B102A] text-base"></i>}
-                        </button>
-                      ))}
-                    </div>
-                  )}
+                <div className="flex items-center gap-2 w-full sm:w-auto">
+                  <div className="relative z-200 flex-1 sm:flex-initial" ref={countryDropdownRef} style={{ isolation: 'isolate', overflow: 'visible' }}>
+                    <button type="button" onClick={() => setShowCountryMenu((prev) => !prev)} className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 bg-white px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 w-full sm:min-w-[180px] h-[37.33px]">
+                      <span className="truncate">{selectedCountryLabel}</span>
+                      <svg className={`h-4 w-4 shrink-0 transition-transform text-gray-500 ${showCountryMenu ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" /></svg>
+                    </button>
+                    {showCountryMenu && (
+                      <div className="absolute left-0 top-full z-[9999] mt-2 w-full sm:w-56 max-h-72 overflow-auto rounded-2xl border border-gray-200 bg-white shadow-[0_10px_30px_rgba(15,23,42,0.15)] py-1" style={{ transform: 'translateZ(0)' }}>
+                        {countryOptions.map((opt) => (
+                          <button key={opt.code} onClick={() => { setCountry(opt.code); setShowCountryMenu(false); trackFilter('country', opt.label); }} className={`flex w-full items-center justify-between px-4 py-1.5 text-left text-xs sm:text-sm transition-colors ${country === opt.code ? "bg-[#EEF2FF] text-[#0B102A] font-semibold" : "text-gray-700 hover:bg-gray-50"}`}>
+                            <span>{opt.label}</span>
+                            {country === opt.code && <i className="bi bi-check-lg text-[#0B102A] text-base"></i>}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <FilterDropdown label="Rating change" value={changeFilter} options={CHANGE_OPTIONS} onSelect={(val) => { setChangeFilter(val); trackFilter('change', val); }} />
                 </div>
-                <FilterDropdown label="Rating change" value={changeFilter} options={CHANGE_OPTIONS} onSelect={(val) => { setChangeFilter(val); trackFilter('rating_change', val); }} />
               </div>
               <div className="relative w-full md:w-auto">
                 <input type="text" placeholder="Search DR..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="bg-white pl-4 pr-10 py-2 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#0B102A] w-full md:w-64 text-sm shadow-sm h-[37.33px]" />
@@ -933,13 +1140,13 @@ export default function Suggestion() {
             </div>
 
             {/* Rating Select Row */}
-            <div className="flex flex-col md:flex-row md:items-end md:justify-between mb-2 gap-2">
-              <div className="overflow-x-auto pb-1">
-                <div className="inline-flex items-center gap-3 bg-white rounded-xl px-2 py-1.5 shadow-sm border border-gray-100">
+            <div className="flex flex-col md:flex-row md:items-end md:justify-between mb-2 gap-0 md:gap-2">
+              <div className="overflow-x-auto pb-1 w-full md:w-auto">
+                <div className="flex md:inline-flex items-center gap-3 bg-white rounded-xl px-2 py-1.5 shadow-sm border border-gray-100 w-full md:w-auto h-[37.33px]">
                   <span className="text-sm font-semibold text-gray-700 whitespace-nowrap">Ratings</span>
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 flex-1 md:flex-initial h-full">
                     {RATINGS_OPTIONS.map((rating) => (
-                      <button key={rating} onClick={() => handleRatingFilterClick(rating)} className={`px-2 py-1 rounded-lg text-xs font-bold transition-all ${getRatingStyle(rating)} ${filterRating === rating ? "ring-2 ring-offset-1 ring-black/10 shadow-md scale-105" : "opacity-60 hover:opacity-100"}`}>{rating}</button>
+                      <button key={rating} onClick={() => handleRatingFilterClick(rating)} className={`px-2 py-1 rounded-lg text-xs font-bold transition-all flex-1 md:flex-initial h-full whitespace-nowrap ${getRatingStyle(rating)} ${filterRating === rating ? "ring-2 ring-offset-1 ring-black/10 shadow-md scale-105" : "opacity-60 hover:opacity-100"}`}>{rating}</button>
                     ))}
                   </div>
                 </div>
@@ -954,13 +1161,81 @@ export default function Suggestion() {
           </div>
         </div>
 
-        {/* Main Table - Scrollable */}
-        <div className="flex-1 overflow-hidden pb-10 mt-9">
-          <div className="h-full bg-white rounded-xl shadow border border-gray-100 overflow-auto">
-            <table className="w-full text-left border-collapse text-[14.4px]">
+        {/* Main Content - Scrollable */}
+        <div className="flex-1 overflow-hidden pb-6 md:pb-10 mt-0 md:mt-9 px-4 md:px-0">
+          <div className="h-full bg-white rounded-xl shadow border border-gray-100 overflow-auto hide-scrollbar">
+
+            {/* Mobile Card View */}
+            <div className="block lg:hidden p-3">
+              <div className="space-y-3">
+                {processedData.map((row, idx) => (
+                  <div
+                    key={idx}
+                    onClick={() => setSelectedItem(row)}
+                    className="bg-white rounded-xl shadow-sm border border-gray-200 p-3 cursor-pointer hover:shadow-md transition-shadow"
+                  >
+                    {/* Header */}
+                    <div className="flex items-start justify-between mb-2">
+                      <div className="flex-1 min-w-0 mr-2">
+                        <div className="font-bold text-[#2F80ED] text-sm truncate">{row.displaySymbol}</div>
+                        <div className="text-xs text-gray-600 truncate">{row.displayName}</div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className="flex items-baseline justify-end gap-0.5">
+                          <span className="font-medium text-gray-800 text-sm font-mono">{formatPrice(row.sortPrice)}</span>
+                          <span className="text-xs text-gray-600 uppercase">{row.currency}</span>
+                        </div>
+                        <div className={`text-xs font-medium ${row.displayPct > 0 ? "text-[#27AE60]" : row.displayPct < 0 ? "text-[#EB5757]" : "text-gray-800"}`}>
+                          {row.hasData ? <span className="font-mono">{row.displayPct > 0 ? "+" : ""}{formatPct(row.displayPct)}%</span> : "-"}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Rating */}
+                    <div className="mb-2 py-2 border-y border-gray-100">
+                      <div className="flex items-center justify-between mb-1">
+                        <div className="text-[10px] text-gray-500">Technical Rating</div>
+                        <div className="ml-2">
+                          <RatingChangeCell prev={row.prevTechnicalRating} current={row.technicalRating} showChange={shouldShowChange} />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Details Grid */}
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div>
+                        <div className="text-gray-500 text-[10px]">Last Update</div>
+                        <div className="text-gray-800 font-medium">{row.displayTime}</div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-gray-500 text-[10px]">Change</div>
+                        <div className={`font-medium ${row.displayChange > 0 ? "text-[#27AE60]" : row.displayChange < 0 ? "text-[#EB5757]" : "text-gray-800"}`}>
+                          {row.hasData ? (row.displayChange > 0 ? `+${formatPrice(row.displayChange)}` : formatPrice(row.displayChange)) : "-"}
+                        </div>
+                      </div>
+                      {row.mostPopularDR && (
+                        <div>
+                          <div className="text-gray-500 text-[10px]">Popular DR</div>
+                          <div className="font-bold text-[#50B728] truncate">{row.mostPopularDR.symbol}</div>
+                        </div>
+                      )}
+                      {row.highSensitivityDR && (
+                        <div className="text-right">
+                          <div className="text-gray-500 text-[10px]">Sensitivity DR</div>
+                          <div className="font-bold text-[#0007DE] truncate">{row.highSensitivityDR.symbol}</div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Desktop Table View */}
+            <table className="hidden lg:table w-full text-left border-collapse text-[14.4px]">
               <thead className="bg-[#0B102A] text-white font-semibold sticky top-0" style={{ zIndex: 50 }}>
                 <tr className="h-[50px]">
-                  {[{ key: 'symbol', label: 'Symbol', align: 'left' }, { key: 'rating', label: 'Technical Rating', align: 'center', width: '190px' }, { key: 'time', label: 'Last Update', align: 'center' }, { key: 'popularDR', label: 'Most Popular DR', align: 'center' }, { key: 'sensitivityDR', label: 'High Sensitivity DR', align: 'center' }, { key: 'price', label: 'Price', align: 'right' }, { key: 'pct', label: '%Change', align: 'right' }, { key: 'chg', label: 'Change', align: 'right' }, { key: 'high', label: 'High', align: 'right' }, { key: 'low', label: 'Low', align: 'right' }].map(h => (
+                  {[{ key: 'symbol', label: 'Symbol', align: 'left' }, { key: 'rating', label: 'Technical Rating', align: 'center', width: '240px' }, { key: 'time', label: 'Last Update', align: 'center' }, { key: 'popularDR', label: 'Most Popular DR', align: 'center' }, { key: 'sensitivityDR', label: 'High Sensitivity DR', align: 'center' }, { key: 'price', label: 'Price', align: 'right' }, { key: 'pct', label: '%Change', align: 'right' }, { key: 'chg', label: 'Change', align: 'right' }, { key: 'high', label: 'High', align: 'right' }, { key: 'low', label: 'Low', align: 'right' }].map(h => (
                     <th
                       key={h.key}
                       className={`px-4 cursor-pointer text-${h.align} whitespace-nowrap relative`}
@@ -981,7 +1256,7 @@ export default function Suggestion() {
                 {processedData.map((row, idx) => (
                   <tr
                     key={idx}
-                    onClick={() => { setSelectedItem(row); trackStockView(row.displaySymbol, row.displayName); trackClick('rating_history_modal_open', { symbol: row.displaySymbol }); }}
+                    onClick={() => setSelectedItem(row)}
                     className={`transition-colors ${idx % 2 === 0 ? "bg-white" : "bg-[#F7F8FA]"} hover:bg-gray-50 cursor-pointer relative`}
                     style={{ height: "52px" }}
                   >

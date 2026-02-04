@@ -1,3 +1,4 @@
+import os
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
@@ -8,10 +9,12 @@ import re
 import os
 import json
 from contextlib import suppress
+import uvicorn
 
 app = FastAPI(title="DR Calculation API (Cache + Background Refresh + Symbol Map)")
 
 IDEATRADE_BASE = "https://api.ideatrade1.com"
+DR_LIST_FILE = os.path.join(os.path.dirname(__file__), "dr_list.json")
 TV_SCAN_URL = "https://scanner.tradingview.com/global/scan"
 
 # -----------------------------
@@ -33,6 +36,9 @@ TV_BACKOFF_BASE_SEC = 1.0
 TV_COOLDOWN_ON_429_SEC = 180          # โดน 429 → พักทั้งระบบ 3 นาที
 TV_CONCURRENCY = 1                    # สำคัญสุด: ยิงทีละ 1 กันโดนลิมิต
 _tv_sem = asyncio.Semaphore(TV_CONCURRENCY)
+# Timestamp (epoch seconds) until which TradingView requests are blocked (set on 429)
+# Initialize to 0 so checks like `_now() < _tv_block_until` are safe.
+_tv_block_until: float = 0.0
 
 FX_REFRESH_MULT = 10                  # ✅ FX รีช้ากว่า underlying 10 เท่า = 10 นาที
 
@@ -208,10 +214,10 @@ async def load_cache_from_file():
             _prune_expired_inplace()
             _prune_to_limit_inplace()
 
-        print(f"✅ Loaded cache file: {CACHE_FILE} items={len(_price_cache)}")
+        print(f"[INFO] Loaded cache file: {CACHE_FILE} items={len(_price_cache)}")
 
     except Exception as e:
-        print("⚠️ Cache load failed:", e)
+        print("[WARN] Cache load failed:", e)
 
 def _write_cache_file(snapshot: dict):
     tmp = CACHE_FILE + ".tmp"
@@ -669,29 +675,42 @@ async def refresher_loop():
 
         await asyncio.sleep(REFRESH_INTERVAL_SECONDS)
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    global _tv_client, _idea_client
+# ✅ Global task reference
+_refresher_task: asyncio.Task | None = None
+
+async def init_service():
+    global _tv_client, _idea_client, _refresher_task
+    print("[CalcAPI] Initializing services...")
     _tv_client = httpx.AsyncClient(timeout=10)
     _idea_client = httpx.AsyncClient(timeout=20)
-
-    # ✅ โหลด cache จากไฟล์
+    
     await load_cache_from_file()
+    _refresher_task = asyncio.create_task(refresher_loop())
+    print("[CalcAPI] Services ready.")
 
-    task = asyncio.create_task(refresher_loop())
+async def shutdown_service():
+    global _tv_client, _idea_client, _refresher_task
+    print("[CalcAPI] Shutting down services...")
+    
+    if _refresher_task:
+        _refresher_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await _refresher_task
+    
+    if _cache_dirty:
+        await save_cache_to_file()
+        
+    if _tv_client: await _tv_client.aclose()
+    if _idea_client: await _idea_client.aclose()
+    print("[CalcAPI] Shutdown complete.")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await init_service()
     try:
         yield
     finally:
-        task.cancel()
-        with suppress(asyncio.CancelledError):
-            await task
-
-        # ✅ เซฟก่อนปิด
-        if _cache_dirty:
-            await save_cache_to_file()
-
-        await _tv_client.aclose()
-        await _idea_client.aclose()
+        await shutdown_service()
 
 app.router.lifespan_context = lifespan
 
@@ -709,9 +728,17 @@ async def calculate_dr(dr_symbol: str):
     try:
         assert _idea_client is not None
 
-        r = await _idea_client.get(f"{IDEATRADE_BASE}/caldr")
-        r.raise_for_status()
-        rows = r.json().get("rows", [])
+
+        rows = []
+        if os.path.exists(DR_LIST_FILE):
+             with open(DR_LIST_FILE, "r", encoding="utf-8") as f:
+                 rows = json.load(f).get("rows", [])
+        else:
+             # Fallback (may fail if offline)
+             r = await _idea_client.get(f"{IDEATRADE_BASE}/caldr")
+             r.raise_for_status()
+             rows = r.json().get("rows", [])
+        
         if not rows:
             raise HTTPException(404, "DR list is empty")
 
@@ -795,3 +822,7 @@ async def calculate_dr(dr_symbol: str):
     except Exception as e:
         print("CALC_CRASH", "dr_symbol=", dr_symbol, "err=", type(e).__name__, str(e))
         raise HTTPException(500, f"Unhandled error: {type(e).__name__}")
+
+
+if __name__ == "__main__":
+    uvicorn.run("dr_calculation_api:app", host="0.0.0.0", port=8002, reload=True)
