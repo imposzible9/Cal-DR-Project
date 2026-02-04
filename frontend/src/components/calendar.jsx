@@ -5,18 +5,18 @@ import { API_CONFIG } from "../config/api";
 
 // ================= CONSTANTS =================
 const countryOptions = [
-  { code: "All", label: "All Markets" },
-  { code: "US", label: "US United States" },
-  { code: "HK", label: "HK Hong Kong" },
-  { code: "DK", label: "DK Denmark" },
-  { code: "NL", label: "NL Netherlands" },
-  { code: "FR", label: "FR France" },
-  { code: "IT", label: "IT Italy" },
-  { code: "JP", label: "JP Japan" },
-  { code: "SG", label: "SG Singapore" },
-  { code: "TW", label: "TW Taiwan" },
-  { code: "CN", label: "CN China" },
-  { code: "VN", label: "VN Vietnam" },
+  { code: "All", label: "All Markets", flag: null },
+  { code: "US", label: "US United States", flag: "us" },
+  { code: "HK", label: "HK Hong Kong", flag: "hk" },
+  { code: "DK", label: "DK Denmark", flag: "dk" },
+  { code: "NL", label: "NL Netherlands", flag: "nl" },
+  { code: "FR", label: "FR France", flag: "fr" },
+  { code: "IT", label: "IT Italy", flag: "it" },
+  { code: "JP", label: "JP Japan", flag: "jp" },
+  { code: "SG", label: "SG Singapore", flag: "sg" },
+  { code: "TW", label: "TW Taiwan", flag: "tw" },
+  { code: "CN", label: "CN China", flag: "cn" },
+  { code: "VN", label: "VN Vietnam", flag: "vn" },
 ];
 
 const formatDate = (v) => {
@@ -47,6 +47,19 @@ const formatPrice = (n) => {
 const getLogoSlug = (name) => {
   if (!name) {
     return '';
+  }
+
+  // Quick special-case overrides for company names that TradingView uses different slugs for
+  // e.g. Spotify should map to spotify-technology, DNOW/Now should map to now
+  try {
+    const nameStr = String(name || '').trim();
+    const upper = nameStr.toUpperCase();
+    if (/SPOTIFY/.test(upper)) return 'spotify-technology';
+    if (/\bDNOW\b/.test(upper)) return 'now';
+    // If company name starts with NOW or contains 'NOW INC' etc., prefer 'now'
+    if (/\bNOW(\b|\s|,)/.test(upper)) return 'now';
+  } catch (e) {
+    // fallback to normal logic below
   }
 
   let cleanName = name;
@@ -275,7 +288,8 @@ export default function Calendar() {
 
   const countryDropdownRef = useRef(null);
 
-  const selectedLabel = useMemo(() => countryOptions.find((c) => c.code === country)?.label || "All Markets", [country]);
+  const selectedCountryOption = useMemo(() => countryOptions.find((c) => c.code === country) || countryOptions[0], [country]);
+  const selectedLabel = selectedCountryOption.label || "All Markets";
 
   // Load seen earnings from localStorage
   useEffect(() => {
@@ -357,6 +371,74 @@ export default function Calendar() {
           }
         }
         if (!controller.signal.aborted) {
+          try {
+            console.log("📥 Earnings API response sample:", responseData);
+            console.log("📥 Flattened earnings sample:", finalData.slice(0, 3));
+          } catch (err) {
+            // ignore logging errors
+          }
+
+          // Enrich earnings with DR-level info (mostPopularDR, highSensitivityDR)
+            try {
+            const drRes = await axios.get(import.meta.env.VITE_DR_LIST_API);
+            const drRows = (drRes.data && drRes.data.rows) ? drRes.data.rows : (drRes.data || []);
+            const drByUnderlying = new Map();
+            (drRows || []).forEach((item) => {
+              const rawSym = (item.symbol || "").toUpperCase().trim();
+              const strippedSym = rawSym.replace(/\d+$/, "");
+              const uName = (item.underlying || (strippedSym || rawSym)).toUpperCase().trim();
+
+              // Also extract numeric code from underlyingName if present, e.g. "NETEASE, INC. (9999)" -> 9999
+              let numericUnderlying = null;
+              try {
+                const underlyingName = (item.underlyingName || "").toString();
+                const m = underlyingName.match(/\((\d{2,6})\)$/);
+                if (m) numericUnderlying = m[1];
+              } catch (e) { /* ignore */ }
+
+              // primary key: uName
+              if (uName) {
+                if (!drByUnderlying.has(uName)) drByUnderlying.set(uName, []);
+                drByUnderlying.get(uName).push(item);
+              }
+
+              // fallback key: numeric underlying code (e.g., 9999)
+              if (numericUnderlying) {
+                const key = numericUnderlying.toUpperCase();
+                if (!drByUnderlying.has(key)) drByUnderlying.set(key, []);
+                drByUnderlying.get(key).push(item);
+              }
+            });
+
+            const drSummary = {};
+            drByUnderlying.forEach((list, u) => {
+              let mostPopularDR = null; let maxVol = -1;
+              let highSensitivityDR = null; let minBid = Infinity;
+              list.forEach(dr => {
+                const vol = Number(dr.totalVolume) || 0;
+                const bid = Number(dr.bidPrice) || 0;
+                if (vol > maxVol) { maxVol = vol; mostPopularDR = { symbol: dr.symbol || "", volume: vol }; }
+                if (bid > 0 && bid < minBid) { minBid = bid; highSensitivityDR = { symbol: dr.symbol || "", bid: bid }; }
+              });
+              if (!mostPopularDR && list.length > 0) {
+                mostPopularDR = { symbol: list[0].symbol || "", volume: Number(list[0].totalVolume) || 0 };
+              }
+              drSummary[u] = { mostPopularDR, highSensitivityDR };
+            });
+
+            finalData = finalData.map(item => {
+              try {
+                const key = (item.ticker || "").toUpperCase();
+                if (key && drSummary[key]) {
+                  return { ...item, mostPopularDR: drSummary[key].mostPopularDR, highSensitivityDR: drSummary[key].highSensitivityDR };
+                }
+              } catch (e) { /* ignore */ }
+              return item;
+            });
+          } catch (err) {
+            console.warn('DR enrichment failed:', err);
+          }
+
           setEarnings(finalData);
           setLastUpdateTime(apiUpdateTime || new Date());
           const currentIds = new Set(finalData.map(e => `${e.ticker}-${e.date}`));
@@ -632,7 +714,24 @@ export default function Calendar() {
             <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-3 md:gap-4 mb-2">
               <div className="relative z-[200] w-full md:w-auto" ref={countryDropdownRef} style={{ isolation: 'isolate', overflow: 'visible' }}>
                 <button type="button" onClick={() => setShowCountryMenu((prev) => !prev)} className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 bg-white px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#0B102A] w-full md:min-w-[180px] h-[37.33px]">
-                  <span className="truncate">{selectedLabel}</span>
+                  <span className="truncate flex items-center gap-2">
+                    {selectedCountryOption.flag ? (
+                      <img
+                        src={`https://flagcdn.com/${selectedCountryOption.flag}.svg`}
+                        srcSet={`https://flagcdn.com/w40/${selectedCountryOption.flag}.png 2x, https://flagcdn.com/w20/${selectedCountryOption.flag}.png 1x`}
+                        alt="flag"
+                        className="w-5 h-5 object-contain rounded-sm"
+                        onError={(e) => { if (!e.target.dataset.fallback) { e.target.dataset.fallback = '1'; e.target.src = `https://flagcdn.com/w40/${selectedCountryOption.flag}.png`; } }}
+                      />
+                    ) : (selectedCountryOption.code === 'All' || selectedCountryOption.code === 'all') ? (
+                      <svg className="w-5 h-5" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden>
+                        <circle cx="12" cy="12" r="10" fill="#00ADEF" />
+                        <path d="M6.5 13c-.2-1.2.4-2.6 1.4-3.3 1-.7 2.2-.6 3.4-.3 1.2.3 2.1.8 2.9 1.6.8.8 1.1 1.6.9 2.5-.2.9-1 1.6-1.8 1.9-.8.3-1.9.2-3.1-.2-1.2-.4-2.3-1-3.6-1.2z" fill="#7EE787" />
+                        <path d="M12 2a10 10 0 0 1 8 4 10 10 0 0 1-2 12 10 10 0 0 1-6 2 10 10 0 0 1-6-2 10 10 0 0 1 4-16" fill="#0077C8" opacity="0.18" />
+                      </svg>
+                    ) : null}
+                    <span>{selectedLabel}</span>
+                  </span>
                   <svg className={`h-4 w-4 flex-shrink-0 transition-transform text-gray-500 ${showCountryMenu ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
                 </button>
                 {showCountryMenu && (
@@ -643,8 +742,25 @@ export default function Calendar() {
                         onClick={() => { setCountry(opt.code); setShowCountryMenu(false); }}
                         className={`flex w-full items-center justify-between px-4 py-1.5 text-left text-xs sm:text-sm transition-colors ${country === opt.code ? "bg-[#EEF2FF] text-[#0B102A] font-semibold" : "text-gray-700 hover:bg-gray-50"}`}
                       >
-                        <span>{opt.label}</span>
-                        {country === opt.code && <i className="bi bi-check-lg text-[#0B102A] text-base"></i>}
+                        <span className="flex items-center gap-2">
+                            {opt.flag ? (
+                              <img
+                                src={`https://flagcdn.com/${opt.flag}.svg`}
+                                srcSet={`https://flagcdn.com/w40/${opt.flag}.png 2x, https://flagcdn.com/w20/${opt.flag}.png 1x`}
+                                alt="flag"
+                                className="w-5 h-5 object-contain rounded-sm"
+                                onError={(e) => { if (!e.target.dataset.fallback) { e.target.dataset.fallback = '1'; e.target.src = `https://flagcdn.com/w40/${opt.flag}.png`; } }}
+                              />
+                            ) : (opt.code === 'All' || opt.code === 'all') ? (
+                              <svg className="w-5 h-5" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden>
+                                <circle cx="12" cy="12" r="10" fill="#00ADEF" />
+                                <path d="M6.5 13c-.2-1.2.4-2.6 1.4-3.3 1-.7 2.2-.6 3.4-.3 1.2.3 2.1.8 2.9 1.6.8.8 1.1 1.6.9 2.5-.2.9-1 1.6-1.8 1.9-.8.3-1.9.2-3.1-.2-1.2-.4-2.3-1-3.6-1.2z" fill="#7EE787" />
+                                <path d="M12 2a10 10 0 0 1 8 4 10 10 0 0 1-2 12 10 10 0 0 1-6 2 10 10 0 0 1-6-2 10 10 0 0 1 4-16" fill="#0077C8" opacity="0.18" />
+                              </svg>
+                            ) : null}
+                            <span>{opt.label}</span>
+                          </span>
+                        {/* Removed check icon per request */}
                       </button>
                     ))}
                   </div>
@@ -713,7 +829,23 @@ export default function Calendar() {
                 {loading ? (
                   <div className="py-12 text-center text-gray-500 text-sm">Loading data...</div>
                 ) : sortedEarnings.length === 0 ? (
-                  <div className="py-12 text-center text-gray-500 italic text-sm">No upcoming earnings scheduled.</div>
+                  <div className="py-12 flex flex-col items-center justify-center gap-3 text-center text-gray-700">
+                    <div className="empty-icon-wrapper">
+                      <svg className="empty-icon empty-pulse w-28 h-28" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden>
+                        <rect x="6" y="10" width="52" height="44" rx="6" fill="#F0F7FF" stroke="#D4E8FF" strokeWidth="1.5" />
+                        <rect x="10" y="6" width="12" height="8" rx="2" fill="#2F80ED" />
+                        <rect x="42" y="6" width="12" height="8" rx="2" fill="#2F80ED" />
+                        <rect x="12" y="20" width="40" height="4" rx="2" fill="#E6F0FF" />
+                        <g className="dot-group">
+                          <circle className="dot dot-1" cx="20" cy="42" r="3.5" fill="#0B102A" />
+                          <circle className="dot dot-2" cx="32" cy="42" r="3.5" fill="#0B102A" />
+                          <circle className="dot dot-3" cx="44" cy="42" r="3.5" fill="#0B102A" />
+                        </g>
+                      </svg>
+                    </div>
+                    <div className="text-lg font-semibold">No upcoming earnings</div>
+                    <div className="text-sm text-gray-500">You're all caught up — no scheduled earnings.</div>
+                  </div>
                 ) : (
                   sortedEarnings.map((e, i) => {
                     const isFuture = (e.date * 1000) > Date.now();
@@ -882,7 +1014,29 @@ export default function Calendar() {
                 {loading ? (
                   <tr><td colSpan={12} className="py-12 text-center text-gray-500">Loading data...</td></tr>
                 ) : sortedEarnings.length === 0 ? (
-                  <tr><td colSpan={12} className="py-12 text-center text-gray-500 italic">No upcoming earnings scheduled.</td></tr>
+                  <tr>
+                    <td colSpan={12} className="p-0">
+                      <div className="w-full h-[50vh] flex items-center justify-start pl-117">
+                        <div className="text-center">
+                          <div className="empty-icon-wrapper mb-4">
+                            <svg className="empty-icon empty-pulse w-36 h-36" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden>
+                              <rect x="6" y="10" width="52" height="44" rx="6" fill="#F0F7FF" stroke="#D4E8FF" strokeWidth="1.5" />
+                              <rect x="10" y="6" width="12" height="8" rx="2" fill="#2F80ED" />
+                              <rect x="42" y="6" width="12" height="8" rx="2" fill="#2F80ED" />
+                              <rect x="12" y="20" width="40" height="4" rx="2" fill="#E6F0FF" />
+                              <g className="dot-group">
+                                <circle className="dot dot-1" cx="20" cy="42" r="4" fill="#0B102A" />
+                                <circle className="dot dot-2" cx="32" cy="42" r="4" fill="#0B102A" />
+                                <circle className="dot dot-3" cx="44" cy="42" r="4" fill="#0B102A" />
+                              </g>
+                            </svg>
+                          </div>
+                          <div className="text-2xl font-semibold text-gray-700">No upcoming earnings</div>
+                          <div className="text-sm text-gray-500">You're all caught up — no scheduled earnings.</div>
+                          </div>
+                      </div>
+                    </td>
+                  </tr>
                 ) : (
                   sortedEarnings.map((e, i) => {
                     const isFuture = (e.date * 1000) > Date.now();
