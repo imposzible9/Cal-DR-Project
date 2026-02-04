@@ -194,6 +194,7 @@ const Stats = () => {
                 const res = await axios.get(`${API_BASE}/api/auth/check`);
                 if (res.data.authenticated) {
                     setIsAuth(true);
+                    try { localStorage.setItem('stats_logged_in', '1'); window.dispatchEvent(new CustomEvent('stats:visited')); } catch(e) {}
                 }
             } catch (e) {
                 console.error("Auth check failed", e);
@@ -266,6 +267,7 @@ const Stats = () => {
             if (response.data.success) {
                 setIsAuth(true);
                 setError("");
+                try { localStorage.setItem('stats_logged_in', '1'); window.dispatchEvent(new CustomEvent('stats:visited')); } catch(e) {}
             } else {
                 setError(response.data.message || "Incorrect password");
                 setPassword(""); // Clear password on failure
