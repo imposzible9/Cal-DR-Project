@@ -5,17 +5,17 @@ import axios from 'axios';
 // Read API base from Vite environment variables. Support multiple names
 // (some projects use VITE_NEWS_API, others VITE_NEWS_API_URL or VITE_API_BASE)
 const API_BASE = import.meta.env.VITE_NEWS_API || import.meta.env.VITE_NEWS_API_URL || import.meta.env.VITE_API_BASE || '';
-const TH_QUERY = "ตลาดหุ้น OR หุ้น OR ดัชนี";
-const EN_QUERY = "stock market";
+const TH_QUERY = "ตลาดหุ้น OR ภาวะตลาดหุ้น OR หุ้นไทย";
+const EN_QUERY = "US Stock Market OR S&P 500";
 
 const COUNTRY_CONFIG = {
   "US": {
-    query: "stock market",
+    query: "US Stock Market OR S&P 500 OR Nasdaq",
     lang: "en",
     symbols: ["NVDA", "TSLA", "GOOG", "AAPL", "MSFT", "AMZN", "META", "BABA"]
   },
   "TH": {
-    query: "ตลาดหุ้น OR หุ้น OR ดัชนี",
+    query: "ตลาดหุ้น OR ภาวะตลาดหุ้น OR หุ้นไทย",
     lang: "th",
     symbols: [
       "DELTA.BK", "ADVANC.BK", "TRUE.BK",
@@ -32,17 +32,17 @@ const COUNTRY_CONFIG = {
     symbols: ["0700.HK", "9988.HK", "1299.HK", "0005.HK", "3690.HK", "1810.HK"]
   },
   "DK": {
-    query: "Aktiemarkedet OR C25",
+    query: "Det danske aktiemarked OR C25 indeks",
     lang: "da",
     symbols: ["NOVO-B.CO", "MAERSK-B.CO", "DSV.CO", "VWS.CO", "CARL-B.CO", "DANSKE.CO"]
   },
   "NL": {
-    query: "Aandelenmarkt OR AEX",
+    query: "Nederlandse beurs OR AEX index",
     lang: "nl",
     symbols: ["ASML.AS", "SHELL.AS", "INGA.AS", "ADYEN.AS", "PHIA.AS", "HEIA.AS"]
   },
   "FR": {
-    query: "Bourse OR CAC 40",
+    query: "Bourse de Paris OR CAC 40",
     lang: "fr",
     symbols: ["MC.PA", "OR.PA", "TTE.PA", "SAN.PA", "AIR.PA", "RMS.PA"]
   },
@@ -52,27 +52,27 @@ const COUNTRY_CONFIG = {
     symbols: ["ENI.MI", "ISP.MI", "ENEL.MI", "UCG.MI", "RACE.MI", "STLAM.MI"]
   },
   "JP": {
-    query: "株式市場 OR 日経平均",
+    query: "日本株式市場 OR 日経平均株価",
     lang: "ja",
     symbols: ["7203.T", "6758.T", "9984.T", "8035.T", "6861.T", "6098.T"]
   },
   "SG": {
-    query: "Stock Market OR STI",
+    query: "Singapore Stock Market OR STI Index",
     lang: "en",
     symbols: ["D05.SI", "O39.SI", "U11.SI", "Z74.SI", "C52.SI", "A17U.SI"]
   },
   "TW": {
-    query: "股市 OR 台積電",
+    query: "台灣股市 OR 加權指數",
     lang: "zh",
     symbols: ["2330.TW", "2317.TW", "2454.TW", "2308.TW", "2881.TW", "2303.TW"]
   },
   "CN": {
-    query: "股市 OR 上證指數",
+    query: "中国股市 OR A股 OR 上證指數",
     lang: "zh",
     symbols: ["600519.SS", "601398.SS", "300750.SZ", "600036.SS", "601288.SS", "000858.SZ"]
   },
   "VN": {
-    query: "Thị trường chứng khoán OR VN-Index",
+    query: "Thị trường chứng khoán Việt Nam OR VN-Index",
     lang: "vi",
     symbols: ["VCB.VN", "VIC.VN", "VHM.VN", "HPG.VN", "VNM.VN", "MSN.VN"]
   }
@@ -100,8 +100,8 @@ const getFlagUrl = (code) => {
   return `https://flagcdn.com/w40/${code.toLowerCase()}.png`;
 };
 
-const CACHE_KEY_HOME = "caldr_news_home_v6";
-const CACHE_KEY_SEARCH_PREFIX = "caldr_news_search_v2_";
+const CACHE_KEY_HOME = "caldr_news_home_v7";
+const CACHE_KEY_SEARCH_PREFIX = "caldr_news_search_v3_";
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 // Helper for LocalStorage Caching
@@ -268,13 +268,23 @@ const News = () => {
   useEffect(() => {
     let mounted = true;
     async function loadMarket() {
-      // 1. Try Cache First (Stale-While-Revalidate)
       const currentCacheKey = `${CACHE_KEY_HOME}_${country}`;
+
+      // 1. Try Valid Cache First (Strict TTL)
+      // If valid cache exists, assume no new updates and skip fetch to improve performance
+      const fresh = getCache(currentCacheKey, false);
+      if (fresh) {
+        setMarketNews(fresh.marketNews);
+        setDefaultUpdates(fresh.defaultUpdates);
+        setLoadingHome(false);
+        return;
+      }
+
+      // 2. Fallback to Stale Cache (Stale-While-Revalidate)
       const cached = getCache(currentCacheKey, true); // Get stale data if available
       if (cached) {
         setMarketNews(cached.marketNews);
         setDefaultUpdates(cached.defaultUpdates);
-        // If cache is fresh, stop here
       } else {
         setLoadingHome(true);
       }
@@ -396,30 +406,39 @@ const News = () => {
 
     let mounted = true;
     async function loadSymbol() {
-      // 1. Try Cache First (Stale-While-Revalidate)
       const cacheKey = `${CACHE_KEY_SEARCH_PREFIX}${selected}`;
+
+      // 1. Try Valid Cache First (Strict TTL)
+      const fresh = getCache(cacheKey, false);
+      if (fresh) {
+        setQuote(fresh.quote);
+        setSymbolNews(fresh.symbolNews);
+        setErrorSearch("");
+        setLoadingSearch(false);
+        return;
+      }
+
+      // 2. Fallback to Stale Cache (Stale-While-Revalidate)
       const cached = getCache(cacheKey, true); // Get stale data
       if (cached) {
         setQuote(cached.quote);
         setSymbolNews(cached.symbolNews);
         setErrorSearch("");
-        
-        // If fresh, stop
-        // if (getCache(cacheKey)) {
-        //     setLoadingSearch(false);
-        //     return;
-        // }
-        // If stale, keep fetching in background
       } else {
         setLoadingSearch(true);
       }
       
       setErrorSearch("");
 
-      // Determine query symbol (append .BK for Thai stocks)
+      // Determine query symbol (append .BK for Thai stocks if missing)
       let querySymbol = selected;
       const match = allSymbols.find(s => s.symbol === selected);
-      if (match && (match.exchange === 'SET' || match.exchange === 'mai')) {
+      
+      // If backend already provides .BK (which it does now), we don't need to add it again.
+      // But if the user manually typed "DELTA" and it matched a SET stock that hasn't been suffixed yet (unlikely with new backend),
+      // we might need logic. 
+      // Safe logic: Add .BK only if exchange is SET/mai AND it doesn't already end with .BK
+      if (match && (match.exchange === 'SET' || match.exchange === 'mai') && !querySymbol.endsWith(".BK")) {
         querySymbol = selected + ".BK";
       }
 

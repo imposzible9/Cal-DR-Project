@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from contextlib import asynccontextmanager
@@ -238,7 +238,7 @@ async def background_news_updater():
             # This matches the parameters used in get_global_news endpoint
             global_limit = 5
             global_trusted = True
-            global_key = f"news-global-v2|{global_limit}|{global_trusted}"
+            global_key = f"news-global-v3|{global_limit}|{global_trusted}"
             
             global_tasks = []
             for config in GLOBAL_MARKET_CONFIG:
@@ -267,8 +267,8 @@ async def background_news_updater():
                 trusted_items = [i for i in items if i.get("is_trusted")]
                 
                 # Update "get_news" cache (Country View)
-                # key = f"news-v7|{symbol.upper()}|{limit}|{language or ''}|{hours}|{country or ''}|{trusted_only}"
-                country_key = f"news-v7|{config['query'].upper()}|{country_limit}|{config['lang']}|{country_hours}|{config['code'].lower()}|{country_trusted}"
+                # key = f"news-v8|{symbol.upper()}|{limit}|{language or ''}|{hours}|{country or ''}|{trusted_only}"
+                country_key = f"news-v8|{config['query'].upper()}|{country_limit}|{config['lang']}|{country_hours}|{config['code'].lower()}|{country_trusted}"
                 
                 # We need quote and logo for the full payload, but for now just news is better than nothing?
                 # The get_news endpoint fetches quote and logo too. 
@@ -310,7 +310,7 @@ async def background_news_updater():
             
             # Replicate get_batch_ticker_data logic
             symbols_key = ",".join(sorted(batch_req.symbols))
-            batch_key = f"batch-data-v3|{symbols_key}|{batch_req.hours}|{batch_req.limit}|{batch_req.country}|{batch_req.language}"
+            batch_key = f"batch-data-v4|{symbols_key}|{batch_req.hours}|{batch_req.limit}|{batch_req.country}|{batch_req.language}"
             
             # Fetch
             batch_tasks = []
@@ -413,7 +413,7 @@ async def fetch_news(symbol: str, limit: int, language: str | None, hours: int, 
     search_query = symbol
     target_country = country if country else "us"
     
-    is_general_market = symbol.lower() in ["stock market", "market", "business"]
+    is_general_market = any(k in symbol.lower() for k in ["stock market", "market", "business", "index", "bourse", "股市", "börse", "exchange"]) or " OR " in symbol
     
     if target_country.lower() == "us" and not is_general_market:
          search_query = f"{symbol} stock"
@@ -423,8 +423,13 @@ async def fetch_news(symbol: str, limit: int, language: str | None, hours: int, 
     # Fallback: Bing RSS -> Google RSS
     # EXCLUDE: NewsAPI (Strictly ignored for these countries)
     if country and country.lower() in GOOGLE_FINANCE_COUNTRIES:
+        # Prepare SearchAPI Query (Strip suffixes for better matching)
+        searchapi_query = symbol
+        if country.upper() == "TH" and searchapi_query.endswith(".BK"):
+            searchapi_query = searchapi_query.replace(".BK", "")
+
         # 1. Google Finance (SearchAPI)
-        gf_items = await fetch_google_finance_news(symbol, limit, language, hours, country)
+        gf_items = await fetch_google_finance_news(searchapi_query, limit, language, hours, country)
         if gf_items:
             return gf_items
             
@@ -443,6 +448,10 @@ async def fetch_news(symbol: str, limit: int, language: str | None, hours: int, 
             
             if cleaned:
                 fallback_query = cleaned
+        else:
+            # If no company name, strip known suffixes from symbol for fallback
+            if country.upper() == "TH" and fallback_query.endswith(".BK"):
+                fallback_query = fallback_query.replace(".BK", "")
         
         print(f"Fallback news query for {symbol}: {fallback_query}")
 
@@ -798,33 +807,48 @@ async def fetch_quote(symbol: str):
 
 
 async def fetch_logo(symbol: str):
-    if not FINNHUB_TOKEN:
-        return None
+    # 1. Try Finnhub
+    logo_url = None
+    if FINNHUB_TOKEN and _client is not None:
+        try:
+            r = await _client.get(
+                f"{FINNHUB_BASE_URL}/stock/profile2",
+                params={"symbol": symbol.upper(), "token": FINNHUB_TOKEN},
+            )
+            if r.status_code == 200:
+                data = r.json() or {}
+                logo_url = data.get("logo")
+        except Exception:
+            pass
 
-    assert _client is not None
+    if logo_url:
+        return logo_url
 
+    # 2. Fallback to internal list (TradingView/DR symbols)
     try:
-        r = await _client.get(
-            f"{FINNHUB_BASE_URL}/stock/profile2",
-            params={"symbol": symbol.upper(), "token": FINNHUB_TOKEN},
-        )
-        if r.status_code != 200:
-            return None
-        data = r.json() or {}
-        return data.get("logo")
+        all_symbols = await get_symbols()
+        match = next((s for s in all_symbols if s["symbol"] == symbol.upper()), None)
+        if match:
+            return match.get("logo")
     except Exception:
-        return None
+        pass
+
+    return None
 
 @app.get("/api/news/{symbol}")
 async def get_news(
     symbol: str,
+    response: Response,
     limit: int = Query(10, ge=1, le=50),
     language: str | None = Query(None),
     hours: int = Query(24, ge=1, le=168),
     country: str | None = Query(None, description="Two-letter country code (e.g., us, gb)"),
     trusted_only: bool = Query(False, description="Filter only trusted sources"),
 ):
-    key = f"news-v7|{symbol.upper()}|{limit}|{language or ''}|{hours}|{country or ''}|{trusted_only}"
+    # Set browser cache to reduce server load
+    response.headers["Cache-Control"] = f"public, max-age={NEWS_TTL_SECONDS}"
+    
+    key = f"news-v8|{symbol.upper()}|{limit}|{language or ''}|{hours}|{country or ''}|{trusted_only}"
     cached = _cache_get(key)
     if cached is not None:
         return {
@@ -863,22 +887,23 @@ async def get_news(
 # =============== NEW OPTIMIZED ENDPOINTS ===============
 
 GLOBAL_MARKET_CONFIG = [
-    {"code": "US", "query": "stock market", "lang": "en"},
-    {"code": "TH", "query": "ตลาดหุ้น OR หุ้น OR ดัชนี", "lang": "th"},
+    {"code": "US", "query": "US Stock Market OR S&P 500 OR Nasdaq", "lang": "en"},
+    {"code": "TH", "query": "ตลาดหุ้น OR ภาวะตลาดหุ้น OR หุ้นไทย", "lang": "th"},
     {"code": "HK", "query": "Hang Seng Index OR 恆生指數 OR Hong Kong Stock Market", "lang": "zh"},
-    {"code": "DK", "query": "Aktiemarkedet OR C25", "lang": "da"},
-    {"code": "NL", "query": "Aandelenmarkt OR AEX", "lang": "nl"},
-    {"code": "FR", "query": "Bourse OR CAC 40", "lang": "fr"},
+    {"code": "DK", "query": "Det danske aktiemarked OR C25 indeks", "lang": "da"},
+    {"code": "NL", "query": "Nederlandse beurs OR AEX index", "lang": "nl"},
+    {"code": "FR", "query": "Bourse de Paris OR CAC 40", "lang": "fr"},
     {"code": "IT", "query": "Borsa Italiana OR FTSE MIB", "lang": "it"},
-    {"code": "JP", "query": "株式市場 OR 日経平均", "lang": "ja"},
-    {"code": "SG", "query": "Stock Market OR STI", "lang": "en"},
-    {"code": "TW", "query": "股市 OR 台積電", "lang": "zh"},
-    {"code": "CN", "query": "股市 OR 上證指數", "lang": "zh"},
-    {"code": "VN", "query": "Thị trường chứng khoán OR VN-Index", "lang": "vi"}
+    {"code": "JP", "query": "日本株式市場 OR 日経平均株価", "lang": "ja"},
+    {"code": "SG", "query": "Singapore Stock Market OR STI Index", "lang": "en"},
+    {"code": "TW", "query": "台灣股市 OR 加權指數", "lang": "zh"},
+    {"code": "CN", "query": "中国股市 OR A股 OR 上證指數", "lang": "zh"},
+    {"code": "VN", "query": "Thị trường chứng khoán Việt Nam OR VN-Index", "lang": "vi"}
 ]
 
 @app.get("/api/news/global")
 async def get_global_news(
+    response: Response,
     limit: int = Query(5, ge=1, le=20),
     trusted_only: bool = Query(True)
 ):
@@ -886,7 +911,10 @@ async def get_global_news(
     Fetch news from all major markets in parallel.
     Aggregates results server-side to reduce frontend requests.
     """
-    key = f"news-global-v2|{limit}|{trusted_only}"
+    # Cache for 10 minutes (600s)
+    response.headers["Cache-Control"] = "public, max-age=600"
+    
+    key = f"news-global-v3|{limit}|{trusted_only}"
     cached = _cache_get(key)
     if cached:
         return {"news": cached, "cached": True}
@@ -930,15 +958,18 @@ class BatchTickerRequest(BaseModel):
     language: str | None = None
 
 @app.post("/api/batch-ticker-data")
-async def get_batch_ticker_data(req: BatchTickerRequest):
+async def get_batch_ticker_data(req: BatchTickerRequest, response: Response):
     """
     Fetch quote and latest news for multiple symbols in one go.
     """
+    # Cache for 5 minutes (300s)
+    response.headers["Cache-Control"] = "public, max-age=300"
+    
     # Create unique key for caching this batch request?
     # Batch requests can vary wildly, so maybe short cache or no cache if user specific?
     # Let's try to cache individual components or just the whole thing for short time.
     symbols_key = ",".join(sorted(req.symbols))
-    key = f"batch-data-v3|{symbols_key}|{req.hours}|{req.limit}|{req.country}|{req.language}"
+    key = f"batch-data-v4|{symbols_key}|{req.hours}|{req.limit}|{req.country}|{req.language}"
     
     cached = _cache_get(key)
     if cached:
@@ -987,11 +1018,119 @@ async def _require_client():
     if _client is None:
         raise HTTPException(500, "HTTP client not initialized")
 
+# TV Fields for simple quote
+TV_QUOTE_FIELDS = "close,change,change_abs,high,low,volume,currency,Recommend.All"
+
+def construct_tv_symbol_from_match(match: dict) -> str:
+    """
+    Constructs TradingView symbol (EXCHANGE:TICKER) from a get_symbols() match object.
+    """
+    symbol = match.get("symbol", "").upper()
+    exchange = (match.get("exchange") or "").upper()
+    country = (match.get("country") or "").upper()
+    
+    if "." in symbol:
+        clean_symbol = symbol.split(".")[0]
+    else:
+        clean_symbol = symbol
+        
+    # Map Exchanges
+    if "SET" in exchange or "MAI" in exchange: return f"SET:{clean_symbol}"
+    if "HK" in exchange or "HONG" in exchange: return f"HKEX:{clean_symbol}"
+    if "JP" in exchange or "TOKYO" in exchange: return f"TSE:{clean_symbol}"
+    if "VN" in exchange or "HOCHIMINH" in exchange: return f"HOSE:{clean_symbol}"
+    if "AMSTERDAM" in exchange or "EURONEXT" in exchange: return f"EURONEXT:{clean_symbol}"
+    if "PARIS" in exchange: return f"EURONEXT:{clean_symbol}"
+    if "MILAN" in exchange: return f"MIL:{clean_symbol}"
+    if "COPENHAGEN" in exchange: return f"OMXCOP:{clean_symbol.replace('-', '_')}"
+    if "SINGAPORE" in exchange: return f"SGX:{clean_symbol}"
+    if "TAIWAN" in exchange: return f"TWSE:{clean_symbol}"
+    if "NASDAQ" in exchange: return f"NASDAQ:{clean_symbol}"
+    if "NYSE" in exchange: return f"NYSE:{clean_symbol}"
+    if "AMEX" in exchange: return f"AMEX:{clean_symbol}"
+    
+    # Fallback based on Country
+    if country == "TH": return f"SET:{clean_symbol}"
+    if country == "HK": return f"HKEX:{clean_symbol}"
+    if country == "JP": return f"TSE:{clean_symbol}"
+    if country == "VN": return f"HOSE:{clean_symbol}"
+    if country == "NL": return f"EURONEXT:{clean_symbol}"
+    if country == "FR": return f"EURONEXT:{clean_symbol}"
+    if country == "DK": return f"OMXCOP:{clean_symbol.replace('-', '_')}"
+    if country == "IT": return f"MIL:{clean_symbol}"
+    if country == "SG": return f"SGX:{clean_symbol}"
+    if country == "TW": return f"TWSE:{clean_symbol}"
+    
+    # Default US
+    return f"NASDAQ:{clean_symbol}"
+
+async def fetch_tv_quote(symbol: str):
+    """
+    Fetches real-time quote from TradingView Symbol API.
+    """
+    tv_symbol = symbol
+    
+    # 1. Resolve Exchange via get_symbols()
+    try:
+        all_symbols = await get_symbols()
+        match = next((s for s in all_symbols if s["symbol"] == symbol.upper()), None)
+        if match:
+            tv_symbol = construct_tv_symbol_from_match(match)
+        else:
+            # Simple heuristic fallbacks
+            if symbol.endswith(".BK"): tv_symbol = f"SET:{symbol.replace('.BK','')}"
+            elif symbol.endswith(".HK"): tv_symbol = f"HKEX:{symbol.replace('.HK','')}"
+            elif symbol.endswith(".VN"): tv_symbol = f"HOSE:{symbol.replace('.VN','')}"
+            elif symbol.endswith(".T"): tv_symbol = f"TSE:{symbol.replace('.T','')}"
+    except Exception as e:
+        print(f"Error resolving TV symbol for {symbol}: {e}")
+        
+    # 2. Fetch
+    params = {
+        "symbol": tv_symbol,
+        "fields": TV_QUOTE_FIELDS,
+        "no_404": "true"
+    }
+    
+    if _client:
+        try:
+            r = await _client.get("https://scanner.tradingview.com/symbol", params=params, headers={"User-Agent": "Mozilla/5.0"}, timeout=5)
+            if r.status_code == 200:
+                data = r.json()
+                d = data.get("data") if "data" in data else data
+                
+                if d and "close" in d:
+                    # Map fields: close, change, change_abs, high, low, volume, currency, Recommend.All
+                    return {
+                        "symbol": symbol,
+                        "price": d.get("close"),
+                        "change": d.get("change_abs"), # Absolute change
+                        "change_pct": d.get("change"), # Percent change
+                        "high": d.get("high"),
+                        "low": d.get("low"),
+                        "open": d.get("close"), # Approx
+                        "prev_close": d.get("close") - (d.get("change_abs") or 0) if d.get("change_abs") else 0,
+                        "logo_url": match.get("logo") if match else None,
+                        "source": "tradingview"
+                    }
+        except Exception as e:
+            print(f"TV fetch error for {tv_symbol}: {e}")
+            
+    return None
+
 @app.get("/api/finnhub/quote/{symbol}")
 async def get_quote(symbol: str):
     symbol = symbol.upper()
     
-    # 1. Try Finnhub first
+    # 1. Try TradingView First (Real-time & consistent with other APIs)
+    tv_quote = await fetch_tv_quote(symbol)
+    if tv_quote:
+        # Ensure logo is present (if fetch_tv_quote didn't find it in match)
+        if not tv_quote.get("logo_url"):
+            tv_quote["logo_url"] = await fetch_logo(symbol)
+        return tv_quote
+
+    # 2. Try Finnhub as Fallback (mainly for US if TV fails)
     q = {}
     success = False
     
@@ -1001,20 +1140,15 @@ async def get_quote(symbol: str):
             r = await _client.get(f"{FINNHUB_BASE_URL}/quote", params={"symbol": symbol, "token": FINNHUB_TOKEN})
             if r.status_code == 200:
                 q = r.json() or {}
-                # Finnhub often returns c=0 for invalid symbols
                 if q.get("c") != 0:
                      success = True
         except Exception as e:
             print(f"Finnhub quote exception for {symbol}: {e}")
 
-    # 2. Fallback to internal list (TradingView data) if Finnhub failed
+    # 3. Fallback to internal list (Cached TV data) if both failed
     if not success:
         print(f"Finnhub failed/empty for {symbol}, trying internal list fallback")
         try:
-            # We call get_symbols but we might need to await it properly if it's cached or not.
-            # get_symbols uses a cache key.
-            # To avoid circular dependency or complex logic, let's just check the cache directly first
-            # or call the function.
             all_symbols = await get_symbols()
             match = next((s for s in all_symbols if s["symbol"] == symbol), None)
             
@@ -1023,30 +1157,19 @@ async def get_quote(symbol: str):
                 return {
                     "symbol": symbol,
                     "price": match.get("price", 0),
-                    "change": match.get("change", 0),
+                    "change": match.get("change", 0), # This might be abs or pct depending on cache
                     "change_pct": match.get("change_pct", 0),
-                    "high": match.get("price", 0), # Approximate
-                    "low": match.get("price", 0),  # Approximate
-                    "open": match.get("price", 0), # Approximate
-                    "prev_close": match.get("price", 0), # Approximate
+                    "high": match.get("price", 0),
+                    "low": match.get("price", 0),
+                    "open": match.get("price", 0),
+                    "prev_close": match.get("price", 0),
                     "logo_url": match.get("logo"),
                     "source": "fallback"
                 }
         except Exception as e:
             print(f"Fallback quote error: {e}")
-
-    # If still no success, return what we have (even if zeros) or raise error if it was a hard failure?
-    # If Finnhub returned 0s and we have no fallback, returning 0s is better than 500 Error
-    # because 500 Error causes the whole page to crash with "Invalid Symbol".
-    # Returning 0s allows the page to render (maybe with $0.00) but News might still load.
     
     if not success and not q:
-        # If we didn't get a response from Finnhub AND no fallback
-        # raise HTTPException(404, "Symbol not found")
-        # BUT, to be safe for user experience, let's return a dummy object with 0s
-        # so at least the News part (which is fetched separately) has a chance to show up?
-        # Actually, if quote fails, News.jsx throws error.
-        # So return dummy 0s is safer.
         return {
             "symbol": symbol,
             "price": 0,
@@ -1076,14 +1199,31 @@ async def get_quote(symbol: str):
 @app.get("/api/finnhub/company-news/{symbol}")
 async def get_company_news(
     symbol: str,
+    response: Response = None,
     hours: int = Query(24, ge=1, le=168),
     limit: int = Query(20, ge=1, le=50),
     country: str | None = Query(None, description="Two-letter country code (e.g., us, gb)"),
     language: str | None = Query(None, description="Language code (e.g., en, th)"),
     force_refresh: bool = False # Internal use mainly
 ):
+    # Set browser cache
+    if response:
+        response.headers["Cache-Control"] = f"public, max-age={NEWS_TTL_SECONDS}"
+
+    # Infer country from symbol if not provided
+    if not country:
+        if symbol.endswith(".BK"):
+            country = "TH"
+        elif symbol.endswith(".HK"):
+            country = "HK"
+        elif symbol.endswith(".VN"):
+            country = "VN"
+        elif symbol.endswith(".JP") or symbol.endswith(".T"):
+             country = "JP"
+        # Add others as needed
+
     # Cache check
-    key = f"company_news_v4|{symbol.upper()}|{hours}|{limit}|{country}|{language}"
+    key = f"company_news_v5|{symbol.upper()}|{hours}|{limit}|{country}|{language}"
     if not force_refresh:
         cached = _cache_get(key)
         if cached:
@@ -1237,25 +1377,18 @@ async def get_stock_overview(
     if FINNHUB_TOKEN:
         await _require_client()
 
-        r_quote = await _client.get(
-            f"{FINNHUB_BASE_URL}/quote",
-            params={"symbol": symbol_upper, "token": FINNHUB_TOKEN},
-        )
-        if r_quote.status_code != 200:
-            raise HTTPException(r_quote.status_code, f"Finnhub quote error: {r_quote.text[:200]}")
-        q = r_quote.json() or {}
-        quote = {
-            "symbol": symbol_upper,
-            "price": q.get("c"),
-            "change": q.get("d"),
-            "change_pct": q.get("dp"),
-            "high": q.get("h"),
-            "low": q.get("l"),
-            "open": q.get("o"),
-            "prev_close": q.get("pc"),
-        }
-
-        logo_url = await fetch_logo(symbol_upper)
+        # Use unified get_quote to support TradingView fallback/priority
+        q_data = await get_quote(symbol_upper)
+        
+        quote = None
+        logo_url = None
+        
+        if q_data:
+            quote = {k: v for k, v in q_data.items() if k not in ["logo_url", "symbol", "source"]}
+            logo_url = q_data.get("logo_url")
+        
+        if not logo_url:
+            logo_url = await fetch_logo(symbol_upper)
 
         now_utc = datetime.now(timezone.utc)
         since = now_utc - timedelta(hours=hours)
@@ -1338,7 +1471,7 @@ async def get_symbols():
     """
     Fetches the list of available DR symbols and merged with TradingView stocks.
     """
-    key = "dr_tv_symbols_list_v11"
+    key = "dr_tv_symbols_list_v12"
     cached = _cache_get(key)
     if cached is not None:
         return cached
@@ -1543,6 +1676,26 @@ async def _fetch_tradingview_stocks(client, region="america", country_code="US",
                 
                 # Append .BK suffix for Thai stocks AFTER filtering
                 symbol = f"{symbol}.BK"
+            
+            # 2. Regional Suffixes (Match Frontend/Google Finance format)
+            elif country_code == "HK":
+                symbol = f"{symbol}.HK"
+            elif country_code == "VN":
+                symbol = f"{symbol}.VN"
+            elif country_code == "JP":
+                symbol = f"{symbol}.T"
+            elif country_code == "SG":
+                symbol = f"{symbol}.SI"
+            elif country_code == "TW":
+                symbol = f"{symbol}.TW"
+            elif country_code == "NL":
+                symbol = f"{symbol}.AS"
+            elif country_code == "FR":
+                symbol = f"{symbol}.PA"
+            elif country_code == "IT":
+                symbol = f"{symbol}.MI"
+            elif country_code == "DK":
+                symbol = f"{symbol}.CO"
 
             logoid = d[0]
             name = d[1]
