@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import img from '../assets/logo.png';
 
@@ -6,12 +6,25 @@ const Navbar = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [showStatsIcon, setShowStatsIcon] = useState(false);
 
   const isActive = (path) => location.pathname === path;
 
   const toggleMenu = () => {
     setIsMenuOpen(!isMenuOpen);
   };
+
+  // Read persisted flag and listen for updates
+  useEffect(() => {
+    try {
+      const v = localStorage.getItem('stats_logged_in');
+      if (v) setShowStatsIcon(true);
+    } catch (e) {}
+
+    const handler = () => setShowStatsIcon(true);
+    window.addEventListener('stats:visited', handler);
+    return () => window.removeEventListener('stats:visited', handler);
+  }, []);
 
   const closeMenu = () => {
     setIsMenuOpen(false);
@@ -36,14 +49,16 @@ const Navbar = () => {
         {/* Mobile Menu Button - Left aligned on mobile relative to siblings if needed, but usually right. 
             Here we place it to the right for standard UX */}
         <div className="md:hidden flex items-center gap-4">
-          <Link
-            to="/stats"
-            className={`text-gray-400 hover:text-blue-600 transition-colors ${isActive('/stats') ? 'text-blue-600' : ''}`}
-            onClick={closeMenu}
-            title="Stats"
-          >
-            <i className="bi bi-file-earmark-text text-xl"></i>
-          </Link>
+          {showStatsIcon && (
+            <Link
+              to="/stats"
+              className={`text-gray-400 hover:text-blue-600 transition-colors ${isActive('/stats') ? 'text-blue-600' : ''}`}
+              onClick={closeMenu}
+              title="Stats"
+            >
+              <i className="bi bi-file-earmark-text text-xl"></i>
+            </Link>
+          )}
           <button
             onClick={toggleMenu}
             className="text-gray-700 hover:text-gray-900 focus:outline-none"
@@ -100,13 +115,15 @@ const Navbar = () => {
       </div>
 
       {/* Stats Link - Far Right (Screen Edge) - Desktop Only */}
-      <Link
-        to="/stats"
-        className={`hidden md:block absolute right-6 top-1/2 -translate-y-1/2 p-2 text-gray-400 hover:text-blue-600 transition-colors ${isActive('/stats') ? 'text-blue-600' : ''}`}
-        title="Stats"
-      >
-        <i className="bi bi-file-earmark-text text-2xl"></i>
-      </Link>
+      {showStatsIcon && (
+        <Link
+          to="/stats"
+          className={`hidden md:block absolute right-6 top-1/2 -translate-y-1/2 p-2 text-gray-400 hover:text-blue-600 transition-colors ${isActive('/stats') ? 'text-blue-600' : ''}`}
+          title="Stats"
+        >
+          <i className="bi bi-file-earmark-text text-2xl"></i>
+        </Link>
+      )}
 
       {/* Mobile Menu Dropdown */}
       {isMenuOpen && (
