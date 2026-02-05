@@ -22,6 +22,23 @@ const EXCHANGE_CURRENCY_MAP = {
   "Hochiminh Stock Exchange": "VND",
 };
 
+const EXCHANGE_SHORT_NAME_MAP = {
+  "The Nasdaq Global Select Market": "NASDAQ",
+  "The Nasdaq Stock Market": "NASDAQ",
+  "The New York Stock Exchange": "NYSE",
+  "The New York Stock Exchange Archipelago": "NYSE Arca",
+  "The Stock Exchange of Hong Kong Limited": "HKEX",
+  "Nasdaq Copenhagen": "Nasdaq Copenhagen",
+  "Euronext Amsterdam": "EURONEXT",
+  "Euronext Paris": "EURONEXT",
+  "Euronext Milan": "Mil",
+  "Tokyo Stock Exchange": "TSE",
+  "Singapore Exchange": "SGX",
+  "Shanghai Stock Exchange" : "SSE",
+  "Taiwan Stock Exchange": "TWSE",
+  "Shenzhen Stock Exchange": "SZSE",
+  "Hochiminh Stock Exchange": "HOSE",
+};
 
 // Helper functions for table formatting
 const formatNum = (n) => {
@@ -53,11 +70,43 @@ const formatRatio = (raw) => {
   return `${Math.round(leftNum).toLocaleString()}:${right}`;
 };
 
+const formatExchangeShortName = (ex) => {
+  if (!ex) return "";
+  return EXCHANGE_SHORT_NAME_MAP[ex] || ex.replace(/^The\s+/i, "");
+};
+
 const extractSymbol = (str) => {
   if (!str) return "-";
   const match = String(str).match(/\(([^)]+)\)$/);
   return match ? match[1] : str;
 };
+
+const formatUnderlyingDisplayName = (dr) => {
+  if (!dr) return "";
+
+  const s = String(dr.underlyingName || dr.name || "")
+    .replace(/^หุ้นสามัญของบริษัท\s*/g, "")
+    .replace(/^โครงการจัดการลงทุนต่างประเทศ\s*/g, "")
+    .replace(/^บริษัทหลักทรัพย์\s*/g, "")
+    .replace(/^บริษัท\s*/g, "")
+    .replace(/\s*บริษัท$/g, "")
+    .trim();
+
+  // ✅ เอาให้เหลือ "ชื่ออังกฤษ + (TICKER)" ถ้ามีวงเล็บท้าย
+  // 1) ถ้ามี "(...)" ท้าย ให้เก็บไว้
+  const m = s.match(/\(([^)]+)\)\s*$/);
+  const paren = m ? ` (${m[1]})` : "";
+
+  // 2) ตัดเอาเฉพาะอักษรอังกฤษ/ตัวเลข/ช่องว่าง/.,-&
+  const englishOnly = s
+    .replace(/\s*\([^)]+\)\s*$/g, "")         // ตัดวงเล็บออกก่อน
+    .replace(/[^A-Za-z0-9\s.\-&]/g, " ")      // เก็บเฉพาะอังกฤษ
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return (englishOnly + paren).trim();
+};
+
 
 const fxDecimalsByCcy = (ccy) => {
   if (!ccy) return 2;
@@ -71,7 +120,6 @@ const roundToTick = (p) => {
   const tick = 0.01; // SET DR ส่วนใหญ่ใช้ 0.01
   return Math.round(Number(p) / tick) * tick;
 };
-
 
 export default function DRCal() {
   // ================== state สำหรับ DR & การค้นหา ==================
@@ -610,13 +658,8 @@ export default function DRCal() {
                         className={`flex w-full justify-between px-3 sm:px-4 py-2 text-left text-xs sm:text-sm ${idx === highlightIndex ? "bg-gray-100" : "hover:bg-gray-50"}`}
                       >
                         <span className="font-semibold text-black">{dr.symbol}</span>
-                        <span className="text-[10px] sm:text-xs text-gray-500 truncate w-20 sm:w-40 text-right">
-                          {(dr.underlyingName || dr.name)
-                            ?.replace(/^โครงการจัดการลงทุนต่างประเทศ\s*/g, "")
-                            ?.replace(/^บริษัทหลักทรัพย์\s*/g, "")
-                            ?.replace(/^บริษัท\s*/g, "")
-                            ?.replace(/\s*บริษัท$/g, "")
-                            ?.trim()}
+                        <span className="text-xs text-gray-500 truncate w-40 text-right">
+                          {formatUnderlyingDisplayName(dr)}
                         </span>
                       </button>
                     ))}
@@ -624,29 +667,38 @@ export default function DRCal() {
                 )}
               </div>
 
-              <div className="mt-4 lg:mt-6">
-                <h3 className="text-[#0046b8] font-extrabold text-xl sm:text-2xl lg:text-3xl leading-snug break-words">{selectedDR?.symbol || "—"}</h3>
-                <p className="font-medium text-[9px] sm:text-[10px] text-[#555] mt-1 line-clamp-2 break-words">
-                  {selectedDR ? `Depositary Receipt on ${selectedDR.underlying || selectedDR.underlyingName} Issued by ${selectedDR.issuer}` : "—"}
-                </p>
-                <div className="w-full lg:h-[175px] bg-white border border-[#e0e0e0] rounded-[12px] shadow-lg mt-4 p-3 sm:p-4 relative">
-                  <p className="font-bold text-[11px] sm:text-[12px] lg:text-[13px] text-[#6B6B6B] break-words">Ratio (DR : Underlying)</p>
-                  <p className="font-bold text-lg sm:text-xl lg:text-2xl text-[#111] mt-1">{ratioDR ? `${fmtNum(ratioDR, 0)} : 1` : "—"} </p>
-                  <div className="w-full h-px bg-[#9A9A9A] mt-2"></div>
-                  <div className="flex flex-col lg:flex-row items-center mt-3 gap-3 lg:gap-0">
-                    <div className="flex flex-row items-center w-full">
-                      <div className="flex-1 min-w-0">
-                        <p className="font-bold text-[11px] sm:text-[12px] lg:text-[13px] text-[#6B6B6B] mt-1 break-words">Last Price</p>
-                        <p className="font-bold text-lg sm:text-xl lg:text-2xl mt-1 whitespace-nowrap">{selectedDR?.last ? fmtNum(selectedDR.last) : "—"}</p>
-                      </div>
-                      <div className="mx-3 w-px h-8 bg-[#9A9A9A]"></div>
-                      <div className="flex-1 min-w-0">
-                        <p className="font-bold text-[11px] sm:text-[12px] lg:text-[13px] text-[#6B6B6B] mt-1 break-words">Change</p>
-                        <p className={`font-bold text-lg sm:text-xl lg:text-2xl mt-1 whitespace-nowrap ${changeAbs > 0 ? "text-[#27AE60]" : changeAbs < 0 ? "text-[#EB5757]" : "text-black"}`}>
-                          {`${fmtNum(changeAbs)} (${fmtPct(changePct)})`}
-                        </p>
-                      </div>
-                    </div>
+            <div className="mt-6">
+              <h3 className="text-[#0046b8] font-extrabold text-[30px] leading-[26px]">{selectedDR?.symbol || "—"}</h3>
+              <p className="text-[12px] font-semibold text-[#111] mt-1 truncate flex items-center gap-1">
+                <span>{formatUnderlyingDisplayName(selectedDR)}</span>
+
+                {selectedDR?.underlyingExchange && (
+                  <>
+                    <span className="mx-2 text-[#111]">•</span>
+                    <span className="text-[#111] text-[12px] truncate">
+                      {formatExchangeShortName(selectedDR?.underlyingExchange)}
+                    </span>
+                  </>
+                )}
+              </p>
+              <p className="font-medium text-[10px] text-[#555] mt-1 truncate">
+                {selectedDR ? `Depositary Receipt on ${selectedDR.underlying || selectedDR.underlyingName} Issued by ${selectedDR.issuer}` : "—"}
+              </p>
+              <div className="w-full h-[175px] bg-white border border-[#e0e0e0] rounded-[12px] shadow-lg mt-4 p-4 relative">
+                <p className="font-bold text-[13px] text-[#6B6B6B]">Ratio (DR : Underlying)</p>
+                <p className="font-bold text-[26px] text-[#111]">{ratioDR ? `${fmtNum(ratioDR, 0)} : 1` : "—"} </p>
+                <div className="w-full h-[1px] bg-[#9A9A9A] mt-2"></div>
+                <div className="flex items-center mt-2">
+                  <div className="w-1/2">
+                    <p className="font-bold text-[13px] text-[#6B6B6B] mt-1">Last Price</p>
+                    <p className="font-bold text-[26px]">{selectedDR?.last ? fmtNum(selectedDR.last) : "—"}</p>
+                  </div>
+                  <div className="absolute left-1/2 -translate-x-1/2 w-[1px] h-[56px] bg-[#9A9A9A]"></div>
+                  <div className="w-1/2 pl-6">
+                    <p className="font-bold text-[13px] text-[#6B6B6B] mt-1">Change</p>
+                    <p className={`font-bold text-[26px] ${changeAbs > 0 ? "text-[#27AE60]" : changeAbs < 0 ? "text-[#EB5757]" : "text-black"}`}>
+                      {`${fmtNum(changeAbs)} (${fmtPct(changePct)})`}
+                    </p>                    </div>
                   </div>
                 </div>
               </div>
