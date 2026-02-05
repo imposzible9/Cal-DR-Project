@@ -915,7 +915,7 @@ GLOBAL_MARKET_CONFIG = [
     {"code": "VN", "query": "Thị trường chứng khoán Việt Nam OR VN-Index OR HNX-Index OR VN30 OR Vingroup OR Vietcombank OR Hoa Phat Group OR Masan Group", "lang": "vi"}
 ]
 
-@app.get("/api/news/global")
+@app.get("/api/global-news")
 async def get_global_news(
     response: Response,
     limit: int = Query(5, ge=1, le=20),

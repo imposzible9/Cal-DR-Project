@@ -295,9 +295,9 @@ const News = () => {
         
         if (country === "all") {
             // Fetch from optimized backend endpoint
-            const res = await axios.get(`${API_BASE}/api/news/global`, { 
-                params: { limit: 5, trusted_only: true } 
-            });
+            const res = await axios.get(`${API_BASE}/api/global-news`, { 
+        params: { limit: 10, trusted_only: true } 
+      });
             merged = res.data?.news || [];
         } else {
             // Specific country
