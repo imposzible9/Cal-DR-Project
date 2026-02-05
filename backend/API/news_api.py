@@ -1161,6 +1161,14 @@ async def fetch_tv_quote(symbol: str):
             elif symbol.endswith(".HK"): tv_symbol = f"HKEX:{symbol.replace('.HK','')}"
             elif symbol.endswith(".VN"): tv_symbol = f"HOSE:{symbol.replace('.VN','')}"
             elif symbol.endswith(".T"): tv_symbol = f"TSE:{symbol.replace('.T','')}"
+            elif symbol.endswith(".PA"): tv_symbol = f"EURONEXT:{symbol.replace('.PA','')}"
+            elif symbol.endswith(".AS"): tv_symbol = f"EURONEXT:{symbol.replace('.AS','')}"
+            elif symbol.endswith(".MI"): tv_symbol = f"MIL:{symbol.replace('.MI','')}"
+            elif symbol.endswith(".CO"): tv_symbol = f"OMXCOP:{symbol.replace('.CO','').replace('-', '_')}"
+            elif symbol.endswith(".SI"): tv_symbol = f"SGX:{symbol.replace('.SI','')}"
+            elif symbol.endswith(".TW"): tv_symbol = f"TWSE:{symbol.replace('.TW','')}"
+            elif symbol.endswith(".SS"): tv_symbol = f"SSE:{symbol.replace('.SS','')}"
+            elif symbol.endswith(".SZ"): tv_symbol = f"SZSE:{symbol.replace('.SZ','')}"
     except Exception as e:
         print(f"Error resolving TV symbol for {symbol}: {e}")
         
@@ -1291,15 +1299,29 @@ async def get_company_news(
 
     # Infer country from symbol if not provided
     if not country:
-        if symbol.endswith(".BK"):
+        symbol_upper = symbol.upper()
+        if symbol_upper.endswith(".BK"):
             country = "TH"
-        elif symbol.endswith(".HK"):
+        elif symbol_upper.endswith(".HK"):
             country = "HK"
-        elif symbol.endswith(".VN"):
+        elif symbol_upper.endswith(".VN"):
             country = "VN"
-        elif symbol.endswith(".JP") or symbol.endswith(".T"):
+        elif symbol_upper.endswith(".JP") or symbol_upper.endswith(".T"):
              country = "JP"
-        # Add others as needed
+        elif symbol_upper.endswith(".PA"):
+            country = "FR"
+        elif symbol_upper.endswith(".AS"):
+            country = "NL"
+        elif symbol_upper.endswith(".CO"):
+            country = "DK"
+        elif symbol_upper.endswith(".MI"):
+            country = "IT"
+        elif symbol_upper.endswith(".SI"):
+            country = "SG"
+        elif symbol_upper.endswith(".TW"):
+            country = "TW"
+        elif symbol_upper.endswith(".SS") or symbol_upper.endswith(".SZ"):
+            country = "CN"
 
     # Cache check
     key = f"company_news_v5|{symbol.upper()}|{hours}|{limit}|{country}|{language}"
