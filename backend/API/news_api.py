@@ -54,7 +54,9 @@ TRUSTED_SOURCES = {
     # CN
     "sina", "sina finance", "east money", "yicai", "the paper", "security times", 
     "china securities journal", "shanghai securities news", "xinhua", "people's daily", 
-    "global times", "caixin global", "qq finance", "netease finance"
+    "global times", "caixin global", "qq finance", "netease finance",
+    "south china morning post", "tradingview", "tipranks", "benzinga", "gurufocus", "futu", "富途",
+    "zhitong", "gelonghui", "aastocks", "etnet"
 }
 
 GOOGLE_FINANCE_COUNTRIES = {
@@ -221,7 +223,10 @@ app.router.lifespan_context = lifespan
 
 async def init_client():
     global _client
-    _client = httpx.AsyncClient(timeout=10)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    _client = httpx.AsyncClient(timeout=10, headers=headers, follow_redirects=True)
 
     # Start background task
     asyncio.create_task(background_news_updater())
@@ -252,7 +257,7 @@ async def background_news_updater():
             # This matches the parameters used in get_global_news endpoint
             global_limit = 5
             global_trusted = True
-            global_key = f"news-global-v4|{global_limit}|{global_trusted}"
+            global_key = f"news-global-v8|{global_limit}|{global_trusted}"
             
             global_tasks = []
             for config in GLOBAL_MARKET_CONFIG:
@@ -281,8 +286,8 @@ async def background_news_updater():
                 trusted_items = [i for i in items if i.get("is_trusted")]
                 
                 # Update "get_news" cache (Country View)
-                # key = f"news-v9|{symbol.upper()}|{limit}|{language or ''}|{hours}|{country or ''}|{trusted_only}"
-                country_key = f"news-v9|{config['query'].upper()}|{country_limit}|{config['lang']}|{country_hours}|{config['code'].lower()}|{country_trusted}"
+                # key = f"news-v12|{symbol.upper()}|{limit}|{language or ''}|{hours}|{country or ''}|{trusted_only}"
+                country_key = f"news-v12|{config['query'].upper()}|{country_limit}|{config['lang']}|{country_hours}|{config['code'].lower()}|{country_trusted}"
                 
                 # We need quote and logo for the full payload, but for now just news is better than nothing?
                 # The get_news endpoint fetches quote and logo too. 
@@ -441,15 +446,32 @@ async def fetch_news(symbol: str, limit: int, language: str | None, hours: int, 
         searchapi_query = symbol
         if country.upper() == "TH" and searchapi_query.endswith(".BK"):
             searchapi_query = searchapi_query.replace(".BK", "")
+            
+        # Debug Log
+        print(f"[DEBUG] fetch_news for {country}: symbol='{symbol}'")
 
         # 1. Google Finance (SearchAPI)
-        gf_items = await fetch_google_finance_news(searchapi_query, limit, language, hours, country)
-        if gf_items:
-            return gf_items
+        # SKIP for complex queries with " OR " because Google Finance SearchAPI handles them poorly
+        if " OR " not in searchapi_query:
+            gf_items = await fetch_google_finance_news(searchapi_query, limit, language, hours, country)
+            if gf_items:
+                print(f"[DEBUG] Google Finance returned {len(gf_items)} items for {searchapi_query}")
+                return gf_items
+            else:
+                print(f"[DEBUG] Google Finance returned 0 items for {searchapi_query}")
+        else:
+             print(f"[DEBUG] Skipping Google Finance for complex query: {searchapi_query}")
+
+        # Prepare Fallback Query (Use Company Name if available for better Bing/Google results)
             
         # Prepare Fallback Query (Use Company Name if available for better Bing/Google results)
         fallback_query = search_query
-        if company_name:
+        
+        # For China/HK, ensure we use the full query string as fallback, 
+        # as it likely contains Chinese keywords that are fine for RSS
+        if country.upper() in ["CN", "HK", "TW"]:
+            fallback_query = search_query
+        elif company_name:
             # Clean company name: remove common legal suffixes iteratively
             cleaned = company_name.strip()
             # Expanded suffix list for global coverage
@@ -472,7 +494,10 @@ async def fetch_news(symbol: str, limit: int, language: str | None, hours: int, 
         # 2. Google RSS (Fallback - Preferred over Bing for better local relevance)
         google_items = await fetch_google_news(fallback_query, limit, language, hours, country)
         if google_items:
+            print(f"[DEBUG] Google RSS returned {len(google_items)} items for {fallback_query}")
             return google_items
+        else:
+            print(f"[DEBUG] Google RSS returned 0 items for {fallback_query}")
 
         # 3. Bing RSS (Fallback)
         return await fetch_bing_news(fallback_query, limit, language, hours, country)
@@ -707,6 +732,13 @@ async def _fetch_google_rss_items(query: str, limit: int, language: str | None, 
         hl = lang_code
         if country:
             ceid = f"{country.upper()}:{lang_code}"
+            
+    # Override for China (Google News CN is often empty/blocked)
+    if country and country.upper() == "CN":
+        gl = "HK"
+        ceid = "HK:zh-Hans"
+        if language and language.startswith("zh"):
+             hl = "zh-CN"
 
     params = {"q": query, "hl": hl, "gl": gl, "ceid": ceid}
     
@@ -774,9 +806,36 @@ async def _fetch_google_rss_items(query: str, limit: int, language: str | None, 
         return []
 
 async def fetch_google_news(query: str, limit: int, language: str | None, hours: int, country: str | None):
+    # Handle "OR" queries by splitting and merging (Recursive)
+    if " OR " in query:
+        sub_queries = query.split(" OR ")
+        tasks = [fetch_google_news(sq.strip(), limit, language, hours, country) for sq in sub_queries]
+        results = await asyncio.gather(*tasks)
+        
+        # Merge and deduplicate
+        merged = []
+        seen_urls = set()
+        all_items = [item for sublist in results for item in sublist]
+        
+        # Sort by date descending
+        all_items.sort(key=lambda x: x.get("published_at") or "", reverse=True)
+        
+        for item in all_items:
+            url = item.get("url")
+            if url and url not in seen_urls:
+                seen_urls.add(url)
+                merged.append(item)
+                
+        return merged[:limit]
+
     # Parallel fetch strategy to ensure diversity
     # 1. Fetch mostly non-Yahoo sources
     # 2. Fetch Yahoo sources (if needed)
+    
+    # For China/HK, Yahoo Finance is less relevant or handled differently. 
+    # Plus, complex exclusion queries might reduce results in these regions.
+    if country and country.upper() in ["CN", "HK", "TW"]:
+        return await _fetch_google_rss_items(query, limit, language, hours, country)
     
     # We add -site:yahoo.com to exclude Yahoo from the "Others" query
     # We add site:finance.yahoo.com to specifically get Yahoo for the "Yahoo" query
@@ -862,9 +921,13 @@ async def get_news(
     # Set browser cache to reduce server load
     response.headers["Cache-Control"] = f"public, max-age={NEWS_TTL_SECONDS}"
     
-    key = f"news-v10|{symbol.upper()}|{limit}|{language or ''}|{hours}|{country or ''}|{trusted_only}"
+    # Debug log for request
+    print(f"[DEBUG] get_news request: symbol='{symbol}' country='{country}' trusted_only={trusted_only}", flush=True)
+    
+    key = f"news-v13|{symbol.upper()}|{limit}|{language or ''}|{hours}|{country or ''}|{trusted_only}"
     cached = _cache_get(key)
     if cached is not None:
+        print(f"[DEBUG] Returning cached result for {key}", flush=True)
         return {
             "symbol": symbol.upper(),
             "total": len(cached["news"]),
@@ -884,6 +947,8 @@ async def get_news(
     # Apply trusted filter if requested
     if trusted_only:
         items = [i for i in items if i.get("is_trusted")]
+        
+    print(f"[DEBUG] Fetched {len(items)} items for {symbol} (trusted_only={trusted_only})", flush=True)
 
     payload = {"news": items, "quote": quote, "logo_url": logo_url}
     _cache_set(key, payload, ttl=NEWS_TTL_SECONDS)
@@ -928,7 +993,7 @@ async def get_global_news(
     # Cache for 10 minutes (600s)
     response.headers["Cache-Control"] = "public, max-age=600"
     
-    key = f"news-global-v6|{limit}|{trusted_only}"
+    key = f"news-global-v8|{limit}|{trusted_only}"
     cached = _cache_get(key)
     if cached:
         return {"news": cached, "cached": True}
