@@ -48,7 +48,7 @@ async def lifespan(app: FastAPI):
     # ========== Initialize News API ==========
     print("[INIT] Initializing News API...")
     await news_api.init_client()
-    asyncio.create_task(news_api.background_news_updater())
+    # asyncio.create_task(news_api.background_news_updater()) # Already started in init_client
     print("[OK] News API: Ready")
     
     print("=" * 60)

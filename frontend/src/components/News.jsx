@@ -57,7 +57,7 @@ const COUNTRY_CONFIG = {
     symbols: ["7203.T", "6758.T", "9984.T", "8035.T", "6861.T", "6098.T"]
   },
   "SG": {
-    query: "Singapore Stock Market OR STI Index",
+    query: "Singapore Stock Market OR STI Index OR SGX OR Straits Times Index OR Singapore Exchange OR DBS Group OR UOB OR OCBC OR Singtel OR Keppel Ltd OR Wilmar International OR CapitaLand",
     lang: "en",
     symbols: ["D05.SI", "O39.SI", "U11.SI", "Z74.SI", "C52.SI", "A17U.SI"]
   },
@@ -67,12 +67,12 @@ const COUNTRY_CONFIG = {
     symbols: ["2330.TW", "2317.TW", "2454.TW", "2308.TW", "2881.TW", "2303.TW"]
   },
   "CN": {
-    query: "中国股市 OR A股 OR 上證指數",
+    query: "中国股市 OR A股 OR 上證指數 OR 深證成指 OR 滬深300 OR 貴州茅台 OR 騰訊控股 OR 阿里巴巴 OR 工商銀行",
     lang: "zh",
     symbols: ["600519.SS", "601398.SS", "300750.SZ", "600036.SS", "601288.SS", "000858.SZ"]
   },
   "VN": {
-    query: "Thị trường chứng khoán Việt Nam OR VN-Index",
+    query: "Thị trường chứng khoán Việt Nam OR VN-Index OR HNX-Index OR VN30 OR Vingroup OR Vietcombank OR Hoa Phat Group OR Masan Group",
     lang: "vi",
     symbols: ["VCB.VN", "VIC.VN", "VHM.VN", "HPG.VN", "VNM.VN", "MSN.VN"]
   }

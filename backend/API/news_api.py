@@ -44,7 +44,17 @@ TRUSTED_SOURCES = {
     "kaohoon", "thansettakij", "money channel", "efinance thai", "infoquest",
     "settrade", "prachachat", "ประชาชาติ", "กรุงเทพธุรกิจ", "ฐานเศรษฐกิจ",
     "ข่าวหุ้น", "ทันหุ้น", "bangkok biz news",
-    "經濟通", "香港經濟日報", "now 財經", "雅虎財經"
+    "經濟通", "香港經濟日報", "now 財經", "雅虎財經",
+    "straitstimes", "straits times", "business times", "businesstimes", "the business times",
+    "channel newsasia", "cna", "todayonline", "edge singapore", 
+    "the edge singapore", "singapore business review", "sbr",
+    # VN
+    "vnexpress", "cafef", "vietstock", "dau tu", "tin nhanh chung khoan", "nhip cau dau tu", 
+    "saigon times", "lao dong", "thanh nien", "tuoi tre", "zing", "dan tri", "vneconomy",
+    # CN
+    "sina", "sina finance", "east money", "yicai", "the paper", "security times", 
+    "china securities journal", "shanghai securities news", "xinhua", "people's daily", 
+    "global times", "caixin global", "qq finance", "netease finance"
 }
 
 GOOGLE_FINANCE_COUNTRIES = {
@@ -166,7 +176,11 @@ ADDITIONAL_FALLBACK_SYMBOLS = [
     {"symbol": "7203.T", "name": "Toyota Motor Corporation", "country": "JP"},
     {"symbol": "6758.T", "name": "Sony Group Corporation", "country": "JP"},
     # SG
-    {"symbol": "D05.SI", "name": "DBS Group Holdings Ltd", "country": "SG"},
+    {"symbol": "D05.SI", "name": "DBS Group Holdings Ltd", "logo": "https://s3-symbol-logo.tradingview.com/dbs.svg", "country": "SG"},
+    {"symbol": "O39.SI", "name": "Oversea-Chinese Banking Corp", "logo": "https://s3-symbol-logo.tradingview.com/ocbc.svg", "country": "SG"},
+    {"symbol": "U11.SI", "name": "United Overseas Bank Ltd", "logo": "https://s3-symbol-logo.tradingview.com/uob.svg", "country": "SG"},
+    {"symbol": "Z74.SI", "name": "Singtel", "logo": "https://s3-symbol-logo.tradingview.com/singtel.svg", "country": "SG"},
+    {"symbol": "BN4.SI", "name": "Keppel Corp", "logo": "https://s3-symbol-logo.tradingview.com/keppel.svg", "country": "SG"},
     # TW
     {"symbol": "2330.TW", "name": "Taiwan Semiconductor Manufacturing Company", "country": "TW"},
     # VN
@@ -238,7 +252,7 @@ async def background_news_updater():
             # This matches the parameters used in get_global_news endpoint
             global_limit = 5
             global_trusted = True
-            global_key = f"news-global-v3|{global_limit}|{global_trusted}"
+            global_key = f"news-global-v4|{global_limit}|{global_trusted}"
             
             global_tasks = []
             for config in GLOBAL_MARKET_CONFIG:
@@ -267,8 +281,8 @@ async def background_news_updater():
                 trusted_items = [i for i in items if i.get("is_trusted")]
                 
                 # Update "get_news" cache (Country View)
-                # key = f"news-v8|{symbol.upper()}|{limit}|{language or ''}|{hours}|{country or ''}|{trusted_only}"
-                country_key = f"news-v8|{config['query'].upper()}|{country_limit}|{config['lang']}|{country_hours}|{config['code'].lower()}|{country_trusted}"
+                # key = f"news-v9|{symbol.upper()}|{limit}|{language or ''}|{hours}|{country or ''}|{trusted_only}"
+                country_key = f"news-v9|{config['query'].upper()}|{country_limit}|{config['lang']}|{country_hours}|{config['code'].lower()}|{country_trusted}"
                 
                 # We need quote and logo for the full payload, but for now just news is better than nothing?
                 # The get_news endpoint fetches quote and logo too. 
@@ -848,7 +862,7 @@ async def get_news(
     # Set browser cache to reduce server load
     response.headers["Cache-Control"] = f"public, max-age={NEWS_TTL_SECONDS}"
     
-    key = f"news-v8|{symbol.upper()}|{limit}|{language or ''}|{hours}|{country or ''}|{trusted_only}"
+    key = f"news-v10|{symbol.upper()}|{limit}|{language or ''}|{hours}|{country or ''}|{trusted_only}"
     cached = _cache_get(key)
     if cached is not None:
         return {
@@ -895,10 +909,10 @@ GLOBAL_MARKET_CONFIG = [
     {"code": "FR", "query": "Bourse de Paris OR CAC 40", "lang": "fr"},
     {"code": "IT", "query": "Borsa Italiana OR FTSE MIB", "lang": "it"},
     {"code": "JP", "query": "日本株式市場 OR 日経平均株価", "lang": "ja"},
-    {"code": "SG", "query": "Singapore Stock Market OR STI Index", "lang": "en"},
+    {"code": "SG", "query": "Singapore Stock Market OR STI Index OR SGX OR Straits Times Index OR Singapore Exchange OR DBS Group OR UOB OR OCBC OR Singtel OR Keppel Ltd OR Wilmar International OR CapitaLand", "lang": "en"},
     {"code": "TW", "query": "台灣股市 OR 加權指數", "lang": "zh"},
-    {"code": "CN", "query": "中国股市 OR A股 OR 上證指數", "lang": "zh"},
-    {"code": "VN", "query": "Thị trường chứng khoán Việt Nam OR VN-Index", "lang": "vi"}
+    {"code": "CN", "query": "中国股市 OR A股 OR 上證指數 OR 深證成指 OR 滬深300 OR 貴州茅台 OR 騰訊控股 OR 阿里巴巴 OR 工商銀行", "lang": "zh"},
+    {"code": "VN", "query": "Thị trường chứng khoán Việt Nam OR VN-Index OR HNX-Index OR VN30 OR Vingroup OR Vietcombank OR Hoa Phat Group OR Masan Group", "lang": "vi"}
 ]
 
 @app.get("/api/news/global")
@@ -914,7 +928,7 @@ async def get_global_news(
     # Cache for 10 minutes (600s)
     response.headers["Cache-Control"] = "public, max-age=600"
     
-    key = f"news-global-v3|{limit}|{trusted_only}"
+    key = f"news-global-v6|{limit}|{trusted_only}"
     cached = _cache_get(key)
     if cached:
         return {"news": cached, "cached": True}
