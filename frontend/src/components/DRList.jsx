@@ -381,7 +381,7 @@ export default function DRList() {
             <button
               type="button"
               onClick={() => setShowCountryMenu((prev) => !prev)}
-              className="flex items-center justify-between gap-2 sm:gap-3 rounded-xl border border-gray-200 bg-white px-2.5 sm:px-3 py-1.5 sm:py-2 text-[11px] sm:text-xs md:text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#0B102A] w-full sm:min-w-[160px] md:min-w-[180px] h-[35px] md:h-[37.33px]"
+              className="flex items-center justify-between gap-2 sm:gap-3 rounded-xl border border-gray-200 bg-white px-2.5 sm:px-3 py-1.5 sm:py-2 text-[11px] sm:text-xs md:text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#0B102A] w-full lg:w-[202.5px] h-[37.33px]"
             >
               <span className="truncate text-[11px] sm:text-xs md:text-sm flex items-center gap-2">
                 {selectedCountryOption.flag ? (
@@ -393,11 +393,7 @@ export default function DRList() {
                     onError={(e) => { if (!e.target.dataset.fallback) { e.target.dataset.fallback = '1'; e.target.src = `https://flagcdn.com/w40/${selectedCountryOption.flag}.png`; } }}
                   />
                 ) : (selectedCountryOption.code === 'all' || selectedCountryOption.code === 'All') ? (
-                  <svg className="w-5 h-5" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden>
-                    <circle cx="12" cy="12" r="10" fill="#00ADEF" />
-                    <path d="M6.5 13c-.2-1.2.4-2.6 1.4-3.3 1-.7 2.2-.6 3.4-.3 1.2.3 2.1.8 2.9 1.6.8.8 1.1 1.6.9 2.5-.2.9-1 1.6-1.8 1.9-.8.3-1.9.2-3.1-.2-1.2-.4-2.3-1-3.6-1.2z" fill="#7EE787" />
-                    <path d="M12 2a10 10 0 0 1 8 4 10 10 0 0 1-2 12 10 10 0 0 1-6 2 10 10 0 0 1-6-2 10 10 0 0 1 4-16" fill="#0077C8" opacity="0.18" />
-                  </svg>
+                  <i className="bi bi-globe text-gray-400" style={{ fontSize: '16px', lineHeight: '16px' }}></i>
                 ) : null}
                 <span>{selectedCountryOption.label}</span>
               </span>
@@ -436,12 +432,8 @@ export default function DRList() {
                           className="w-5 h-5 object-contain rounded-sm"
                           onError={(e) => { if (!e.target.dataset.fallback) { e.target.dataset.fallback = '1'; e.target.src = `https://flagcdn.com/w40/${opt.flag}.png`; } }}
                         />
-                        ) : (opt.code === 'all' || opt.code === 'All') ? (
-                        <svg className="w-5 h-5" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden>
-                          <circle cx="12" cy="12" r="10" fill="#00ADEF" />
-                          <path d="M6.5 13c-.2-1.2.4-2.6 1.4-3.3 1-.7 2.2-.6 3.4-.3 1.2.3 2.1.8 2.9 1.6.8.8 1.1 1.6.9 2.5-.2.9-1 1.6-1.8 1.9-.8.3-1.9.2-3.1-.2-1.2-.4-2.3-1-3.6-1.2z" fill="#7EE787" />
-                          <path d="M12 2a10 10 0 0 1 8 4 10 10 0 0 1-2 12 10 10 0 0 1-6 2 10 10 0 0 1-6-2 10 10 0 0 1 4-16" fill="#0077C8" opacity="0.18" />
-                        </svg>
+                      ) : (opt.code === 'all' || opt.code === 'All') ? (
+                        <i className="bi bi-globe text-gray-400" style={{ fontSize: '16px', lineHeight: '16px' }}></i>
                       ) : null}
                       <span>{opt.label}</span>
                     </span>
@@ -926,9 +918,10 @@ export default function DRList() {
         </div>
 
         {/* Desktop Table View */}
-        <div className="hidden lg:block overflow-x-auto">
-          <table className="min-w-full w-full text-left border-collapse text-[12px] md:text-[14.4px]">
-            <thead className="bg-[#0B102A] text-white font-bold sticky top-0" style={{ zIndex: 50 }}>
+        <div className="hidden lg:block overflow-x-auto hide-scrollbar" style={{ position: 'relative' }}>
+          <div className="max-h-[70vh] overflow-y-auto hide-scrollbar" style={{ position: 'relative' }}>
+            <table className="min-w-full w-full text-left border-collapse text-[12px] md:text-[14.4px]">
+              <thead className="bg-[#0B102A] text-white font-bold sticky top-0" style={{ zIndex: 50 }}>
               <tr className="h-[45px] md:h-[50px]">
                 {visibleColumns.dr && (
                   <th rowSpan={2} colSpan={visibleColumns.star ? 2 : 1} className="py-2 md:py-4 px-2 md:px-3 text-left sticky top-0 bg-[#0B102A] align-middle cursor-pointer relative text-xs md:text-sm" style={{ left: "0px", width: visibleColumns.star ? "160px" : "130px", minWidth: visibleColumns.star ? "160px" : "130px", zIndex: 110 }} onClick={() => handleSort("dr")}>
@@ -967,11 +960,12 @@ export default function DRList() {
                   </th>
                 ))}
               </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100 bg-white">
-              {sortedData.map((row, index) => renderRow(row, index))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-gray-100 bg-white">
+                {sortedData.map((row, index) => renderRow(row, index))}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     );

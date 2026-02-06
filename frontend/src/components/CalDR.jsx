@@ -686,17 +686,17 @@ export default function DRCal() {
               </p>
               <div className="w-full h-[175px] bg-white border border-[#e0e0e0] rounded-[12px] shadow-lg mt-4 p-4 relative">
                 <p className="font-bold text-[13px] text-[#6B6B6B]">Ratio (DR : Underlying)</p>
-                <p className="font-bold text-[26px] text-[#111]">{ratioDR ? `${fmtNum(ratioDR, 0)} : 1` : "—"} </p>
+                <p className="font-bold text-[20px] sm:text-[26px] text-[#111]">{ratioDR ? `${fmtNum(ratioDR, 0)} : 1` : "—"} </p>
                 <div className="w-full h-[1px] bg-[#9A9A9A] mt-2"></div>
                 <div className="flex items-center mt-2">
                   <div className="w-1/2">
                     <p className="font-bold text-[13px] text-[#6B6B6B] mt-1">Last Price</p>
-                    <p className="font-bold text-[26px]">{selectedDR?.last ? fmtNum(selectedDR.last) : "—"}</p>
+                    <p className="font-bold text-[20px] sm:text-[26px]]">{selectedDR?.last ? fmtNum(selectedDR.last) : "—"}</p>
                   </div>
                   <div className="absolute left-1/2 -translate-x-1/2 w-[1px] h-[56px] bg-[#9A9A9A]"></div>
                   <div className="w-1/2 pl-6">
                     <p className="font-bold text-[13px] text-[#6B6B6B] mt-1">Change</p>
-                    <p className={`font-bold text-[26px] ${changeAbs > 0 ? "text-[#27AE60]" : changeAbs < 0 ? "text-[#EB5757]" : "text-black"}`}>
+                    <p className={`font-bold text-[20px] sm:text-[26px] ${changeAbs > 0 ? "text-[#27AE60]" : changeAbs < 0 ? "text-[#EB5757]" : "text-black"}`}>
                       {`${fmtNum(changeAbs)} (${fmtPct(changePct)})`}
                     </p>                    </div>
                   </div>

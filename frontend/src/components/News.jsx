@@ -80,19 +80,19 @@ const COUNTRY_CONFIG = {
 
 const DEFAULT_SYMBOLS = COUNTRY_CONFIG["US"].symbols;
 const COUNTRY_OPTIONS = [
-  { code: "all", label: "All Markets" },
-  { code: "US", label: "United States" },
-  { code: "TH", label: "Thailand" },
-  { code: "HK", label: "Hong Kong" },
-  { code: "DK", label: "Denmark" },
-  { code: "NL", label: "Netherlands" },
-  { code: "FR", label: "France" },
-  { code: "IT", label: "Italy" },
-  { code: "JP", label: "Japan" },
-  { code: "SG", label: "Singapore" },
-  { code: "TW", label: "Taiwan" },
-  { code: "CN", label: "China" },
-  { code: "VN", label: "Vietnam" },
+  { code: "all", label: "All Markets", flag: null },
+  { code: "US", label: "United States", flag: 'us' },
+  { code: "TH", label: "Thailand", flag: 'th' },
+  { code: "HK", label: "Hong Kong", flag: 'hk' },
+  { code: "DK", label: "Denmark", flag: 'dk' },
+  { code: "NL", label: "Netherlands", flag: 'nl' },
+  { code: "FR", label: "France", flag: 'fr' },
+  { code: "IT", label: "Italy", flag: 'it' },
+  { code: "JP", label: "Japan", flag: 'jp' },
+  { code: "SG", label: "Singapore", flag: 'sg' },
+  { code: "TW", label: "Taiwan", flag: 'tw' },
+  { code: "CN", label: "China", flag: 'cn' },
+  { code: "VN", label: "Vietnam", flag: 'vn' },
 ];
 
 const getFlagUrl = (code) => {
@@ -210,6 +210,7 @@ const News = () => {
   const [country, setCountry] = useState("all");
   const [showCountryMenu, setShowCountryMenu] = useState(false);
   const countryMenuRef = useRef(null);
+  const selectedCountryOption = useMemo(() => COUNTRY_OPTIONS.find(o => o.code === country) || COUNTRY_OPTIONS[0], [country]);
   const searchContainerRef = useRef(null);
 
   // Close menus when clicking outside
@@ -607,7 +608,7 @@ const News = () => {
                   <img
                     src={s.logo}
                     alt={s.symbol}
-                    className="w-full h-full object-contain"
+                    className="w-full h-full object-contain rounded-md"
                     onError={(e) => {
                       e.target.style.display = 'none';
                       e.target.nextSibling.style.display = 'block';
@@ -637,97 +638,98 @@ const News = () => {
 
   return (
     <div className="min-h-screen w-full bg-[#F5F5F5] flex justify-center">
-      <div className="w-full max-w-[1248px] px-4 md:px-8 flex flex-col h-full py-10">
+      <div className="w-full max-w-[1248px] px-4 md:px-0 flex flex-col h-full py-6">
 
         {/* Header Section */}
-        <div className="flex flex-col md:flex-row md:items-start justify-between gap-3 sm:gap-6 mb-4 sm:mb-8">
+        <div className="flex flex-col gap-3 sm:gap-6 mb-4 sm:mb-8 sm:pt-3">
           <div>
-            <h1 className="text-2xl sm:text-3xl font-bold mb-2 text-[#0B102A]">News</h1>
-            <p className="text-[#6B6B6B] text-xs sm:text-sm">Latest market updates, earnings reports, and insights for Underlying Assets</p>
+            <h1 className="text-[20px] sm:text-[36px] font-bold mb-1 sm:mb-2 text-[#0B102A]">News</h1>
+            <p className="text-[#6B6B6B] text-xs sm:text-[19.2px] mb-2 sm:mb-4 ">Latest market updates, earnings reports, and insights for Underlying Assets</p>
           </div>
-          <div className="flex flex-col md:flex-row items-center gap-4 w-full md:w-auto">
-            {/* Country Select */}
-            <div className="relative w-full md:w-56" ref={countryMenuRef}>
-              <button
-                type="button"
-                onClick={() => setShowCountryMenu(!showCountryMenu)}
-                className="w-full bg-white border border-gray-200 text-[#0B102A] py-2.5 pl-4 pr-10 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#0B102A] text-sm font-medium cursor-pointer hover:border-gray-300 transition-colors shadow-sm flex items-center gap-3 text-left"
-              >
-                <div className="w-5 flex-shrink-0 flex items-center justify-center">
-                  {country !== 'all' ? (
-                    <img src={getFlagUrl(country)} alt={country} className="w-5 h-3.5 object-cover rounded-[2px] shadow-sm" />
-                  ) : (
-                    <i className="bi bi-globe text-gray-400"></i>
-                  )}
-                </div>
-                <span className="truncate">{COUNTRY_OPTIONS.find(o => o.code === country)?.label}</span>
-                
-                <div className="absolute inset-y-0 right-0 flex items-center px-3 text-gray-500 pointer-events-none">
-                  <i className={`bi bi-chevron-down text-xs transition-transform ${showCountryMenu ? "rotate-180" : ""}`}></i>
-                </div>
-              </button>
 
-              {showCountryMenu && (
-                <div className="absolute z-50 w-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg max-h-80 overflow-y-auto">
-                  {COUNTRY_OPTIONS.map((opt) => (
-                    <button
-                      key={opt.code}
-                      onClick={() => {
-                        setCountry(opt.code);
-                        setShowCountryMenu(false);
-                      }}
-                      className={`w-full px-4 py-2.5 hover:bg-gray-50 cursor-pointer flex items-center gap-3 text-sm transition-colors text-left ${
-                        country === opt.code ? "bg-gray-50 font-semibold text-[#0B102A]" : "text-gray-700"
-                      }`}
-                    >
-                      <div className="w-5 flex-shrink-0 flex items-center justify-center">
-                        {opt.code !== 'all' ? (
-                          <img src={getFlagUrl(opt.code)} alt={opt.code} className="w-5 h-3.5 object-cover rounded-[2px] shadow-sm" />
-                        ) : (
-                          <i className="bi bi-globe text-gray-400 text-lg"></i>
-                        )}
-                      </div>
-                      <span className="flex-1 truncate">{opt.label}</span>
-                      {country === opt.code && (
-                         <i className="bi bi-check-lg text-[#0B102A]"></i>
-                      )}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Search Input */}
-            <div className="relative w-full md:w-[300px]" ref={searchContainerRef}>
-              <input
-                type="text"
-                value={search}
-                onChange={handleSearchChange}
-                onKeyDown={onSearchKey}
-                onFocus={handleSearchFocus}
-                placeholder={country === 'all' ? "Search stocks..." : `Search ${country} stocks...`}
-                className="w-full bg-white pl-4 pr-10 py-2.5 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#0B102A] text-sm shadow-sm"
-              />
-              {search ? (
-                <button onClick={clearSearch} className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600">
-                  <i className="bi bi-x-lg"></i>
+          <div className="w-full flex">
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between w-full mb-2 md:mb-0 gap-3 md:gap-0">
+              {/* Country Select */}
+              <div className="relative w-full md:w-[202.5px] lg:scale-[1.2] lg:origin-top lg:ml-6 z-[200]" ref={countryMenuRef} style={{ isolation: 'isolate', overflow: 'visible' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowCountryMenu(!showCountryMenu)}
+                  className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 bg-white px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 w-full lg:w-[202.5px]"
+                  style={{ height: '37.33px', width: undefined }}
+                >
+                  <span className="truncate flex items-center gap-2">
+                    {selectedCountryOption.flag ? (
+                      <img
+                        src={`https://flagcdn.com/${selectedCountryOption.flag}.svg`}
+                        srcSet={`https://flagcdn.com/w40/${selectedCountryOption.flag}.png 2x, https://flagcdn.com/w20/${selectedCountryOption.flag}.png 1x`}
+                        alt="flag"
+                        className="w-5 h-5 object-contain rounded-sm"
+                        onError={(e) => { if (!e.target.dataset.fallback) { e.target.dataset.fallback = '1'; e.target.src = `https://flagcdn.com/w40/${selectedCountryOption.flag}.png`; } }}
+                      />
+                    ) : (selectedCountryOption.code === 'all' || selectedCountryOption.code === 'All') ? (
+                      <i className="bi bi-globe text-gray-400" style={{ fontSize: '16px', lineHeight: '16px' }}></i>
+                    ) : null}
+                    <span>{selectedCountryOption.label}</span>
+                  </span>
+                  <svg className={`h-4 w-4 flex-shrink-0 transition-transform text-gray-500 ${showCountryMenu ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
                 </button>
-              ) : (
-                <i className="bi bi-chevron-down absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 pointer-events-none text-xs" />
-              )}
 
-              {/* Suggestions Dropdown */}
-              {suggestionsContent}
+                {showCountryMenu && (
+                  <div className="absolute left-0 top-full z-[20000] mt-2 w-full sm:w-56 max-h-72 overflow-auto rounded-2xl border border-gray-200 bg-white shadow-[0_10px_30px_rgba(15,23,42,0.15)] py-1" style={{ transform: 'translateZ(0)' }}>
+                    {COUNTRY_OPTIONS.map((opt) => (
+                      <button
+                        key={opt.code}
+                        onClick={() => { setCountry(opt.code); setShowCountryMenu(false); }}
+                        className={`flex w-full items-center justify-between px-4 py-1.5 text-left text-xs sm:text-sm transition-colors ${country === opt.code ? "bg-[#EEF2FF] text-[#0B102A] font-semibold" : "text-gray-700 hover:bg-gray-50"}`}
+                      >
+                        <span className="flex items-center gap-2">
+                          {opt.flag ? (
+                            <img
+                              src={`https://flagcdn.com/${opt.flag}.svg`}
+                              srcSet={`https://flagcdn.com/w40/${opt.flag}.png 2x, https://flagcdn.com/w20/${opt.flag}.png 1x`}
+                              alt="flag"
+                              className="w-5 h-5 object-contain rounded-sm"
+                              onError={(e) => { if (!e.target.dataset.fallback) { e.target.dataset.fallback = '1'; e.target.src = `https://flagcdn.com/w40/${opt.flag}.png`; } }}
+                            />
+                          ) : (opt.code === 'all' || opt.code === 'All') ? (
+                            <i className="bi bi-globe text-gray-400" style={{ fontSize: '16px', lineHeight: '16px' }}></i>
+                          ) : null}
+                          <span>{opt.label}</span>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
 
+              {/* Search Input */}
+              <div className="relative w-full md:w-[307.2px] md:ml-4 lg:w-[307.2px] lg:h-[44.79px]" ref={searchContainerRef}>
+                <input
+                  type="text"
+                  value={search}
+                  onChange={handleSearchChange}
+                  onKeyDown={onSearchKey}
+                  onFocus={handleSearchFocus}
+                  placeholder={country === 'all' ? "Search..." : `Search ${country} stocks...`}
+                className="w-full h-[37.33px] bg-white pl-3 pr-12 py-2 sm:pl-5 pr-12 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#0B102A] shadow-sm text-xs md:text-sm lg:w-[307.2px] lg:h-[44.79px] lg:text-[17px]"
+                  style={{ fontSize: undefined, boxSizing: 'border-box' }}
+                />
+                {search ? (
+                  <button onClick={clearSearch} className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"><i className="bi bi-x-lg" style={{fontSize: '19.2px', lineHeight: '19.2px'}}></i></button>
+                ) : (
+                  <i className="bi bi-search absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 pointer-events-none lg:text-[16px] lg:leading-[16px]" style={{fontSize: '17px', lineHeight: '17px'}} />
+                )}
+
+                {/* Suggestions Dropdown */}
+                {suggestionsContent}
+              </div>
             </div>
+          </div>
         </div>
-      </div>
 
         {/* Main Content */}
         <div className="flex-1 pb-10">
-
           {selected ? (
-            /* Search Result View */
             <div className="space-y-6">
               {loadingSearch ? (
                 <div className="animate-pulse h-32 bg-gray-200 rounded-xl" />
@@ -735,20 +737,17 @@ const News = () => {
                 <div className="p-4 bg-red-50 text-red-600 rounded-xl">{errorSearch}</div>
               ) : (
                 <>
-                  {/* Symbol Banner */}
                   {quote && (
                     <div className="bg-[#0B102A] rounded-2xl p-6 text-white flex items-center justify-between shadow-lg relative overflow-hidden">
                       <div className="relative z-10 flex items-center gap-4">
                         <div className="w-12 h-12 bg-white/10 rounded-xl flex items-center justify-center text-xl font-bold overflow-hidden">
                           {quote.logo_url ? (
-                            <img src={quote.logo_url} alt={selected} className="w-full h-full object-contain" />
+                            <img src={quote.logo_url} alt={selected} className="w-full h-full object-contain rounded-md" />
                           ) : (
                             <span>{selected[0]}</span>
                           )}
                         </div>
-                        <div>
-                          <div className="text-2xl font-bold">{selected}</div>
-                        </div>
+                        <div className="text-2xl font-bold">{selected}</div>
                       </div>
                       <div className="relative z-10 text-right">
                         <div className="text-3xl font-bold">${quote.price?.toFixed(2)}</div>
@@ -756,20 +755,14 @@ const News = () => {
                           {quote.change_pct >= 0 ? '+' : ''}{quote.change_pct?.toFixed(2)}%
                         </div>
                       </div>
-                      {/* Decoration */}
-                      <div className="absolute top-0 right-0 w-64 h-64 bg-blue-500/10 rounded-full blur-3xl transform translate-x-1/2 -translate-y-1/2"></div>
+                      <div className="absolute top-0 right-0 w-64 h-64 bg-blue-500/10 rounded-full blur-3xl transform translate-x-1/2 -translate-y-1/2" />
                     </div>
                   )}
 
-                  {/* News List */}
                   <div>
                     <h2 className="text-lg font-bold text-[#0B102A] mb-4">Latest News for {selected}</h2>
                     <div className="flex flex-col gap-4">
-                      {symbolNews.length > 0 ? (
-                        symbolNews.map((news, idx) => (
-                          <NewsCard key={idx} news={news} />
-                        ))
-                      ) : (
+                      {symbolNews.length > 0 ? symbolNews.map((news, idx) => <NewsCard key={idx} news={news} />) : (
                         <div className="text-gray-500 text-center py-10">No news available</div>
                       )}
                     </div>
@@ -778,11 +771,9 @@ const News = () => {
               )}
             </div>
           ) : (
-            /* Home View */
             <div className="space-y-8">
-              {/* Top Stories Banner */}
               <div className="space-y-4">
-                <h2 className="text-lg font-bold text-[#0B102A]">Top Stories</h2>
+                <h2 className="text-lg sm:text-[20px] font-bold text-[#0B102A]">Top Stories</h2>
                 {loadingHome ? (
                   <div className="animate-pulse h-48 bg-gray-200 rounded-2xl" />
                 ) : topStory ? (
@@ -793,41 +784,25 @@ const News = () => {
                           <div className="flex items-center gap-3 mb-3">
                             <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center overflow-hidden">
                               {topStory.quote.logo_url ? (
-                                <img src={topStory.quote.logo_url} alt={topStory.ticker} className="w-full h-full object-contain" />
+                                <img src={topStory.quote.logo_url} alt={topStory.ticker} className="w-full h-full object-contain rounded-md" />
                               ) : (
                                 <span className="text-sm font-bold text-white">{topStory.ticker[0]}</span>
                               )}
                             </div>
-                            <div>
-                              <div className="text-sm font-bold text-blue-200">{topStory.ticker}</div>
-                            </div>
+                            <div className="text-sm font-bold text-blue-200">{topStory.ticker}</div>
                           </div>
                         )}
-                        <h3 className="text-lg md:text-xl font-semibold leading-snug mb-2 group-hover:text-blue-200 transition-colors">
-                          {topStory.news.title}
-                        </h3>
-                        {topStory.news.summary && (
-                          <p className="text-sm text-blue-100/80 mb-3 line-clamp-2">
-                            {topStory.news.summary}
-                          </p>
-                        )}
+                        <h3 className="text-lg md:text-xl font-semibold leading-snug mb-2 group-hover:text-blue-200 transition-colors">{topStory.news.title}</h3>
+                        {topStory.news.summary && <p className="text-sm text-blue-100/80 mb-3 line-clamp-2">{topStory.news.summary}</p>}
                         <div className="flex items-center gap-2 text-xs text-blue-200/80">
-                          {topStory.news.source && (
-                            <span className="inline-flex items-center px-2 py-0.5 rounded bg-white/10 text-blue-100 font-medium border border-white/10">
-                              {topStory.news.source}
-                            </span>
-                          )}
+                          {topStory.news.source && <span className="inline-flex items-center px-2 py-0.5 rounded bg-white/10 text-blue-100 font-medium border border-white/10">{topStory.news.source}</span>}
                           {topStory.news.source && <span>•</span>}
                           <span>{timeAgo(topStory.news.published_at)}</span>
                         </div>
                       </div>
                       <div className="absolute right-4 sm:right-6 md:right-8 top-1/2 transform -translate-y-1/2">
                         {topStory.quote && topStory.quote.logo_url ? (
-                          <img
-                            src={topStory.quote.logo_url}
-                            alt="background"
-                            className="w-[64px] h-[64px] sm:w-[80px] sm:h-[80px] md:w-[96px] md:h-[96px] object-contain"
-                          />
+                          <img src={topStory.quote.logo_url} alt="background" className="w-[64px] h-[64px] sm:w-[80px] sm:h-[80px] md:w-[96px] md:h-[96px] object-contain rounded-lg" />
                         ) : (
                           <i className="bi bi-newspaper text-[48px] sm:text-[72px] md:text-[96px]"></i>
                         )}
@@ -839,21 +814,13 @@ const News = () => {
                 )}
               </div>
 
-              {/* Latest Updates */}
               <div className="space-y-4">
-                <h2 className="text-lg font-bold text-[#0B102A]">Latest Updates</h2>
+                <h2 className="text-lg sm:text-[20px] font-bold text-[#0B102A]">Latest Updates</h2>
                 <div className="flex flex-col gap-4">
                   {loadingHome ? (
                     Array.from({ length: 3 }).map((_, i) => <div key={i} className="animate-pulse h-24 bg-gray-100 rounded-xl" />)
                   ) : defaultUpdates.length > 0 ? (
-                    defaultUpdates.map((item, idx) => (
-                      <NewsCard
-                        key={idx}
-                        ticker={item.ticker}
-                        quote={item.quote}
-                        news={item.news}
-                      />
-                    ))
+                    defaultUpdates.map((item, idx) => <NewsCard key={idx} ticker={item.ticker} quote={item.quote} news={item.news} />)
                   ) : (
                     <div className="text-gray-500">No updates available</div>
                   )}
@@ -861,7 +828,6 @@ const News = () => {
               </div>
             </div>
           )}
-
         </div>
       </div>
     </div>

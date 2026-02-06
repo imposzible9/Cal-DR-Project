@@ -444,11 +444,16 @@ async def fetch_news(symbol: str, limit: int, language: str | None, hours: int, 
     if country and country.lower() in GOOGLE_FINANCE_COUNTRIES:
         # Prepare SearchAPI Query (Strip suffixes for better matching)
         searchapi_query = symbol
-        if country.upper() == "TH" and searchapi_query.endswith(".BK"):
-            searchapi_query = searchapi_query.replace(".BK", "")
+        
+        # Strip common suffixes for Google Finance compatibility
+        suffixes = [".BK", ".HK", ".VN", ".JP", ".T", ".PA", ".AS", ".MI", ".CO", ".SI", ".TW", ".SS", ".SZ"]
+        for suffix in suffixes:
+            if searchapi_query.endswith(suffix):
+                searchapi_query = searchapi_query.replace(suffix, "")
+                break
             
         # Debug Log
-        print(f"[DEBUG] fetch_news for {country}: symbol='{symbol}'")
+        print(f"[DEBUG] fetch_news for {country}: symbol='{symbol}' -> query='{searchapi_query}'")
 
         # 1. Google Finance (SearchAPI)
         # SKIP for complex queries with " OR " because Google Finance SearchAPI handles them poorly
@@ -463,15 +468,9 @@ async def fetch_news(symbol: str, limit: int, language: str | None, hours: int, 
              print(f"[DEBUG] Skipping Google Finance for complex query: {searchapi_query}")
 
         # Prepare Fallback Query (Use Company Name if available for better Bing/Google results)
-            
-        # Prepare Fallback Query (Use Company Name if available for better Bing/Google results)
         fallback_query = search_query
         
-        # For China/HK, ensure we use the full query string as fallback, 
-        # as it likely contains Chinese keywords that are fine for RSS
-        if country.upper() in ["CN", "HK", "TW"]:
-            fallback_query = search_query
-        elif company_name:
+        if company_name:
             # Clean company name: remove common legal suffixes iteratively
             cleaned = company_name.strip()
             # Expanded suffix list for global coverage
@@ -484,10 +483,17 @@ async def fetch_news(symbol: str, limit: int, language: str | None, hours: int, 
             
             if cleaned:
                 fallback_query = cleaned
+        elif country.upper() in ["CN", "HK"]:
+            # For China/HK, if no company name, keep the full symbol (e.g. 0700.HK) 
+            # as it's better than just numeric '0700'
+            fallback_query = search_query
         else:
             # If no company name, strip known suffixes from symbol for fallback
-            if country.upper() == "TH" and fallback_query.endswith(".BK"):
-                fallback_query = fallback_query.replace(".BK", "")
+            suffixes = [".BK", ".HK", ".VN", ".JP", ".T", ".PA", ".AS", ".MI", ".CO", ".SI", ".TW", ".SS", ".SZ"]
+            for suffix in suffixes:
+                if fallback_query.endswith(suffix):
+                    fallback_query = fallback_query.replace(suffix, "")
+                    break
         
         print(f"Fallback news query for {symbol}: {fallback_query}")
 
@@ -719,9 +725,29 @@ async def _fetch_google_rss_items(query: str, limit: int, language: str | None, 
     ceid = "US:en"
 
     if country:
-        gl = country.upper()
-        hl = f"en-{gl}"
-        ceid = f"{gl}:en"
+        c_upper = country.upper()
+        # Default language mappings to avoid empty English results for non-English countries
+        defaults = {
+            "TW": {"hl": "zh-TW", "ceid": "TW:zh-Hant"},
+            "JP": {"hl": "ja", "ceid": "JP:ja"},
+            "TH": {"hl": "th", "ceid": "TH:th"},
+            "VN": {"hl": "vi", "ceid": "VN:vi"},
+            "KR": {"hl": "ko", "ceid": "KR:ko"},
+            "IT": {"hl": "it", "ceid": "IT:it"},
+            "FR": {"hl": "fr", "ceid": "FR:fr"},
+            "NL": {"hl": "nl", "ceid": "NL:nl"},
+            "HK": {"hl": "zh-HK", "ceid": "HK:zh-Hant"},
+        }
+        
+        if not language and c_upper in defaults:
+            d = defaults[c_upper]
+            gl = c_upper
+            hl = d["hl"]
+            ceid = d["ceid"]
+        else:
+            gl = c_upper
+            hl = f"en-{gl}"
+            ceid = f"{gl}:en"
 
     # Support all languages, not just Thai
     if language:
@@ -742,11 +768,24 @@ async def _fetch_google_rss_items(query: str, limit: int, language: str | None, 
 
     params = {"q": query, "hl": hl, "gl": gl, "ceid": ceid}
     
+    # Add tbs parameter for date filtering if hours is specified
+    # Relaxing the tbs window to allow for fallback items (e.g. if 24h requested but only 2d old news exists)
+    if hours and hours > 0:
+        if hours <= 24:
+            params["tbs"] = "qdr:w" # Ask for 1 week even if 24h requested
+        elif hours <= 168: # 7 days
+            params["tbs"] = "qdr:m" # Ask for 1 month
+        elif hours <= 720: # 30 days
+            params["tbs"] = "qdr:y" # Ask for 1 year
+        else:
+            params["tbs"] = "qdr:y"
+
     # Debug log
     print(f"Fetching Google RSS: {query} Params: {params}")
     
     try:
         r = await _client.get("https://news.google.com/rss/search", params=params)
+        print(f"[DEBUG] Google RSS URL: {r.url} Status: {r.status_code} Len: {len(r.text)}")
         if r.status_code != 200:
             return []
         text = r.text
@@ -757,7 +796,11 @@ async def _fetch_google_rss_items(query: str, limit: int, language: str | None, 
         items = channel.findall("item") if channel is not None else []
         
         normalized = []
+        candidates = [] # Items that are valid but maybe too old
+        
         since_dt = None
+        fallback_dt = datetime.now(timezone.utc) - timedelta(days=90) # 3 months fallback
+        
         if hours and hours > 0:
             since_dt = datetime.now(timezone.utc) - timedelta(hours=hours)
             
@@ -778,14 +821,27 @@ async def _fetch_google_rss_items(query: str, limit: int, language: str | None, 
             source_el = it.find("source")
             source = source_el.text.strip() if source_el is not None and source_el.text else None
             published_at = pub
+            
+            is_recent = True
+            
             if pub:
                 try:
                     dt = parsedate_to_datetime(pub)
-                    if dt and since_dt and dt.tzinfo:
-                        if dt < since_dt:
-                            continue
-                except Exception:
+                    # print(f"[DEBUG] Date parsed: {dt} (since: {since_dt})")
+                    if dt and since_dt:
+                         # Ensure timezone awareness for comparison
+                         if dt.tzinfo is None:
+                             dt = dt.replace(tzinfo=timezone.utc)
+                         
+                         if dt < since_dt:
+                            is_recent = False
+                            # Check if it qualifies as a fallback candidate
+                            if dt < fallback_dt:
+                                continue # Too old even for fallback
+                except Exception as e:
+                    print(f"[DEBUG] Date parse error: {e}")
                     pass
+            
             item = {
                 "title": title or None,
                 "summary": summary,
@@ -795,11 +851,19 @@ async def _fetch_google_rss_items(query: str, limit: int, language: str | None, 
                 "image_url": None,
                 "is_trusted": _is_trusted_source(source),
             }
+            
             if _is_valid_source(item):
-                normalized.append(item)
-                # Collect enough items
-                if len(normalized) >= limit * 2:
-                    break
+                if is_recent:
+                    normalized.append(item)
+                    if len(normalized) >= limit * 2:
+                        break
+                else:
+                    candidates.append(item)
+
+        if not normalized and candidates:
+             print(f"[DEBUG] No recent news found, using {len(candidates)} fallback candidates")
+             return candidates[:limit]
+             
         return normalized
     except Exception as e:
         print(f"Google RSS error for {query}: {e}")
@@ -921,10 +985,25 @@ async def get_news(
     # Set browser cache to reduce server load
     response.headers["Cache-Control"] = f"public, max-age={NEWS_TTL_SECONDS}"
     
+    # Infer country from symbol if not provided
+    if not country:
+        symbol_upper = symbol.upper()
+        if symbol_upper.endswith(".BK"): country = "th"
+        elif symbol_upper.endswith(".HK"): country = "hk"
+        elif symbol_upper.endswith(".VN"): country = "vn"
+        elif symbol_upper.endswith(".JP") or symbol_upper.endswith(".T"): country = "jp"
+        elif symbol_upper.endswith(".PA"): country = "fr"
+        elif symbol_upper.endswith(".AS"): country = "nl"
+        elif symbol_upper.endswith(".CO"): country = "dk"
+        elif symbol_upper.endswith(".MI"): country = "it"
+        elif symbol_upper.endswith(".SI"): country = "sg"
+        elif symbol_upper.endswith(".TW"): country = "tw"
+        elif symbol_upper.endswith(".SS") or symbol_upper.endswith(".SZ"): country = "cn"
+
     # Debug log for request
     print(f"[DEBUG] get_news request: symbol='{symbol}' country='{country}' trusted_only={trusted_only}", flush=True)
     
-    key = f"news-v13|{symbol.upper()}|{limit}|{language or ''}|{hours}|{country or ''}|{trusted_only}"
+    key = f"news-v14|{symbol.upper()}|{limit}|{language or ''}|{hours}|{country or ''}|{trusted_only}"
     cached = _cache_get(key)
     if cached is not None:
         print(f"[DEBUG] Returning cached result for {key}", flush=True)
@@ -938,11 +1017,46 @@ async def get_news(
             "ttl_seconds": NEWS_TTL_SECONDS,
         }
 
-    items, quote, logo_url = await asyncio.gather(
-        fetch_news(symbol, limit, language, hours, country),
-        fetch_quote(symbol),
+    # Resolve company name for better news queries (especially for numeric tickers)
+    company_name = None
+    if country and country.lower() in GOOGLE_FINANCE_COUNTRIES:
+        try:
+            # 1. Try from get_symbols match (Fastest)
+            all_syms = await get_symbols()
+            match = next((s for s in all_syms if s["symbol"] == symbol.upper()), None)
+            if match:
+                company_name = match.get("name") or match.get("description")
+            
+            # 2. Try from get_quote (if available) - Fetch quote first if needed
+            if not company_name:
+                q_data = await get_quote(symbol.upper())
+                if q_data and q_data.get("name"):
+                    company_name = q_data.get("name")
+        except Exception as e:
+            print(f"Error looking up company name for {symbol}: {e}")
+
+    # Fetch news, quote, logo in parallel (but now we might have already fetched quote)
+    # To optimize, we can reuse q_data if we fetched it.
+    
+    # But for simplicity and to keep parallel structure for others:
+    tasks = [
+        fetch_news(symbol, limit, language, hours, country, company_name),
+        fetch_quote(symbol), # This is the Finnhub quote, which might fail for non-US
         fetch_logo(symbol)
-    )
+    ]
+    
+    results = await asyncio.gather(*tasks)
+    items = results[0]
+    quote = results[1]
+    logo_url = results[2]
+
+    # If Finnhub quote failed (likely for non-US), try get_quote (which has TV fallback)
+    if not quote and country and country.lower() in GOOGLE_FINANCE_COUNTRIES:
+         q_data = await get_quote(symbol.upper())
+         if q_data:
+             quote = {k: v for k, v in q_data.items() if k != "logo_url" and k != "symbol"}
+             if not logo_url:
+                 logo_url = q_data.get("logo_url")
 
     # Apply trusted filter if requested
     if trusted_only:
@@ -1098,7 +1212,7 @@ async def _require_client():
         raise HTTPException(500, "HTTP client not initialized")
 
 # TV Fields for simple quote
-TV_QUOTE_FIELDS = "close,change,change_abs,high,low,volume,currency,Recommend.All"
+TV_QUOTE_FIELDS = "close,change,change_abs,high,low,volume,currency,Recommend.All,description"
 
 def construct_tv_symbol_from_match(match: dict) -> str:
     """
@@ -1198,6 +1312,7 @@ async def fetch_tv_quote(symbol: str):
                         "open": d.get("close"), # Approx
                         "prev_close": d.get("close") - (d.get("change_abs") or 0) if d.get("change_abs") else 0,
                         "logo_url": match.get("logo") if match else None,
+                        "name": d.get("description"), # Add description for news search fallback
                         "source": "tradingview"
                     }
         except Exception as e:
@@ -1338,10 +1453,17 @@ async def get_company_news(
         # Look up company name for better fallback queries
         company_name = None
         try:
+            # 1. Try from get_symbols match
             all_syms = await get_symbols()
             match = next((s for s in all_syms if s["symbol"] == symbol.upper()), None)
             if match:
                 company_name = match.get("name") or match.get("description")
+            
+            # 2. Try from get_quote (if available)
+            if not company_name:
+                q_data = await get_quote(symbol.upper())
+                if q_data and q_data.get("name"):
+                    company_name = q_data.get("name")
         except Exception as e:
             print(f"Error looking up company name for {symbol}: {e}")
 
@@ -1848,4 +1970,3 @@ async def _fetch_tradingview_stocks(client, region="america", country_code="US",
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="localhost", port=8003)
-

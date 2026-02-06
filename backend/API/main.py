@@ -19,6 +19,23 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import asyncio
 
+import os
+from dotenv import load_dotenv
+
+# Load env from backend/API/.env so logging flags work
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env'))
+
+# Silence prints from this module by default. Set ENABLE_MAIN_LOGS=1 in env to enable.
+try:
+    ENABLE_MAIN_LOGS = os.getenv("ENABLE_MAIN_LOGS", "0") == "1"
+except Exception:
+    ENABLE_MAIN_LOGS = False
+
+if not ENABLE_MAIN_LOGS:
+    def _noop_print(*args, **kwargs):
+        return None
+    print = _noop_print
+
 # Import apps from each API module
 import ratings_api_dynamic
 import earnings_api
@@ -37,6 +54,13 @@ async def lifespan(app: FastAPI):
     print("[INIT] Initializing Ratings API...")
     ratings_api_dynamic.init_database()
     ratings_api_dynamic.migrate_from_json_if_needed()
+    # Populate accuracy on startup and wait for completion so we have a visible terminal log
+    try:
+        print("[INIT] Populating accuracy data (startup)... this may take a while")
+        ratings_api_dynamic.populate_accuracy_on_startup()
+        print("[INIT] Accuracy population completed on startup")
+    except Exception as acc_e:
+        print(f"[INIT] Error during accuracy population on startup: {acc_e}")
     asyncio.create_task(ratings_api_dynamic.background_updater())
     print("[OK] Ratings API: Ready")
     

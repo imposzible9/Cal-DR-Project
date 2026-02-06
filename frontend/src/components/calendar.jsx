@@ -54,6 +54,8 @@ const getLogoSlug = (name) => {
   try {
     const nameStr = String(name || '').trim();
     const upper = nameStr.toUpperCase();
+    // special-case: Semiconductor Manufacturing International Corp. -> tradingview slug
+    if (/SEMICONDUCTOR\s+MANUFACTURING\s+INTERNATIONAL/i.test(upper)) return 'semiconductor-manufacturing-international';
     if (/SPOTIFY/.test(upper)) return 'spotify-technology';
     if (/\bDNOW\b/.test(upper)) return 'now';
     // If company name starts with NOW or contains 'NOW INC' etc., prefer 'now'
@@ -145,10 +147,10 @@ const extractSymbol = (str) => {
 };
 
 const formatMarketCapValue = (val, currency = "", isLargeNumber = false) => {
-  if (val === null || val === undefined || val === "" || val === "-") return <span className="text-gray-300 text-xs sm:text-sm">-</span>;
+  if (val === null || val === undefined || val === "" || val === "-") return <span className="text-gray-600 text-xs sm:text-sm">-</span>;
 
   const num = Number(val);
-  if (isNaN(num)) return <span className="text-gray-300 text-xs sm:text-sm">-</span>;
+  if (isNaN(num)) return <span className="text-gray-600 text-xs sm:text-sm">-</span>;
 
   let displayNum = num;
   let suffix = "";
@@ -216,10 +218,10 @@ const formatMarketCapValue = (val, currency = "", isLargeNumber = false) => {
 };
 
 const formatValue = (val, currency = "", isLargeNumber = false) => {
-  if (val === null || val === undefined || val === "" || val === "-") return <span className="text-gray-300 text-xs sm:text-sm">-</span>;
+  if (val === null || val === undefined || val === "" || val === "-") return <span className="text-gray-600 text-xs sm:text-sm">-</span>;
 
   const num = Number(val);
-  if (isNaN(num)) return <span className="text-gray-300 text-xs sm:text-sm">-</span>;
+  if (isNaN(num)) return <span className="text-gray-600 text-xs sm:text-sm">-</span>;
 
   let displayNum = num;
   let suffix = "";
@@ -254,7 +256,7 @@ const formatValue = (val, currency = "", isLargeNumber = false) => {
 };
 
 const formatColoredValue = (val, suffix = "", currency = "") => {
-  if (val === null || val === undefined || val === "" || val === "-") return <span className="text-gray-300 text-xs sm:text-sm">-</span>;
+  if (val === null || val === undefined || val === "" || val === "-") return <span className="text-gray-600 text-xs sm:text-sm">-</span>;
   const num = Number(val);
   const colorClass = num > 0 ? "text-[#27AE60]" : num < 0 ? "text-[#EB5757]" : "text-gray-500";
 
@@ -270,7 +272,7 @@ const formatColoredValue = (val, suffix = "", currency = "") => {
 };
 
 export default function Calendar() {
-  const [country, setCountry] = useState("US");
+  const [country, setCountry] = useState("All");
   const [earnings, setEarnings] = useState([]);
   const [loading, setLoading] = useState(false);
   const [lastUpdateTime, setLastUpdateTime] = useState(null);
@@ -382,11 +384,44 @@ export default function Calendar() {
             try {
             const drRes = await axios.get(import.meta.env.VITE_DR_LIST_API);
             const drRows = (drRes.data && drRes.data.rows) ? drRes.data.rows : (drRes.data || []);
+            // normalize exchange strings to short codes to allow matching between DR feed and earnings feed
+              const normalizeExchange = (s) => {
+              if (!s) return "";
+              const ss = s.toString().toUpperCase();
+              const map = [
+                ["NASDAQ GLOBAL SELECT","NASDAQ"],
+                ["NASDAQ GLOBAL","NASDAQ"],
+                ["NASDAQ","NASDAQ"],
+                ["NEW YORK STOCK EXCHANGE","NYSE"],
+                ["NYSE","NYSE"],
+                ["TOKYO","TSE"],
+                ["TSE","TSE"],
+                ["EURONEXT","EURONEXT"],
+                ["MIL","EURONEXT"],
+                ["HKEX","HKEX"],
+                ["HONG KONG","HKEX"],
+                ["STOCK EXCHANGE OF HONG KONG","HKEX"],
+                ["SHANGHAI","SSE"],
+                ["SSE","SSE"],
+                ["SZSE","SZSE"],
+                ["SET","SET"],
+                ["TWSE","TWSE"],
+                ["LSE","LSE"],
+                ["ASX","ASX"]
+              ];
+              for (let i = 0; i < map.length; i++) {
+                if (ss.includes(map[i][0])) return map[i][1];
+              }
+              return ss.replace(/\s+/g, " ").trim();
+            };
+
             const drByUnderlying = new Map();
             (drRows || []).forEach((item) => {
               const rawSym = (item.symbol || "").toUpperCase().trim();
               const strippedSym = rawSym.replace(/\d+$/, "");
               const uName = (item.underlying || (strippedSym || rawSym)).toUpperCase().trim();
+              const uExchangeRaw = (item.underlyingExchange || item.u_exch || item.exchange || "");
+              const uExchange = normalizeExchange(uExchangeRaw);
 
               // Also extract numeric code from underlyingName if present, e.g. "NETEASE, INC. (9999)" -> 9999
               let numericUnderlying = null;
@@ -402,36 +437,189 @@ export default function Calendar() {
                 drByUnderlying.get(uName).push(item);
               }
 
+              // primary key with exchange: uName|EX
+              if (uName && uExchange) {
+                const keyWithEx = `${uName}|${uExchange}`;
+                if (!drByUnderlying.has(keyWithEx)) drByUnderlying.set(keyWithEx, []);
+                drByUnderlying.get(keyWithEx).push(item);
+              }
+
               // fallback key: numeric underlying code (e.g., 9999)
               if (numericUnderlying) {
                 const key = numericUnderlying.toUpperCase();
                 if (!drByUnderlying.has(key)) drByUnderlying.set(key, []);
                 drByUnderlying.get(key).push(item);
               }
+              // additional fallback: trailing digits from symbol (e.g., PREMIA3151 -> 3151)
+              try {
+                const m2 = rawSym.match(/(\d{2,6})$/);
+                if (m2) {
+                  const symNum = m2[1];
+                  if (!drByUnderlying.has(symNum)) drByUnderlying.set(symNum, []);
+                  drByUnderlying.get(symNum).push(item);
+                  // also index numeric suffix with exchange
+                  if (uExchange) {
+                    const symNumEx = `${symNum}|${uExchange}`;
+                    if (!drByUnderlying.has(symNumEx)) drByUnderlying.set(symNumEx, []);
+                    drByUnderlying.get(symNumEx).push(item);
+                  }
+                }
+              } catch (e) { /* ignore */ }
             });
 
             const drSummary = {};
             drByUnderlying.forEach((list, u) => {
               let mostPopularDR = null; let maxVol = -1;
               let highSensitivityDR = null; let minBid = Infinity;
+              // pick a representative underlyingName for this group
+              let repUnderlyingName = null;
               list.forEach(dr => {
                 const vol = Number(dr.totalVolume) || 0;
                 const bid = Number(dr.bidPrice) || 0;
                 if (vol > maxVol) { maxVol = vol; mostPopularDR = { symbol: dr.symbol || "", volume: vol }; }
                 if (bid > 0 && bid < minBid) { minBid = bid; highSensitivityDR = { symbol: dr.symbol || "", bid: bid }; }
+                if (!repUnderlyingName && (dr.underlyingName || dr.underlying)) repUnderlyingName = (dr.underlyingName || dr.underlying);
               });
               if (!mostPopularDR && list.length > 0) {
                 mostPopularDR = { symbol: list[0].symbol || "", volume: Number(list[0].totalVolume) || 0 };
               }
-              drSummary[u] = { mostPopularDR, highSensitivityDR };
+              // store representative exchange if available (normalized to short code)
+              let repExchange = null;
+              if (list && list.length > 0) {
+                const repRaw = (list[0].underlyingExchange || list[0].u_exch || list[0].exchange || "");
+                repExchange = normalizeExchange(repRaw);
+              }
+              drSummary[u] = { mostPopularDR, highSensitivityDR, underlyingName: repUnderlyingName, underlyingExchange: (repExchange||"") };
             });
 
+            // Safer enrichment: prefer exact ticker match; otherwise use token-overlap on company name
             finalData = finalData.map(item => {
               try {
-                const key = (item.ticker || "").toUpperCase();
-                if (key && drSummary[key]) {
-                  return { ...item, mostPopularDR: drSummary[key].mostPopularDR, highSensitivityDR: drSummary[key].highSensitivityDR };
+                const keyTicker = (item.ticker || "").toUpperCase().trim();
+                const companyRaw = (item.company || "").toUpperCase().trim();
+                const itemExchange = normalizeExchange(item.exchange || item.currency || "");
+
+                // 0) Strict exact underlyingName + exchange match (highest priority)
+                const normalizeName = s => {
+                  if (!s) return '';
+                  let t = s.toString().toUpperCase();
+                  // remove Thai prefix 'บริษัท' and common parenthetical tickers
+                  t = t.replace(/^(บริษัท|บริษัทจำกัด)\s+/i, '');
+                  t = t.replace(/\([^)]*\)$/g, '');
+                  // remove common legal suffix tokens
+                  t = t.replace(/\b(INC|INCORPORATED|LTD|PLC|NV|N V|N\.V\.|SA|S\.A\.|CORP|COMPANY|LIMITED|HOLDINGS|HOLDING|GROUP)\b/g, ' ');
+                  t = t.replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+                  return t;
+                };
+                const normCompany = normalizeName(companyRaw);
+                if (normCompany && itemExchange) {
+                  try {
+                    for (const k of Object.keys(drSummary)) {
+                      const drEntry = drSummary[k];
+                      if (drEntry && drEntry.underlyingName && drEntry.underlyingExchange) {
+                        const uNorm = normalizeName((drEntry.underlyingName||'').toUpperCase());
+                        if (uNorm === normCompany && drEntry.underlyingExchange === itemExchange) {
+                          return { ...item, mostPopularDR: drEntry.mostPopularDR, highSensitivityDR: drEntry.highSensitivityDR };
+                        }
+                      }
+                    }
+                  } catch (e) { /* ignore */ }
                 }
+
+                // 1) Exact ticker match
+                if (keyTicker) {
+                  // prefer same-exchange keyed DR if available
+                  if (itemExchange && drSummary[`${keyTicker}|${itemExchange}`]) {
+                    const drEntry = drSummary[`${keyTicker}|${itemExchange}`];
+                    // numeric-only ticker guard: if ticker is numeric, ensure underlyingName overlaps with company
+                    if (keyTicker.match(/^\d+$/)) {
+                      const normalizeToken = s => s.replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+                      const compTokens = normalizeToken(companyRaw).split(' ').filter(t=>t.length>=2);
+                      const underTokens = normalizeToken((drEntry.underlyingName||'').toUpperCase()).split(' ').filter(t=>t.length>=2);
+                      const overlap = compTokens.filter(ct => underTokens.includes(ct)).length;
+                      if (overlap === 0) {
+                        // reject numeric-only match without underlying name overlap
+                      } else {
+                        return { ...item, mostPopularDR: drEntry.mostPopularDR, highSensitivityDR: drEntry.highSensitivityDR };
+                      }
+                    } else {
+                      return { ...item, mostPopularDR: drEntry.mostPopularDR, highSensitivityDR: drEntry.highSensitivityDR };
+                    }
+                  }
+                  if (drSummary[keyTicker]) {
+                    const drEntry = drSummary[keyTicker];
+                    if (keyTicker.match(/^\d+$/)) {
+                      const normalizeToken = s => s.replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+                      const compTokens = normalizeToken(companyRaw).split(' ').filter(t=>t.length>=2);
+                      const underTokens = normalizeToken((drEntry.underlyingName||'').toUpperCase()).split(' ').filter(t=>t.length>=2);
+                      const overlap = compTokens.filter(ct => underTokens.includes(ct)).length;
+                      if (overlap === 0) {
+                        // reject
+                      } else {
+                        return { ...item, mostPopularDR: drEntry.mostPopularDR, highSensitivityDR: drEntry.highSensitivityDR };
+                      }
+                    } else {
+                      return { ...item, mostPopularDR: drEntry.mostPopularDR, highSensitivityDR: drEntry.highSensitivityDR };
+                    }
+                  }
+                }
+
+                // 2) Exact company key match
+                if (companyRaw) {
+                  if (itemExchange && drSummary[`${companyRaw}|${itemExchange}`]) {
+                    const drEntry = drSummary[`${companyRaw}|${itemExchange}`];
+                    return { ...item, mostPopularDR: drEntry.mostPopularDR, highSensitivityDR: drEntry.highSensitivityDR };
+                  }
+                  if (drSummary[companyRaw]) {
+                    const drEntry = drSummary[companyRaw];
+                    return { ...item, mostPopularDR: drEntry.mostPopularDR, highSensitivityDR: drEntry.highSensitivityDR };
+                  }
+                }
+
+                // 3) Token-overlap matching: compute best match among drSummary keys
+                // Only consider DR entries whose exchange equals the earnings row exchange
+                if (companyRaw) {
+                  const normalize = (s) => s.replace(/[^A-Z0-9 ]/g, " ").replace(/\b(INC|LTD|PLC|NV|N V|N\.V\.|SA|S\.A\.)\b/g, " ").replace(/\s+/g, " ").trim();
+                  const compNorm = normalize(companyRaw);
+                  const compTokens = compNorm.split(' ').filter(t => t.length >= 2);
+                  if (compTokens.length > 0) {
+                    let bestKey = null;
+                    let bestScore = 0;
+                    Object.keys(drSummary).forEach(k => {
+                      const kNorm = normalize(k);
+                      const kTokens = kNorm.split(' ').filter(t => t.length >= 2);
+                      if (kTokens.length === 0) return;
+                      // require exchange equality to consider this dr entry
+                      try {
+                        const drEx = (drSummary[k] && drSummary[k].underlyingExchange) ? drSummary[k].underlyingExchange : "";
+                        if (itemExchange && drEx && drEx !== itemExchange) return;
+                      } catch (e) { /* ignore */ }
+                      let score = 0;
+                      compTokens.forEach(ct => { if (kTokens.includes(ct)) score += 1; });
+                      // also give small bonus if one token startsWith the other (prefix)
+                      compTokens.forEach(ct => { kTokens.forEach(kt => { if (kt.startsWith(ct) || ct.startsWith(kt)) score += 0.5; }); });
+                      if (score > bestScore) { bestScore = score; bestKey = k; }
+                    });
+
+                    // Require reasonable confidence to avoid false positives
+                    if (bestKey && (bestScore >= 2 || (bestScore >= 1 && compTokens.some(t => t.length > 4)))) {
+                      const drEntry = drSummary[bestKey];
+                      // If drEntry has an underlyingName and companyRaw has no token-overlap with it,
+                      // then consider this a low-confidence numeric-only mapping and skip it to avoid false positives
+                      if (drEntry && drEntry.underlyingName) {
+                        const underlyingNorm = normalize((drEntry.underlyingName || "").toUpperCase());
+                        const underTokens = underlyingNorm.split(' ').filter(t => t.length >= 2);
+                        const overlap = compTokens.filter(ct => underTokens.includes(ct)).length;
+                        if (overlap === 0 && bestKey.match(/^\d+$/)) {
+                          // reject numeric mapping when company name doesn't match underlyingName
+                          return item;
+                        }
+                      }
+                      return { ...item, mostPopularDR: drEntry.mostPopularDR, highSensitivityDR: drEntry.highSensitivityDR };
+                    }
+                  }
+                }
+
               } catch (e) { /* ignore */ }
               return item;
             });
@@ -439,24 +627,28 @@ export default function Calendar() {
             console.warn('DR enrichment failed:', err);
           }
 
-          setEarnings(finalData);
+          // Filter out rows that do not have any DR mapped (mostPopularDR or highSensitivityDR)
+          // Also exclude known false-positive tickers/companies (blacklist)
+          const BLACKLIST_TICKERS = new Set(["3151", "3968", "8136"]);
+          const BLACKLIST_COMPANY_KEYWORDS = ["VITAL KSK"];
+          const finalFiltered = (finalData || []).filter(item => {
+            if (!item) return false;
+            if (BLACKLIST_TICKERS.has((item.ticker || "").toString())) return false;
+            const companyUp = (item.company || "").toUpperCase();
+            if (BLACKLIST_COMPANY_KEYWORDS.some(k => companyUp.includes(k))) return false;
+            return (item.mostPopularDR || item.highSensitivityDR);
+          });
+          setEarnings(finalFiltered);
           setLastUpdateTime(apiUpdateTime || new Date());
-          const currentIds = new Set(finalData.map(e => `${e.ticker}-${e.date}`));
+          // Save all earnings for navbar badge persistence
+          try {
+            localStorage.setItem('calendar_all_earnings', JSON.stringify(finalFiltered));
+          } catch (e) {}
+          const currentIds = new Set(finalFiltered.map(e => `${e.ticker}-${e.date}`));
           const unseenIds = [...currentIds].filter(id => !seenEarningsIds.has(id));
           setNewEarningsCount(unseenIds.length);
-          if (isFirstLoad) {
-            if (seenEarningsIds.size === 0) {
-              setSeenEarningsIds(currentIds);
-              setNewEarningsCount(0);
-            } else {
-              const updatedSeenIds = new Set([...seenEarningsIds, ...currentIds]);
-              setSeenEarningsIds(updatedSeenIds);
-            }
-            setIsFirstLoad(false);
-          } else {
-            const updatedSeenIds = new Set([...seenEarningsIds, ...currentIds]);
-            setSeenEarningsIds(updatedSeenIds);
-          }
+          // Do NOT mark as seen automatically on load. Only mark as seen when user clicks or marks all as read.
+          setIsFirstLoad(false);
         }
       } catch (err) {
         if (!axios.isCancel(err)) {
@@ -709,11 +901,16 @@ export default function Calendar() {
         <div className="pt-6 sm:pt-10 pb-0 px-4 sm:px-0 flex-shrink-0" style={{ overflow: 'visible', zIndex: 100 }}>
           <div className="w-full lg:w-[1040px] max-w-full mx-auto lg:scale-[1.2] lg:origin-top" style={{ overflow: 'visible' }}>
             <h1 className="text-xl sm:text-2xl md:text-3xl font-bold mb-2 sm:mb-3 text-black">Earnings Calendar</h1>
-            <p className="text-[#6B6B6B] mb-4 sm:mb-6 md:mb-8 text-xs sm:text-sm md:text-base">Earnings Schedule for Companies with DRs Traded in Thailand.</p>
+            <p className="text-[#6B6B6B] mb-8 sm:mb-6 md:mb-8 text-xs sm:text-sm md:text-base">Earnings Schedule for Companies with DRs Traded in Thailand.</p>
 
             <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-3 md:gap-4 mb-2">
               <div className="relative z-[200] w-full md:w-auto" ref={countryDropdownRef} style={{ isolation: 'isolate', overflow: 'visible' }}>
-                <button type="button" onClick={() => setShowCountryMenu((prev) => !prev)} className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 bg-white px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#0B102A] w-full md:min-w-[180px] h-[37.33px]">
+                <button
+                  type="button"
+                  onClick={() => setShowCountryMenu((prev) => !prev)}
+                  className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 bg-white px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 w-full lg:w-[202.5px]"
+                  style={{ height: '37.33px', width: undefined }}
+                >
                   <span className="truncate flex items-center gap-2">
                     {selectedCountryOption.flag ? (
                       <img
@@ -724,11 +921,7 @@ export default function Calendar() {
                         onError={(e) => { if (!e.target.dataset.fallback) { e.target.dataset.fallback = '1'; e.target.src = `https://flagcdn.com/w40/${selectedCountryOption.flag}.png`; } }}
                       />
                     ) : (selectedCountryOption.code === 'All' || selectedCountryOption.code === 'all') ? (
-                      <svg className="w-5 h-5" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden>
-                        <circle cx="12" cy="12" r="10" fill="#00ADEF" />
-                        <path d="M6.5 13c-.2-1.2.4-2.6 1.4-3.3 1-.7 2.2-.6 3.4-.3 1.2.3 2.1.8 2.9 1.6.8.8 1.1 1.6.9 2.5-.2.9-1 1.6-1.8 1.9-.8.3-1.9.2-3.1-.2-1.2-.4-2.3-1-3.6-1.2z" fill="#7EE787" />
-                        <path d="M12 2a10 10 0 0 1 8 4 10 10 0 0 1-2 12 10 10 0 0 1-6 2 10 10 0 0 1-6-2 10 10 0 0 1 4-16" fill="#0077C8" opacity="0.18" />
-                      </svg>
+                      <i className="bi bi-globe text-gray-400" style={{ fontSize: '16px', lineHeight: '16px' }}></i>
                     ) : null}
                     <span>{selectedLabel}</span>
                   </span>
@@ -751,12 +944,8 @@ export default function Calendar() {
                                 className="w-5 h-5 object-contain rounded-sm"
                                 onError={(e) => { if (!e.target.dataset.fallback) { e.target.dataset.fallback = '1'; e.target.src = `https://flagcdn.com/w40/${opt.flag}.png`; } }}
                               />
-                            ) : (opt.code === 'All' || opt.code === 'all') ? (
-                              <svg className="w-5 h-5" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden>
-                                <circle cx="12" cy="12" r="10" fill="#00ADEF" />
-                                <path d="M6.5 13c-.2-1.2.4-2.6 1.4-3.3 1-.7 2.2-.6 3.4-.3 1.2.3 2.1.8 2.9 1.6.8.8 1.1 1.6.9 2.5-.2.9-1 1.6-1.8 1.9-.8.3-1.9.2-3.1-.2-1.2-.4-2.3-1-3.6-1.2z" fill="#7EE787" />
-                                <path d="M12 2a10 10 0 0 1 8 4 10 10 0 0 1-2 12 10 10 0 0 1-6 2 10 10 0 0 1-6-2 10 10 0 0 1 4-16" fill="#0077C8" opacity="0.18" />
-                              </svg>
+                            ) : (opt.code === 'all' || opt.code === 'All') ? (
+                              <i className="bi bi-globe text-gray-400" style={{ fontSize: '16px', lineHeight: '16px' }}></i>
                             ) : null}
                             <span>{opt.label}</span>
                           </span>
@@ -767,7 +956,7 @@ export default function Calendar() {
                 )}
               </div>
               <div className="relative w-full md:w-auto">
-                <input type="text" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search DR..." className="bg-white pl-3 sm:pl-4 pr-10 py-2 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#0B102A] focus:border-transparent w-full md:w-64 text-xs sm:text-sm shadow-sm h-[37.33px]" />
+                <input type="text" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search..." className="bg-white pl-3 sm:pl-4 pr-10 py-2 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#0B102A] focus:border-transparent w-full md:w-64 text-xs sm:text-sm shadow-sm h-[37.33px]" />
                 <i className="bi bi-search absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400" style={{ fontSize: 14 }} />
               </div>
             </div>
@@ -805,14 +994,14 @@ export default function Calendar() {
               </div>
             </div>
 
-            <div className="flex flex-col items-end gap-0.5 text-[10px] sm:text-xs text-gray-500 pr-1 mb-1.5">
-              {newEarningsCount > 0 && (
+            <div className="flex flex-col items-end gap-0.5 text-[10px] sm:text-xs text-gray-500 pr-1 mb-5">
+              {sortedEarnings.filter(e => e.isNew).length > 0 && (
                 <button
                   onClick={markAllAsSeen}
                   className="text-blue-600 hover:text-blue-700 font-medium transition-colors"
                   title="Mark all as read"
                 >
-                  Mark all as read ({newEarningsCount})
+                  Mark all as read ({sortedEarnings.filter(e => e.isNew).length})
                 </button>
               )}
             </div>
@@ -827,11 +1016,13 @@ export default function Calendar() {
             <div className="block lg:hidden p-3">
               <div className="space-y-3">
                 {loading ? (
-                  <div className="py-12 text-center text-gray-500 text-sm">Loading data...</div>
+                  <div className="py-12 flex flex-col items-center justify-center gap-3 text-center text-gray-500 text-sm">
+                    <div className="text-lg font-semibold">Loading data...</div>
+                  </div>
                 ) : sortedEarnings.length === 0 ? (
                   <div className="py-12 flex flex-col items-center justify-center gap-3 text-center text-gray-700">
                     <div className="empty-icon-wrapper">
-                      <svg className="empty-icon empty-pulse w-28 h-28" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden>
+                      <svg className="empty-icon empty-pulse w-28 h-28 ml-4" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden>
                         <rect x="6" y="10" width="52" height="44" rx="6" fill="#F0F7FF" stroke="#D4E8FF" strokeWidth="1.5" />
                         <rect x="10" y="6" width="12" height="8" rx="2" fill="#2F80ED" />
                         <rect x="42" y="6" width="12" height="8" rx="2" fill="#2F80ED" />
@@ -1012,14 +1203,22 @@ export default function Calendar() {
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {loading ? (
-                  <tr><td colSpan={12} className="py-12 text-center text-gray-500">Loading data...</td></tr>
+                  <tr>
+                    <td colSpan={12} className="p-0">
+                      <div className="w-full h-[50vh] flex items-center justify-start pl-140">
+                        <div className="text-center text-gray-500">
+                          <div className="text-xl font-semibold">Loading data...</div>
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
                 ) : sortedEarnings.length === 0 ? (
                   <tr>
                     <td colSpan={12} className="p-0">
                       <div className="w-full h-[50vh] flex items-center justify-start pl-117">
                         <div className="text-center">
-                          <div className="empty-icon-wrapper mb-4">
-                            <svg className="empty-icon empty-pulse w-36 h-36" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden>
+                            <div className="empty-icon-wrapper mb-4">
+                            <svg className="empty-icon empty-pulse w-36 h-36 ml-20" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden>
                               <rect x="6" y="10" width="52" height="44" rx="6" fill="#F0F7FF" stroke="#D4E8FF" strokeWidth="1.5" />
                               <rect x="10" y="6" width="12" height="8" rx="2" fill="#2F80ED" />
                               <rect x="42" y="6" width="12" height="8" rx="2" fill="#2F80ED" />

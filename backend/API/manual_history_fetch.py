@@ -22,17 +22,19 @@ import ratings_api_dynamic as rmod
 
 # Markets and their desired close timestamps (Thai time)
 TARGETS = {
-    "US": "2026-01-30T04:30:00+07:00",
-    "DK": "2026-01-29T23:30:00+07:00",
-    "NL": "2026-01-29T23:59:00+07:00",
-    "FR": "2026-01-29T23:59:00+07:00",
-    "IT": "2026-01-29T23:59:00+07:00",
-    "HK": "2026-01-29T15:30:00+07:00",
-    "JP": "2026-01-29T13:30:00+07:00",
-    "SG": "2026-01-29T16:30:00+07:00",
-    "TW": "2026-01-29T13:00:00+07:00",
-    "CN": "2026-01-29T14:30:00+07:00",
-    "VN": "2026-01-29T15:30:00+07:00",
+    #"US": "2026-02-04T22:00:00+07:00",
+
+    #"FR": "2026-02-05T15:30:00+07:00",
+    #"IT": "2026-02-05T15:30:00+07:00",
+    #"NL": "2026-02-05T15:30:00+07:00",
+    #"DK": "2026-02-05T15:30:00+07:00",
+
+    "JP": "2026-02-06T07:30:00+07:00",
+    "HK": "2026-02-06T09:00:00+07:00",
+    "CN": "2026-02-06T09:00:00+07:00",
+    "TW": "2026-02-06T08:30:00+07:00",
+    "SG": "2026-02-06T08:30:00+07:00",
+    "VN": "2026-02-06T09:30:00+07:00",
 }
 
 BKK_TZ = ZoneInfo("Asia/Bangkok")
@@ -99,21 +101,35 @@ async def process_market(market_code: str, snapshot_ts_thai: datetime):
             print(f"[ManualFetch] No tickers mapped to market {market_code}")
             return
 
-        # Batch fetch in groups to avoid rate limits
-        batch_size = 1
+        # Batch fetch in groups to better utilize concurrency and speed up fetching.
+        # Defaults can be tuned via environment variables:
+        #  - MANUAL_FETCH_BATCH_SIZE
+        #  - MANUAL_FETCH_BATCH_SLEEP
+        #  - MANUAL_FETCH_RETRY_SLEEP
+        default_batch = max(8, int(local_max_concurrency * 2))
+        batch_size = int(os.getenv("MANUAL_FETCH_BATCH_SIZE", default_batch))
+        # clamp batch_size
+        batch_size = max(1, min(len(items), batch_size))
+
         all_results = []
         item_map = {it["u_code"]: it for it in items}
+
+        # allow overriding sleep between batches (keep small buffer to avoid hitting rate limits)
+        sleep_time = float(os.getenv("MANUAL_FETCH_BATCH_SLEEP", BATCH_SLEEP))
+        sleep_time = max(0.05, sleep_time)
+
         for i in range(0, len(items), batch_size):
             batch = items[i:i+batch_size]
             results = await fetch_for_items(client, batch, semaphore)
             all_results.extend(results)
-            await asyncio.sleep(BATCH_SLEEP)
+            await asyncio.sleep(sleep_time)
 
         # Retry failed tickers with more conservative settings
         failed = [r for r in all_results if not r or not r.get("success")]
         retry_round = 0
         max_retries = 2
-        retry_sleep = BATCH_SLEEP * 3
+        retry_sleep = float(os.getenv("MANUAL_FETCH_RETRY_SLEEP", BATCH_SLEEP * 1.5))
+        retry_sleep = max(0.1, retry_sleep)
         while failed and retry_round < max_retries:
             retry_round += 1
             retry_items = []
@@ -234,9 +250,13 @@ async def main():
             dt = dt.replace(tzinfo=BKK_TZ)
         targets[m] = dt
 
-    # process sequentially (to be safe with DR API rate limits)
-    for market_code, ts in targets.items():
-        await process_market(market_code, ts)
+    # By default process sequentially to be conservative with DR API rate limits.
+    # Set `MANUAL_FETCH_PARALLEL_MARKETS=1` to run market snapshots in parallel (use with care).
+    if os.getenv("MANUAL_FETCH_PARALLEL_MARKETS") == "1":
+        await asyncio.gather(*(process_market(m, ts) for m, ts in targets.items()))
+    else:
+        for market_code, ts in targets.items():
+            await process_market(market_code, ts)
 
 if __name__ == "__main__":
     asyncio.run(main())

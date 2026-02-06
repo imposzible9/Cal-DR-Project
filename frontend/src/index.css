@@ -45,3 +45,11 @@
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
+
+/* Hide scrollbar utility */
+.hide-scrollbar {
+  scrollbar-width: none; /* Firefox */
+}
+.hide-scrollbar::-webkit-scrollbar {
+  display: none; /* Chrome, Safari */
+}

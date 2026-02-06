@@ -7,6 +7,20 @@ const Navbar = () => {
   const location = useLocation();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [showStatsIcon, setShowStatsIcon] = useState(false);
+  const [calendarNotificationCount, setCalendarNotificationCount] = useState(0);
+
+  // Helper to count unseen earnings from localStorage
+  const getUnseenEarningsCount = () => {
+    try {
+      const seen = new Set(JSON.parse(localStorage.getItem('calendar_seen_earnings') || '[]'));
+      // Optionally, get all earnings from localStorage or backend
+      const allEarnings = JSON.parse(localStorage.getItem('calendar_all_earnings') || '[]');
+      if (!allEarnings.length) return 0;
+      return allEarnings.filter(e => !seen.has(`${e.ticker}-${e.date}`)).length;
+    } catch {
+      return 0;
+    }
+  };
 
   const isActive = (path) => location.pathname === path;
 
@@ -23,7 +37,20 @@ const Navbar = () => {
 
     const handler = () => setShowStatsIcon(true);
     window.addEventListener('stats:visited', handler);
-    return () => window.removeEventListener('stats:visited', handler);
+
+    // Listen for calendar notification updates
+    const calendarHandler = (e) => {
+      setCalendarNotificationCount(e.detail?.count || 0);
+    };
+    window.addEventListener('calendarNotificationUpdate', calendarHandler);
+
+    // On mount, check unseen earnings from localStorage
+    setCalendarNotificationCount(getUnseenEarningsCount());
+
+    return () => {
+      window.removeEventListener('stats:visited', handler);
+      window.removeEventListener('calendarNotificationUpdate', calendarHandler);
+    };
   }, []);
 
   const closeMenu = () => {
@@ -31,7 +58,7 @@ const Navbar = () => {
   };
 
   return (
-    <header className="bg-white sticky top-0 z-[110] shadow-sm border-b border-gray-200">
+    <header className="bg-white sticky top-0 z-[12000] shadow-sm border-b border-gray-200">
       <div className="w-full max-w-[1040px] mx-auto px-4 md:px-0 py-3 md:py-5 flex items-center justify-between relative lg:scale-[1.2] lg:origin-center">
 
         {/* Logo */}
@@ -99,9 +126,12 @@ const Navbar = () => {
 
           <Link
             to="/calendar"
-            className={`text-sm font-medium transition-colors ${isActive('/calendar') ? 'text-blue-500' : 'text-gray-700 hover:text-gray-900'}`}
+            className={`relative text-sm font-medium transition-colors ${isActive('/calendar') ? 'text-blue-500' : 'text-gray-700 hover:text-gray-900'}`}
           >
             Calendar
+            {calendarNotificationCount > 0 && (
+              <span className="absolute -top-2 -right-2 bg-red-500 rounded-full w-3 h-3 shadow-md"></span>
+            )}
           </Link>
 
           <Link

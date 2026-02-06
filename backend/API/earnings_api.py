@@ -14,6 +14,17 @@ from dotenv import load_dotenv
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env'))
 
+# Silence prints from this module by default. Set ENABLE_EARNINGS_LOGS=1 in env to enable.
+try:
+    ENABLE_EARNINGS_LOGS = os.getenv("ENABLE_EARNINGS_LOGS", "0") == "1"
+except Exception:
+    ENABLE_EARNINGS_LOGS = False
+
+if not ENABLE_EARNINGS_LOGS:
+    def _noop_print(*args, **kwargs):
+        return None
+    print = _noop_print
+
 # ================= CONFIG =================
 TRADINGVIEW_SCAN_URL = os.getenv("TRADINGVIEW_SCAN_URL") or "https://scanner.tradingview.com/{market}/scan?label-product=screener-stock-old"
 # ✅ เพิ่ม DR_LIST_URL เพื่อใช้ดึงรายชื่อหุ้นที่มี DR

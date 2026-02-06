@@ -16,22 +16,6 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env'))
-from fastapi import FastAPI, Query
-from fastapi.middleware.cors import CORSMiddleware
-from contextlib import asynccontextmanager
-import httpx
-import uvicorn
-import asyncio
-import json
-import os
-import re
-import random
-import sqlite3
-from datetime import datetime, timedelta, time
-from zoneinfo import ZoneInfo
-from dotenv import load_dotenv
-
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env'))
 
 # Debug logging setup
 DEBUG_LOG_PATH = os.getenv("DEBUG_LOG_PATH") or r"c:\Users\Thoz\Desktop\New-Cal-DR-Project-main\.cursor\debug.log"
@@ -1507,6 +1491,55 @@ async def background_updater():
         try:
             now_thai = datetime.now(bkk_tz)
             print(f"[Background] Starting ratings update cycle at {now_thai.strftime('%Y-%m-%d %H:%M:%S')} ไทย")
+            # --- Scheduler: trigger per-market history fetch at market-open times ---
+            try:
+                # initialize per-market last-fetched map
+                if not hasattr(background_updater, "_last_fetched_date"):
+                    background_updater._last_fetched_date = {}
+
+                for market_code in MARKET_TIMEZONE.keys():
+                    try:
+                        open_thai = get_market_open_thai(market_code, now_thai)
+                        last_date = background_updater._last_fetched_date.get(market_code)
+                        fetched_already = (last_date == open_thai.date())
+                        # Log planned next-open time and whether it's already fetched for that open
+                        try:
+                            print(f"[Scheduler] Market {market_code} next open (TH): {open_thai.strftime('%Y-%m-%d %H:%M:%S')} | fetched_today={fetched_already}")
+                        except Exception:
+                            # In case of any formatting issue, still continue
+                            print(f"[Scheduler] Market {market_code} next open (TH): {open_thai} | fetched_today={fetched_already}")
+
+                        # If we've reached or passed today's open and haven't fetched for that open yet
+                        if now_thai >= open_thai and not fetched_already:
+                            print(f"[Scheduler] Market {market_code} open at {open_thai.strftime('%Y-%m-%d %H:%M:%S')}. Scheduling fetch...")
+                            # schedule non-blocking task so batch processing continues
+                            try:
+                                asyncio.create_task(fetch_market_history(market_code))
+                                background_updater._last_fetched_date[market_code] = open_thai.date()
+                            except Exception as task_e:
+                                print(f"[Scheduler] Failed to create task for {market_code}: {task_e}")
+                        else:
+                            # It's possible the scheduler loop missed the exact open moment (cycle gap).
+                            # Check previous open (open_thai - 1 day) and allow a short grace window to catch missed opens.
+                            try:
+                                prev_open = open_thai - timedelta(days=1)
+                                grace_window = timedelta(minutes=15)
+                                prev_fetched = (background_updater._last_fetched_date.get(market_code) == prev_open.date())
+                                if not prev_fetched and now_thai >= prev_open and now_thai < prev_open + grace_window:
+                                    print(f"[Scheduler] Missed open detected for {market_code} at {prev_open.strftime('%Y-%m-%d %H:%M:%S')}. Scheduling fetch (missed-window).")
+                                    try:
+                                        asyncio.create_task(fetch_market_history(market_code))
+                                        background_updater._last_fetched_date[market_code] = prev_open.date()
+                                    except Exception as task_e:
+                                        print(f"[Scheduler] Failed to create missed-window task for {market_code}: {task_e}")
+                            except Exception as miss_e:
+                                # swallow errors here to avoid breaking scheduler
+                                pass
+                    except Exception as me:
+                        print(f"[Scheduler] Error computing open time for {market_code}: {me}")
+            except Exception:
+                # scheduler must not break main loop
+                pass
             
             async with httpx.AsyncClient() as client:
                 # Get the full list of DRs
@@ -3187,6 +3220,45 @@ def save_accuracy_to_db_new(cur, ticker, timestamp, price, price_prev, open_prev
     except Exception:
         # If this fails, don't block overall flow — leave previously saved values
         pass
+    # Also recompute weekly aggregates in the same way as daily
+    try:
+        cur.execute(f"""
+            SELECT weekly_rating AS rating, weekly_prev AS prev, change_pct, open_prev, open
+            FROM rating_accuracy
+            WHERE ticker=? AND timestamp >= datetime(?, '-{window_days} days') AND timestamp <= ?
+            ORDER BY timestamp DESC
+        """, (ticker.upper(), timestamp, timestamp))
+        rows = cur.fetchall()
+        rows_mapped = []
+        for r in rows:
+            try:
+                rd = {"weekly_rating": r[0], "weekly_prev": r[1], "change_pct": r[2], "open_prev": r[3], "open": r[4]}
+            except Exception:
+                rd = {"rating": r["rating"] if "rating" in r.keys() else None,
+                      "prev": r["prev"] if "prev" in r.keys() else None,
+                      "change_pct": r["change_pct"] if "change_pct" in r.keys() else 0,
+                      "open_prev": r["open_prev"] if "open_prev" in r.keys() else None,
+                      "open": r["open"] if "open" in r.keys() else None}
+            rows_mapped.append(rd)
+
+        # Normalize to keys expected by calculator (it accepts 'rating'/'prev' or 'daily_rating'/'daily_prev')
+        weekly_rows_for_calc = []
+        for rr in rows_mapped:
+            if "weekly_rating" in rr or "weekly_prev" in rr:
+                weekly_rows_for_calc.append({"rating": rr.get("weekly_rating"), "prev": rr.get("weekly_prev"), "change_pct": rr.get("change_pct"), "open_prev": rr.get("open_prev"), "open": rr.get("open")})
+            else:
+                weekly_rows_for_calc.append(rr)
+
+        weekly_acc = calculate_accuracy_matching_frontend(weekly_rows_for_calc, None, change_threshold=2.0)
+
+        cur.execute("""
+            UPDATE rating_accuracy
+            SET samplesize_weekly=?, correct_weekly=?, incorrect_weekly=?, accuracy_weekly=?
+            WHERE ticker=? AND timestamp=?
+        """, (weekly_acc["total"], weekly_acc["correct"], weekly_acc["incorrect"], weekly_acc["accuracy"], ticker.upper(), timestamp))
+    except Exception:
+        # Non-fatal: keep previously saved weekly values
+        pass
 
 def calculate_and_save_accuracy_for_ticker(cur, ticker, timestamp_str, price, change_pct, currency=None, high=None, low=None, window_days=90):
 
@@ -3892,15 +3964,16 @@ def get_mock_aapl_history_formatted(timeframe="1D", filter_rating=None):
                     continue
                 
                 if rating and rating.lower() not in ["neutral", "unknown"]:
-                    # Get previous price if available
+                    # Get previous open (fallback to previous price if open not available)
                     prev_price = history[idx + 1].get("price", 0) if idx + 1 < len(history) else 0
+                    prev_open = history[idx + 1].get("open", prev_price) if idx + 1 < len(history) else prev_price
                     
                     history_items.append({
                         "rating": rating,
                         "prev": prev_rating or "Unknown",
                         "timestamp": h.get(changed_at_key),
                         "date": h.get(changed_at_key),
-                        "prev_close": prev_price,
+                        "prev_open": prev_open,
                         "result_price": h.get("price", 0),
                         "change_pct": h.get("change_pct", 0),
                         "change_abs": h.get("change_abs", 0)
@@ -4108,7 +4181,7 @@ def get_history_with_accuracy(
         query2_start = time.time()
         cur.execute("""
             SELECT 
-                timestamp, open, price, price_prev, change_pct, currency, high, low, window_day,
+                timestamp, open, price, price_prev, open_prev, change_pct, currency, high, low, window_day,
                 daily_rating, daily_prev, samplesize_daily, correct_daily, incorrect_daily, accuracy_daily,
                 weekly_rating, weekly_prev, samplesize_weekly, correct_weekly, incorrect_weekly, accuracy_weekly
             FROM rating_accuracy
@@ -4159,8 +4232,26 @@ def get_history_with_accuracy(
             price_prev = row.get("price_prev") or 0
             change_pct = row.get("change_pct") or 0
 
-            prev_close = price_prev if price_prev else 0
-            change_abs = price - prev_close if price and prev_close else 0
+            # Prefer `open_prev` stored in `rating_accuracy` (faster and canonical).
+            # Fall back to querying `rating_history` only if `open_prev` is None.
+            prev_open = row.get("open_prev")
+            if prev_open is None:
+                prev_open = 0
+                try:
+                    cur.execute(
+                        "SELECT open FROM rating_history WHERE ticker=? AND timestamp < ? ORDER BY timestamp DESC LIMIT 1",
+                        (ticker.upper(), timestamp)
+                    )
+                    prev_row = cur.fetchone()
+                    if prev_row:
+                        try:
+                            prev_open = prev_row["open"] if prev_row["open"] is not None else 0
+                        except Exception:
+                            prev_open = prev_row[0] if prev_row[0] is not None else 0
+                except Exception:
+                    prev_open = 0
+
+            change_abs = price - prev_open if price and prev_open else 0
 
             item = {
                 "rating": rating,
@@ -4168,7 +4259,7 @@ def get_history_with_accuracy(
                 "timestamp": timestamp,
                 "date": timestamp,
                 "open": open_price,
-                "prev_close": prev_close,
+                "prev_open": prev_open,
                 "result_price": price,
                 "change_pct": change_pct,
                 "change_abs": change_abs,

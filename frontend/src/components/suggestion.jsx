@@ -145,7 +145,7 @@
     }, []);
     const currentLabel = options.find(o => o.val === value)?.label || value;
     return (
-      <div className="relative z-[60] flex-1 sm:flex-initial sm:w-auto" ref={ref}>
+      <div className="relative z-60 flex-1 sm:flex-initial sm:w-auto" ref={ref}>
         <button onClick={() => setIsOpen(!isOpen)} className="flex items-center justify-between gap-2 px-3 sm:px-4 py-2 bg-white border border-gray-200 rounded-xl text-xs sm:text-sm w-full sm:min-w-[140px] md:min-w-[180px] hover:border-gray-300 transition-colors shadow-sm h-[37.33px]">
           <span className="text-gray-800 font-medium truncate">{currentLabel}</span>
           <svg className={`h-4 w-4 shrink-0 transition-transform text-gray-500 ${isOpen ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" /></svg>
@@ -198,7 +198,7 @@
 
     return (
       <div
-        className="fixed z-[5000] pointer-events-none transition-opacity duration-200 hidden sm:block"
+        className="fixed z-5000 pointer-events-none transition-opacity duration-200 hidden sm:block"
         style={{
           left: `${position.x}px`,
           top: `${position.y - 10}px`,
@@ -213,7 +213,7 @@
             </svg>
             <span className="text-blue-50">{children}</span>
           </div>
-          <div className="absolute bottom-[-6px] left-1/2 transform -translate-x-1/2 w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-t-[6px] border-t-[#0B102A]"></div>
+          <div className="absolute -bottom-1.5 left-1/2 transform -translate-x-1/2 w-0 h-0 border-l-6 border-l-transparent border-r-6 border-r-transparent border-t-6 border-t-[#0B102A]"></div>
         </div>
       </div>
     );
@@ -424,6 +424,11 @@
         }
       }
 
+      // Remove entries where prev_open is missing or zero — frontend should skip these
+      // (backend uses 0 when prev_open is not available). Keep only items
+      // where prev_open is present and non-zero to allow open-to-open comparisons.
+      filtered = filtered.filter(item => (item.prev_open != null) && Number(item.prev_open) !== 0);
+
       // Apply rating filter after restricting to the day's entries so filters only consider that day
       if (filterRating) filtered = filtered.filter(item => item.rating === filterRating);
 
@@ -572,7 +577,7 @@
     };
 
     return (
-      <div className="fixed inset-0 z-[2000] flex items-center justify-center p-2 sm:p-4">
+      <div className="fixed inset-0 z-2000 flex items-center justify-center p-2 sm:p-4">
         <div className="absolute inset-0 bg-[#0B102A]/40 backdrop-blur-sm transition-opacity" onClick={onClose}></div>
         <div className="relative bg-white w-full max-w-[600px] rounded-2xl sm:rounded-3xl shadow-2xl overflow-hidden max-h-[95vh] sm:max-h-[90vh] overflow-y-auto">
 
@@ -678,7 +683,7 @@
           </div>
 
           {/* Timeline Section - Light Theme */}
-          <div className="bg-white p-3 sm:p-6 max-h-[50vh] sm:max-h-[60vh] overflow-y-auto">
+          <div className="bg-white p-3 sm:p-6 pb-20 sm:pb-24 max-h-[50vh] sm:max-h-[60vh] overflow-y-auto">
             <div className="sm:mb-7 mb-4 flex items-center justify-center">
               <div className="flex items-center gap-3 w-full sm:w-auto">
                 <button
@@ -703,7 +708,7 @@
             ) : historyData.length > 0 ? (
               <div className="relative">
                 <div className="space-y-4 sm:space-y-6 relative">
-                  <div className="absolute left-[14px] sm:left-[16px] w-[2px] bg-gray-200" style={{ top: '20px', bottom: '150px' }}></div>
+                  <div className="absolute left-3.5 sm:left-4 w-0.5 bg-gray-200" style={{ top: '20px', bottom: '150px' }}></div>
                   {historyData.map((log, idx) => {
                     const scorePrev = RATING_SCORE[(log.prev || "").toLowerCase()] || 0;
                     const scoreCurr = RATING_SCORE[(log.rating || "").toLowerCase()] || 0;
@@ -720,7 +725,7 @@
                       <div key={idx} className="relative pl-9 sm:pl-12">
                         {/* Timeline Dot and Date */}
                         <div className="flex items-center mb-1.5 sm:mb-2">
-                          <div className={`absolute left-[14px] sm:left-[16px] w-7 h-7 sm:w-9 sm:h-9 rounded-full ${dotColor} flex items-center justify-center`} style={{ transform: 'translateX(-50%)' }}>
+                          <div className={`absolute left-3.5 sm:left-4 w-7 h-7 sm:w-9 sm:h-9 rounded-full ${dotColor} flex items-center justify-center`} style={{ transform: 'translateX(-50%)' }}>
                             <div className="w-4 h-4 sm:w-5 sm:h-5 rounded-full bg-white"></div>
                           </div>
                           <span className="text-xs sm:text-sm font-semibold text-gray-900">{formatModalDate(log.timestamp || log.date)}</span>
@@ -752,7 +757,7 @@
                                     {formatModalTime(log.prev_timestamp ?? historyData[idx + 1]?.timestamp ?? historyData[idx + 1]?.date ?? null)}
                                   </>
                                 ) : (
-                                  formatModalDate(historyData[idx + 1]?.timestamp ?? historyData[idx + 1]?.date ?? null)
+                                  formatModalDate(log.prev_timestamp ?? historyData[idx + 1]?.timestamp ?? historyData[idx + 1]?.date ?? log.timestamp ?? log.date ?? null)
                                 )}
                               </div>
                               <div className="text-sm sm:text-lg font-semibold text-gray-900 font-mono">${formatPrice(log.prev_open ?? log.prev_close ?? 0)}</div>
@@ -795,14 +800,16 @@
               </div>
             )}
 
-            {/* Close Button */}
-            <div className="mt-4 sm:mt-6 flex justify-end">
-              <button
-                onClick={onClose}
-                className="px-4 sm:px-6 py-1.5 sm:py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg text-xs sm:text-sm font-medium transition-colors"
-              >
-                close
-              </button>
+            {/* Close Button (absolute footer) */}
+            <div className="absolute left-0 right-0 bottom-5 flex justify-end z-20 px-4 sm:px-6 pointer-events-none">
+              <div className="pointer-events-auto">
+                <button
+                  onClick={onClose}
+                  className="px-4 sm:px-6 py-1.5 sm:py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg text-xs sm:text-sm font-medium transition-colors"
+                >
+                  close
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -1088,7 +1095,7 @@
       const downColor = active && direction === "desc" ? "#FFFFFF" : "rgba(255, 255, 255, 0.4)";
       return (
         <div className="flex items-center ml-0 shrink-0">
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" className="w-[10px] sm:w-[12px] h-[10px] sm:h-[12px] transition-all duration-200">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" className="w-2.5 sm:w-3 h-2.5 sm:h-3 transition-all duration-200">
             <path d="M14 2.256V30c-2.209 0-4-1.791-4-4V13H4.714c-.633 0-.949-.765-.502-1.212l9.607-9.607C13.886 2.114 14 2.162 14 2.256z" fill={upColor} />
             <path d="M27.788 20.212l-9.6 9.6C18.118 29.882 18 29.832 18 29.734V2c2.209 0 4 1.791 4 4v13h5.286C27.918 19 28.235 19.765 27.788 20.212z" fill={downColor} />
           </svg>
@@ -1123,9 +1130,14 @@
                     <button onClick={() => { setTimeframe("1D"); trackFilter('timeframe', '1D'); }} className={`flex-1 sm:flex-none px-3 py-1 rounded-lg text-xs sm:text-sm font-medium transition-all h-full ${timeframe === "1D" ? "bg-[#0B102A] text-white shadow-md" : "text-gray-800 hover:bg-gray-50"}`}>1 Day</button>
                     <button onClick={() => { setTimeframe("1W"); trackFilter('timeframe', '1W'); }} className={`flex-1 sm:flex-none px-3 py-1 rounded-lg text-xs sm:text-sm font-medium transition-all h-full ${timeframe === "1W" ? "bg-[#0B102A] text-white shadow-md" : "text-gray-800 hover:bg-gray-50"}`}>1 Week</button>
                   </div>
-                  <div className="flex items-center gap-2 w-full sm:w-auto">
-                    <div className="relative z-200 flex-1 sm:flex-initial" ref={countryDropdownRef} style={{ isolation: 'isolate', overflow: 'visible' }}>
-                      <button type="button" onClick={() => setShowCountryMenu((prev) => !prev)} className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 bg-white px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 w-full sm:min-w-[180px] h-[37.33px]">
+                  <div className="flex items-center gap-2 md:gap-4 w-full sm:w-auto">
+                    <div className="relative z-200 flex-1 sm:flex-initial w-1/2" ref={countryDropdownRef} style={{ isolation: 'isolate', overflow: 'visible' }}>
+                      <button
+                        type="button"
+                        onClick={() => setShowCountryMenu((prev) => !prev)}
+                        className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 bg-white px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 w-full md:w-[202.5px]"
+                        style={{ height: '37.33px', width: undefined }}
+                      >
                         <span className="truncate flex items-center gap-2">
                           {selectedCountryOption.flag ? (
                             <img
@@ -1136,18 +1148,14 @@
                               onError={(e) => { if (!e.target.dataset.fallback) { e.target.dataset.fallback = '1'; e.target.src = `https://flagcdn.com/w40/${selectedCountryOption.flag}.png`; } }}
                             />
                           ) : (selectedCountryOption.code === 'All' || selectedCountryOption.code === 'all') ? (
-                            <svg className="w-5 h-5" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden>
-                              <circle cx="12" cy="12" r="10" fill="#00ADEF" />
-                              <path d="M6.5 13c-.2-1.2.4-2.6 1.4-3.3 1-.7 2.2-.6 3.4-.3 1.2.3 2.1.8 2.9 1.6.8.8 1.1 1.6.9 2.5-.2.9-1 1.6-1.8 1.9-.8.3-1.9.2-3.1-.2-1.2-.4-2.3-1-3.6-1.2z" fill="#7EE787" />
-                              <path d="M12 2a10 10 0 0 1 8 4 10 10 0 0 1-2 12 10 10 0 0 1-6 2 10 10 0 0 1-6-2 10 10 0 0 1 4-16" fill="#0077C8" opacity="0.18" />
-                            </svg>
+                            <i className="bi bi-globe text-gray-400" style={{ fontSize: '16px', lineHeight: '16px' }}></i>
                           ) : null}
                           <span>{selectedCountryLabel}</span>
                         </span>
                         <svg className={`h-4 w-4 shrink-0 transition-transform text-gray-500 ${showCountryMenu ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" /></svg>
                       </button>
                       {showCountryMenu && (
-                        <div className="absolute left-0 top-full z-[9999] mt-2 w-full sm:w-56 max-h-72 overflow-auto rounded-2xl border border-gray-200 bg-white shadow-[0_10px_30px_rgba(15,23,42,0.15)] py-1" style={{ transform: 'translateZ(0)' }}>
+                        <div className="absolute left-0 top-full z-9999 mt-2 w-full sm:w-56 max-h-72 overflow-auto rounded-2xl border border-gray-200 bg-white shadow-[0_10px_30px_rgba(15,23,42,0.15)] py-1" style={{ transform: 'translateZ(0)' }}>
                           {countryOptions.map((opt) => (
                             <button key={opt.code} onClick={() => { setCountry(opt.code); setShowCountryMenu(false); trackFilter('country', opt.label); }} className={`flex w-full items-center justify-between px-4 py-1.5 text-left text-xs sm:text-sm transition-colors ${country === opt.code ? "bg-[#EEF2FF] text-[#0B102A] font-semibold" : "text-gray-700 hover:bg-gray-50"}`}>
                               <span className="flex items-center gap-2">
@@ -1159,12 +1167,8 @@
                                     className="w-5 h-5 object-contain rounded-sm"
                                     onError={(e) => { if (!e.target.dataset.fallback) { e.target.dataset.fallback = '1'; e.target.src = `https://flagcdn.com/w40/${opt.flag}.png`; } }}
                                   />
-                                ) : (opt.code === 'All' || opt.code === 'all') ? (
-                                  <svg className="w-5 h-5" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden>
-                                    <circle cx="12" cy="12" r="10" fill="#00ADEF" />
-                                    <path d="M6.5 13c-.2-1.2.4-2.6 1.4-3.3 1-.7 2.2-.6 3.4-.3 1.2.3 2.1.8 2.9 1.6.8.8 1.1 1.6.9 2.5-.2.9-1 1.6-1.8 1.9-.8.3-1.9.2-3.1-.2-1.2-.4-2.3-1-3.6-1.2z" fill="#7EE787" />
-                                    <path d="M12 2a10 10 0 0 1 8 4 10 10 0 0 1-2 12 10 10 0 0 1-6 2 10 10 0 0 1-6-2 10 10 0 0 1 4-16" fill="#0077C8" opacity="0.18" />
-                                  </svg>
+                                ) : (opt.code === 'all' || opt.code === 'All') ? (
+                                  <i className="bi bi-globe text-gray-400" style={{ fontSize: '16px', lineHeight: '16px' }}></i>
                                 ) : null}
                                 <span>{opt.label}</span>
                               </span>
@@ -1174,11 +1178,13 @@
                         </div>
                       )}
                     </div>
-                    <FilterDropdown label="Rating change" value={changeFilter} options={CHANGE_OPTIONS} onSelect={(val) => { setChangeFilter(val); trackFilter('change', val); }} />
+                    <div className="flex-1 w-1/2">
+                      <FilterDropdown label="Rating change" value={changeFilter} options={CHANGE_OPTIONS} onSelect={(val) => { setChangeFilter(val); trackFilter('change', val); }} />
+                    </div>
                   </div>
                 </div>
                 <div className="relative w-full md:w-auto">
-                  <input type="text" placeholder="Search DR..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="bg-white pl-4 pr-10 py-2 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#0B102A] w-full md:w-64 text-sm shadow-sm h-[37.33px]" />
+                  <input type="text" placeholder="Search..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="bg-white pl-4 pr-10 py-2 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#0B102A] w-full md:w-64 text-sm shadow-sm h-[37.33px]" />
                   <i className="bi bi-search absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400" style={{ fontSize: 14 }} />
                 </div>
               </div>
@@ -1288,8 +1294,8 @@
                       >
                         <div className={`flex items-center justify-${h.align === 'left' ? 'start' : h.align === 'center' ? 'center' : 'end'} gap-0.5`}>{h.label} <SortIndicator colKey={h.key} /></div>
                         {sortConfig.key === h.key && (
-                          <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#2F80ED] z-50">
-                            <div className="absolute bottom-[-4px] left-1/2 -translate-x-1/2 w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[4px] border-t-[#2F80ED]"></div>
+                          <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#2F80ED] z-50">
+                            <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-0 h-0 border-l-4 border-l-transparent border-r-4 border-r-transparent border-t-4 border-t-[#2F80ED]"></div>
                           </div>
                         )}
                       </th>
