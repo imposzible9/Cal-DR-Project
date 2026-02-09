@@ -691,7 +691,7 @@ export default function DRCal() {
                 <div className="flex items-center mt-2">
                   <div className="w-1/2">
                     <p className="font-bold text-[13px] text-[#6B6B6B] mt-1">Last Price</p>
-                    <p className="font-bold text-[20px] sm:text-[26px]]">{selectedDR?.last ? fmtNum(selectedDR.last) : "—"}</p>
+                    <p className="font-bold text-[20px] sm:text-[26px]">{selectedDR?.last ? fmtNum(selectedDR.last) : "—"}</p>
                   </div>
                   <div className="absolute left-1/2 -translate-x-1/2 w-[1px] h-[56px] bg-[#9A9A9A]"></div>
                   <div className="w-1/2 pl-6">
