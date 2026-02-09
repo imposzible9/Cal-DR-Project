@@ -985,7 +985,7 @@
           });
           const arr = Array.from(underlyingMap.values());
           try {
-            console.log("🔁 Suggestion: built underlyingMap entries:", arr.length, arr.slice(0, 3));
+            // debug: built underlyingMap entries (removed noisy console output)
           } catch (err) {
             // ignore
           }
