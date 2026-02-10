@@ -57,6 +57,8 @@ const getLogoSlug = (name) => {
     // special-case: Semiconductor Manufacturing International Corp. -> tradingview slug
     if (/SEMICONDUCTOR\s+MANUFACTURING\s+INTERNATIONAL/i.test(upper)) return 'semiconductor-manufacturing-international';
     if (/SPOTIFY/.test(upper)) return 'spotify-technology';
+    // special-case: Palo Alto Networks -> tradingview uses palo-alto-networks
+    if (/PALO\s*ALTO/.test(upper) || /PALOALTO/.test(upper)) return 'palo-alto-networks';
     if (/\bDNOW\b/.test(upper)) return 'now';
     // If company name starts with NOW or contains 'NOW INC' etc., prefer 'now'
     if (/\bNOW(\b|\s|,)/.test(upper)) return 'now';
@@ -374,8 +376,9 @@ export default function Calendar() {
         }
         if (!controller.signal.aborted) {
           try {
-            console.log("📥 Earnings API response sample:", responseData);
-            console.log("📥 Flattened earnings sample:", finalData.slice(0, 3));
+            // Debug: sample API data (disabled in production)
+            // console.log("📥 Earnings API response sample:", responseData);
+            // console.log("📥 Flattened earnings sample:", finalData.slice(0, 3));
           } catch (err) {
             // ignore logging errors
           }
@@ -645,8 +648,69 @@ export default function Calendar() {
             localStorage.setItem('calendar_all_earnings', JSON.stringify(finalFiltered));
           } catch (e) {}
           const currentIds = new Set(finalFiltered.map(e => `${e.ticker}-${e.date}`));
-          const unseenIds = [...currentIds].filter(id => !seenEarningsIds.has(id));
-          setNewEarningsCount(unseenIds.length);
+
+          // If the user previously pressed "Mark all as read" we saved a
+          // snapshot of the list at that time. If the saved snapshot exactly
+          // matches the current list and it was created by the user, honor it
+          // and keep notifications cleared. Otherwise fall back to per-ID
+          // persisted seen IDs.
+          try {
+            const savedSnapshot = localStorage.getItem('calendar_seen_snapshot');
+            const savedByUser = localStorage.getItem('calendar_seen_by_user');
+            if (savedSnapshot && savedByUser === '1') {
+              const parsedSnap = JSON.parse(savedSnapshot);
+              if (Array.isArray(parsedSnap)) {
+                const snapSet = new Set(parsedSnap);
+                // Compare sets: if they match exactly, treat all as seen
+                if (parsedSnap.length === currentIds.size && parsedSnap.every(id => currentIds.has(id))) {
+                  setNewEarningsCount(0);
+                  setSeenEarningsIds(new Set(parsedSnap));
+                } else {
+                  // fallback to per-ID seen set calculation
+                  let seenSetForCalc = seenEarningsIds;
+                  try {
+                    const saved = localStorage.getItem('calendar_seen_earnings');
+                    if (saved) {
+                      const parsed = JSON.parse(saved);
+                      if (Array.isArray(parsed)) seenSetForCalc = new Set(parsed);
+                    }
+                  } catch (e) {}
+                  const unseenIds = [...currentIds].filter(id => !seenSetForCalc.has(id));
+                  setNewEarningsCount(unseenIds.length);
+                }
+              } else {
+                // invalid snapshot format, fallback
+                let seenSetForCalc = seenEarningsIds;
+                try {
+                  const saved = localStorage.getItem('calendar_seen_earnings');
+                  if (saved) {
+                    const parsed = JSON.parse(saved);
+                    if (Array.isArray(parsed)) seenSetForCalc = new Set(parsed);
+                  }
+                } catch (e) {}
+                const unseenIds = [...currentIds].filter(id => !seenSetForCalc.has(id));
+                setNewEarningsCount(unseenIds.length);
+              }
+            } else {
+              // No user snapshot -> normal per-ID behavior
+              let seenSetForCalc = seenEarningsIds;
+              try {
+                const saved = localStorage.getItem('calendar_seen_earnings');
+                if (saved) {
+                  const parsed = JSON.parse(saved);
+                  if (Array.isArray(parsed)) seenSetForCalc = new Set(parsed);
+                }
+              } catch (e) {}
+              const unseenIds = [...currentIds].filter(id => !seenSetForCalc.has(id));
+              setNewEarningsCount(unseenIds.length);
+            }
+          } catch (e) {
+            // on any error, fall back to per-ID calculation
+            let seenSetForCalc = seenEarningsIds;
+            try { const saved = localStorage.getItem('calendar_seen_earnings'); if (saved) { const parsed = JSON.parse(saved); if (Array.isArray(parsed)) seenSetForCalc = new Set(parsed); } } catch (ex) {}
+            const unseenIds = [...currentIds].filter(id => !seenSetForCalc.has(id));
+            setNewEarningsCount(unseenIds.length);
+          }
           // Do NOT mark as seen automatically on load. Only mark as seen when user clicks or marks all as read.
           setIsFirstLoad(false);
         }
@@ -682,32 +746,40 @@ export default function Calendar() {
             const data = JSON.parse(event.data);
 
             if (data.type === 'new_earnings' && data.earnings) {
-              // Process new earnings
+              // Process new earnings: do NOT auto-mark them as seen.
               const newEarnings = data.earnings;
               const newIds = new Set(newEarnings.map(e => `${e.ticker}-${e.date}`));
 
-              setSeenEarningsIds(currentSeenIds => {
-                const unseenIds = [...newIds].filter(id => !currentSeenIds.has(id));
+              // Update earnings list with only truly new items
+              setEarnings(prev => {
+                const existingIds = new Set(prev.map(e => `${e.ticker}-${e.date}`));
+                const trulyNew = newEarnings.filter(e => !existingIds.has(`${e.ticker}-${e.date}`));
+                if (trulyNew.length > 0) {
+                  // increment unseen count by number of new items that are not in seen set
+                  setNewEarningsCount(prevCount => {
+                    // read persisted seen ids as fallback
+                    let persistedSeen = new Set();
+                    try {
+                      const saved = localStorage.getItem('calendar_seen_earnings');
+                      if (saved) {
+                        const parsed = JSON.parse(saved);
+                        if (Array.isArray(parsed)) persistedSeen = new Set(parsed);
+                      }
+                    } catch (e) {}
 
-                if (unseenIds.length > 0) {
-                  setNewEarningsCount(prev => prev + unseenIds.length);
-
-                  setEarnings(prev => {
-                    const existingIds = new Set(prev.map(e => `${e.ticker}-${e.date}`));
-                    const trulyNew = newEarnings.filter(e => !existingIds.has(`${e.ticker}-${e.date}`));
-                    return [...prev, ...trulyNew];
+                    const newlyUnseen = trulyNew.filter(e => !persistedSeen.has(`${e.ticker}-${e.date}`)).length;
+                    return prevCount + newlyUnseen;
                   });
 
-                  // Update last update time
                   if (data.updated_at) {
                     setLastUpdateTime(new Date(data.updated_at));
                   }
 
-                  return new Set([...currentSeenIds, ...newIds]);
+                  return [...prev, ...trulyNew];
                 }
-
-                return currentSeenIds;
+                return prev;
               });
+
             } else if (data.type === 'heartbeat') {
               return;
             } else if (data.type === 'connected') {
@@ -866,6 +938,11 @@ export default function Calendar() {
     setSeenEarningsIds(prev => {
       const updated = new Set(prev);
       updated.add(earningId);
+      try {
+        localStorage.setItem('calendar_seen_earnings', JSON.stringify([...updated]));
+      } catch (e) {
+        // ignore storage errors
+      }
       return updated;
     });
     setNewEarningsCount(prev => Math.max(0, prev - 1));
@@ -873,9 +950,23 @@ export default function Calendar() {
 
   // Mark all as seen
   const markAllAsSeen = () => {
-    const allIds = earnings.map(e => `${e.ticker}-${e.date}`);
-    setSeenEarningsIds(new Set(allIds));
-    setNewEarningsCount(0);
+    try {
+      const allIds = earnings.map(e => `${e.ticker}-${e.date}`);
+      const allSet = new Set(allIds);
+      setSeenEarningsIds(allSet);
+      setNewEarningsCount(0);
+      // Persist immediately so refresh retains the "read" state
+      localStorage.setItem('calendar_seen_earnings', JSON.stringify(allIds));
+      // Also store a user-created snapshot so reload can recognize the same list
+      try {
+        const sorted = [...allIds].sort();
+        localStorage.setItem('calendar_seen_version', JSON.stringify(sorted));
+        localStorage.setItem('calendar_seen_snapshot', JSON.stringify(sorted));
+        localStorage.setItem('calendar_seen_by_user', '1');
+      } catch (e) {}
+    } catch (e) {
+      // ignore storage errors
+    }
   };
 
 
@@ -1160,33 +1251,29 @@ export default function Calendar() {
             <table className="hidden lg:table min-w-[1300px] w-full text-left border-collapse text-[14.4px]">
               <colgroup>
                 <col style={{ width: '250px', maxWidth: '250px' }} />
+                <col style={{ minWidth: '90px' }} />
+                <col style={{ minWidth: '90px' }} />
+                <col style={{ minWidth: '110px' }} />
+                <col style={{ minWidth: '110px' }} />
+                <col style={{ minWidth: '90px' }} />
+                <col style={{ minWidth: '90px' }} />
+                <col style={{ minWidth: '100px' }} />
+                <col style={{ minWidth: '100px' }} />
                 <col style={{ minWidth: '150px' }} />
-                <col style={{ minWidth: '110px' }} />
-                <col style={{ minWidth: '110px' }} />
-                <col style={{ minWidth: '90px' }} />
-                <col style={{ minWidth: '90px' }} />
-                <col style={{ minWidth: '80px' }} />
-                <col style={{ minWidth: '80px' }} />
-                <col style={{ minWidth: '100px' }} />
-                <col style={{ minWidth: '100px' }} />
-                <col style={{ minWidth: '90px' }} />
-                <col style={{ minWidth: '90px' }} />
               </colgroup>
               <thead className="bg-[#0B102A] text-white font-semibold sticky top-0" style={{ zIndex: 50 }}>
                 <tr className="h-[50px]">
                   {[
                     { k: "ticker", l: "Symbol", a: "left" },
-                    { k: "marketCap", l: "Market Cap", a: "center" },
+                    { k: "date", l: "Date", a: "right" },
+                    { k: "period", l: "Period End", a: "right" },
                     { k: "popularDR", l: "Most Popular DR", a: "center" },
                     { k: "sensitivityDR", l: "High Sensitivity DR", a: "center" },
                     { k: "epsEstimate", l: "EPS Est.", a: "right" },
                     { k: "epsReported", l: "EPS Rep.", a: "right" },
-                    { k: "surprise", l: "Surprise", a: "right" },
-                    { k: "pctSurprise", l: "%Surprise", a: "right" },
                     { k: "revenueForecast", l: "Rev Forecast", a: "right" },
                     { k: "revenueActual", l: "Rev Actual", a: "right" },
-                    { k: "date", l: "Date", a: "right" },
-                    { k: "period", l: "Period End", a: "right" }
+                    { k: "marketCap", l: "Market Cap", a: "center" }
                   ].map((h) => (
                     <th key={h.k} onClick={() => handleSort(h.k)} className="cursor-pointer transition-colors relative whitespace-nowrap px-4">
                       <div className={`flex items-center ${h.a === "right" ? "justify-end" : h.a === "center" ? "justify-center" : "justify-start"} gap-0.5`}>
@@ -1204,7 +1291,7 @@ export default function Calendar() {
               <tbody className="divide-y divide-gray-100">
                 {loading ? (
                   <tr>
-                    <td colSpan={12} className="p-0">
+                    <td colSpan={10} className="p-0">
                       <div className="w-full h-[50vh] flex items-center justify-start pl-140">
                         <div className="text-center text-gray-500">
                           <div className="text-xl font-semibold">Loading data...</div>
@@ -1214,7 +1301,7 @@ export default function Calendar() {
                   </tr>
                 ) : sortedEarnings.length === 0 ? (
                   <tr>
-                    <td colSpan={12} className="p-0">
+                    <td colSpan={10} className="p-0">
                       <div className="w-full h-[50vh] flex items-center justify-start pl-117">
                         <div className="text-center">
                             <div className="empty-icon-wrapper mb-4">
@@ -1281,7 +1368,12 @@ export default function Calendar() {
                             </div>
                           </div>
                         </td>
-                        <td className="px-4 align-middle text-center text-gray-800 font-medium">{formatMarketCapValue(e.marketCap, e.currency, true)}</td>
+                        <td className="px-4 align-middle text-right text-gray-800 font-medium whitespace-nowrap">
+                          {formatDate(e.date)}
+                        </td>
+                        <td className="px-4 align-middle text-right text-gray-800 font-medium whitespace-nowrap">
+                          {formatDate(e.period)}
+                        </td>
                         <td className="px-4 align-middle text-center">
                           {e.mostPopularDR ? (
                             <div className="flex flex-col items-center gap-0.5">
@@ -1304,16 +1396,10 @@ export default function Calendar() {
                         </td>
                         <td className="px-4 align-middle text-right text-gray-800 font-medium">{formatColoredValue(e.epsEstimate, e.currency)}</td>
                         <td className="px-4 align-middle text-right text-gray-800 font-semibold">{formatColoredValue(displayEpsRep, e.currency)}</td>
-                        <td className="px-4 align-middle text-right font-medium">{formatColoredValue(displaySurprise, "", e.currency)}</td>
-                        <td className="px-4 align-middle text-right font-medium">{formatColoredValue(displayPctSurprise, "%")}</td>
+                        {/* Surprise and %Surprise columns removed */}
                         <td className="px-4 align-middle text-right text-gray-800 font-medium">{formatValue(e.revenueForecast, e.currency, true)}</td>
                         <td className="px-4 align-middle text-right text-gray-800 font-semibold">{formatValue(displayRevAct, e.currency, true)}</td>
-                        <td className="px-4 align-middle text-right text-gray-800 font-medium whitespace-nowrap">
-                          {formatDate(e.date)}
-                        </td>
-                        <td className="px-4 align-middle text-right text-gray-800 font-medium whitespace-nowrap">
-                          {formatDate(e.period)}
-                        </td>
+                        <td className="px-4 align-middle text-center text-gray-800 font-medium">{formatMarketCapValue(e.marketCap, e.currency, true)}</td>
                       </tr>
                     );
                   })
