@@ -1130,7 +1130,7 @@ export default function DRList() {
           onClick={() => setDetailRow(null)}
         ></div>
 
-        <div className="relative w-full max-w-4xl max-h-[95vh] sm:max-h-[88vh] overflow-y-auto rounded-lg sm:rounded-2xl bg-white shadow-[0_18px_45px_rgba(0,0,0,0.25)]" onClick={(e) => e.stopPropagation()}>
+        <div className="relative w-full max-w-4xl max-h-[95vh] sm:max-h-[88vh] overflow-y-auto rounded-lg sm:rounded-2xl bg-white shadow-[0_18px_45px_rgba(0,0,0,0.25)] transform scale-[1.2]" onClick={(e) => e.stopPropagation()}>
           <div className="flex flex-col gap-1.5 sm:gap-3 border-b border-gray-200 px-3 sm:px-6 pb-2 sm:pb-3 pt-3 sm:pt-5 md:flex-row md:items-start md:justify-between">
             <div className="pr-2 sm:pr-4">
               <h2 className="text-base sm:text-[22px] font-semibold leading-tight text-[#111827]">{safe(detailRow.dr)}</h2>
