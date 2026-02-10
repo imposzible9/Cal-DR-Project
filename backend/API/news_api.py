@@ -10,16 +10,25 @@ import re
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from dotenv import load_dotenv
+import logging
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.StreamHandler()]
+)
+logger = logging.getLogger(__name__)
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env'))
 
 NEWS_API_BASE_URL = "https://newsapi.org/v2/top-headlines"
-NEWS_API_KEY = os.getenv("NEWS_API_KEY") or "a2982e76c7844902b4289a6b08712d89"
-NEWS_TTL_SECONDS = int(os.getenv("NEWS_TTL_SECONDS") or "300")
+NEWS_API_KEY = os.getenv("NEWS_API_KEY")
+NEWS_TTL_SECONDS = int(os.getenv("NEWS_TTL_SECONDS") or "60")
 SEARCHAPI_KEY = os.getenv("SEARCHAPI_KEY")
 FINNHUB_BASE_URL = "https://finnhub.io/api/v1"
-FINNHUB_TOKEN = os.getenv("FINNHUB_TOKEN") or None
-DR_LIST_URL = os.getenv("DR_LIST_URL") or "http://172.17.1.85:8333/dr"
+FINNHUB_TOKEN = os.getenv("FINNHUB_TOKEN")
+DR_LIST_URL = os.getenv("DR_LIST_URL")
 TRADINGVIEW_SCANNER_URL = os.getenv("TRADINGVIEW_SCANNER_URL") or "https://scanner.tradingview.com/america/scan"
 
 app = FastAPI(title="News API")
@@ -56,7 +65,8 @@ TRUSTED_SOURCES = {
     "china securities journal", "shanghai securities news", "xinhua", "people's daily", 
     "global times", "caixin global", "qq finance", "netease finance",
     "south china morning post", "tradingview", "tipranks", "benzinga", "gurufocus", "futu", "富途",
-    "zhitong", "gelonghui", "aastocks", "etnet"
+    "zhitong", "gelonghui", "aastocks", "etnet", "hk01", "hket", "mingpao", "oriental daily", "hkej",
+    "am730", "headline daily", "cailian", "cls", "jiemian", "36kr", "investing.com", "fxstreet"
 }
 
 GOOGLE_FINANCE_COUNTRIES = {
@@ -187,8 +197,16 @@ ADDITIONAL_FALLBACK_SYMBOLS = [
     {"symbol": "2330.TW", "name": "Taiwan Semiconductor Manufacturing Company", "country": "TW"},
     # VN
     {"symbol": "VIC.VN", "name": "Vingroup Joint Stock Company", "country": "VN"},
+    # CN
+    {"symbol": "601398.SS", "name": "Industrial and Commercial Bank of China", "logo": "https://s3-symbol-logo.tradingview.com/industrial-and-commercial-bank-of-china.svg", "country": "CN"},
+    {"symbol": "600036.SS", "name": "China Merchants Bank", "logo": "https://s3-symbol-logo.tradingview.com/china-merchants-bank.svg", "country": "CN"},
+    {"symbol": "601857.SS", "name": "PetroChina", "logo": "https://s3-symbol-logo.tradingview.com/petrochina.svg", "country": "CN"},
+    {"symbol": "601988.SS", "name": "Bank of China", "logo": "https://s3-symbol-logo.tradingview.com/bank-of-china.svg", "country": "CN"},
+    {"symbol": "601288.SS", "name": "Agricultural Bank of China", "logo": "https://s3-symbol-logo.tradingview.com/agricultural-bank-of-china.svg", "country": "CN"},
     # DK
-    {"symbol": "NOVO-B.CO", "name": "Novo Nordisk A/S", "country": "DK"}
+    {"symbol": "NOVO-B.CO", "name": "Novo Nordisk A/S", "logo": "https://s3-symbol-logo.tradingview.com/novo-nordisk.svg", "country": "DK"},
+    {"symbol": "MAERSK-B.CO", "name": "A.P. Møller - Mærsk A/S", "logo": "https://s3-symbol-logo.tradingview.com/a-p-moller-maersk.svg", "country": "DK"},
+    {"symbol": "DSV.CO", "name": "DSV A/S", "logo": "https://s3-symbol-logo.tradingview.com/dsv-a-s.svg", "country": "DK"}
 ]
 
 
@@ -243,28 +261,28 @@ async def background_news_updater():
     Periodically fetches news for all markets and updates the cache.
     This ensures that user requests are served instantly from cache.
     """
-    print("Background news updater started")
+    logger.info("Background news updater started")
     
     # Wait for app startup
     await asyncio.sleep(5)
     
     while True:
         try:
-            print("Running background news refresh...")
+            logger.info("Running background news refresh...")
             start_time = time.time()
             
             # 1. Update Global News (Aggregated)
             # This matches the parameters used in get_global_news endpoint
             global_limit = 5
             global_trusted = True
-            global_key = f"news-global-v8|{global_limit}|{global_trusted}"
+            global_key = f"news-global-v10|{global_limit}|{global_trusted}"
             
             global_tasks = []
             for config in GLOBAL_MARKET_CONFIG:
                 # We also want to cache the individual country news while we are at it
                 # Matches parameters in News.jsx for specific country view
                 # params: { limit: 40, language: config.lang, hours: 72, country: country.toLowerCase(), trusted_only: true } 
-                country_limit = 40
+                country_limit = 80
                 country_hours = 72
                 country_trusted = True
                 
@@ -286,8 +304,8 @@ async def background_news_updater():
                 trusted_items = [i for i in items if i.get("is_trusted")]
                 
                 # Update "get_news" cache (Country View)
-                # key = f"news-v12|{symbol.upper()}|{limit}|{language or ''}|{hours}|{country or ''}|{trusted_only}"
-                country_key = f"news-v12|{config['query'].upper()}|{country_limit}|{config['lang']}|{country_hours}|{config['code'].lower()}|{country_trusted}"
+                # key = f"news-v21|{symbol.upper()}|{limit}|{language or ''}|{hours}|{country or ''}|{trusted_only}"
+                country_key = f"news-v21|{config['query'].upper()}|{country_limit}|{config['lang']}|{country_hours}|{config['code'].lower()}|{country_trusted}"
                 
                 # We need quote and logo for the full payload, but for now just news is better than nothing?
                 # The get_news endpoint fetches quote and logo too. 
@@ -314,8 +332,8 @@ async def background_news_updater():
             merged.sort(key=lambda x: x.get("published_at") or "", reverse=True)
             
             # Update "get_global_news" cache
-            _cache_set(global_key, merged, ttl=600)
-            print(f"Updated global news cache with {len(merged)} items")
+            _cache_set(global_key, merged, ttl=120)
+            logger.info(f"Updated global news cache with {len(merged)} items")
 
             # 2. Update Default Batch Ticker Data (Home Page Updates)
             # Matches News.jsx: { symbols: DEFAULT_SYMBOLS, hours: 72, limit: 2 }
@@ -329,7 +347,7 @@ async def background_news_updater():
             
             # Replicate get_batch_ticker_data logic
             symbols_key = ",".join(sorted(batch_req.symbols))
-            batch_key = f"batch-data-v4|{symbols_key}|{batch_req.hours}|{batch_req.limit}|{batch_req.country}|{batch_req.language}"
+            batch_key = f"batch-data-v6|{symbols_key}|{batch_req.hours}|{batch_req.limit}|{batch_req.country}|{batch_req.language}"
             
             # Fetch
             batch_tasks = []
@@ -363,17 +381,17 @@ async def background_news_updater():
                     })
             
             final_data.sort(key=lambda x: (x["news"].get("published_at") or ""), reverse=True)
-            _cache_set(batch_key, final_data, ttl=300)
-            print(f"Updated default batch data cache with {len(final_data)} items")
+            _cache_set(batch_key, final_data, ttl=120)
+            logger.info(f"Updated default batch data cache with {len(final_data)} items")
 
             elapsed = time.time() - start_time
-            print(f"Background refresh took {elapsed:.2f}s")
+            logger.info(f"Background refresh took {elapsed:.2f}s")
             
         except Exception as e:
-            print(f"Background news updater error: {e}")
+            logger.error(f"Background news updater error: {e}", exc_info=True)
             
-        # Sleep for 4 minutes (less than TTL of 5-10 mins) to ensure freshness
-        await asyncio.sleep(240) 
+        # Sleep for 60 seconds (less than TTL) to ensure freshness
+        await asyncio.sleep(60) 
 
 
 
@@ -395,12 +413,12 @@ async def fetch_google_finance_news(query: str, limit: int, language: str | None
     if language:
         params["hl"] = language.lower()
 
-    print(f"Fetching Google Finance (SearchAPI): {query} Params: {params}")
+    logger.debug(f"Fetching Google Finance (SearchAPI): {query} Params: {params}")
 
     try:
         r = await _client.get("https://www.searchapi.io/api/v1/search", params=params)
         if r.status_code != 200:
-            print(f"SearchAPI error: {r.status_code} {r.text[:100]}")
+            logger.error(f"SearchAPI error: {r.status_code} {r.text[:100]}")
             return []
             
         data = r.json()
@@ -423,7 +441,7 @@ async def fetch_google_finance_news(query: str, limit: int, language: str | None
         return normalized[:limit]
         
     except Exception as e:
-        print(f"Google Finance fetch error: {e}")
+        logger.error(f"Google Finance fetch error: {e}", exc_info=True)
         return []
 
 
@@ -453,19 +471,19 @@ async def fetch_news(symbol: str, limit: int, language: str | None, hours: int, 
                 break
             
         # Debug Log
-        print(f"[DEBUG] fetch_news for {country}: symbol='{symbol}' -> query='{searchapi_query}'")
+        logger.debug(f"fetch_news for {country}: symbol='{symbol}' -> query='{searchapi_query}'")
 
         # 1. Google Finance (SearchAPI)
         # SKIP for complex queries with " OR " because Google Finance SearchAPI handles them poorly
         if " OR " not in searchapi_query:
             gf_items = await fetch_google_finance_news(searchapi_query, limit, language, hours, country)
             if gf_items:
-                print(f"[DEBUG] Google Finance returned {len(gf_items)} items for {searchapi_query}")
+                logger.debug(f"Google Finance returned {len(gf_items)} items for {searchapi_query}")
                 return gf_items
             else:
-                print(f"[DEBUG] Google Finance returned 0 items for {searchapi_query}")
+                logger.debug(f"Google Finance returned 0 items for {searchapi_query}")
         else:
-             print(f"[DEBUG] Skipping Google Finance for complex query: {searchapi_query}")
+             logger.debug(f"Skipping Google Finance for complex query: {searchapi_query}")
 
         # Prepare Fallback Query (Use Company Name if available for better Bing/Google results)
         fallback_query = search_query
@@ -495,15 +513,15 @@ async def fetch_news(symbol: str, limit: int, language: str | None, hours: int, 
                     fallback_query = fallback_query.replace(suffix, "")
                     break
         
-        print(f"Fallback news query for {symbol}: {fallback_query}")
+        logger.debug(f"Fallback news query for {symbol}: {fallback_query}")
 
         # 2. Google RSS (Fallback - Preferred over Bing for better local relevance)
         google_items = await fetch_google_news(fallback_query, limit, language, hours, country)
         if google_items:
-            print(f"[DEBUG] Google RSS returned {len(google_items)} items for {fallback_query}")
+            logger.debug(f"Google RSS returned {len(google_items)} items for {fallback_query}")
             return google_items
         else:
-            print(f"[DEBUG] Google RSS returned 0 items for {fallback_query}")
+            logger.debug(f"Google RSS returned 0 items for {fallback_query}")
 
         # 3. Bing RSS (Fallback)
         return await fetch_bing_news(fallback_query, limit, language, hours, country)
@@ -535,7 +553,7 @@ async def fetch_news(symbol: str, limit: int, language: str | None, hours: int, 
     if language:
         params["language"] = language
     
-    print(f"Fetching NewsAPI: {NEWS_API_BASE_URL} Params: {params}")
+    logger.debug(f"Fetching NewsAPI: {NEWS_API_BASE_URL} Params: {params}")
 
     # 'from' param is not supported by top-headlines, so we omit it or only use it if we were using /everything
     # But since we are forced to use top-headlines, we skip 'from' logic for API call.
@@ -638,12 +656,12 @@ async def _fetch_bing_rss_items(query: str, limit: int, language: str | None, ho
     }
     
     # Debug log
-    print(f"Fetching Bing RSS: {query} Params: {params}")
+    logger.debug(f"Fetching Bing RSS: {query} Params: {params}")
     
     try:
         r = await _client.get(url, params=params)
         if r.status_code != 200:
-            print(f"Bing RSS failed with {r.status_code}")
+            logger.error(f"Bing RSS failed with {r.status_code}")
             return []
             
         import xml.etree.ElementTree as ET
@@ -711,7 +729,7 @@ async def _fetch_bing_rss_items(query: str, limit: int, language: str | None, ho
         return normalized
         
     except Exception as e:
-        print(f"Bing RSS error: {e}")
+        logger.error(f"Bing RSS error: {e}", exc_info=True)
         return []
 
 async def fetch_bing_news(query: str, limit: int, language: str | None, hours: int, country: str | None):
@@ -781,11 +799,11 @@ async def _fetch_google_rss_items(query: str, limit: int, language: str | None, 
             params["tbs"] = "qdr:y"
 
     # Debug log
-    print(f"Fetching Google RSS: {query} Params: {params}")
+    logger.debug(f"Fetching Google RSS: {query} Params: {params}")
     
     try:
         r = await _client.get("https://news.google.com/rss/search", params=params)
-        print(f"[DEBUG] Google RSS URL: {r.url} Status: {r.status_code} Len: {len(r.text)}")
+        logger.debug(f"Google RSS URL: {r.url} Status: {r.status_code} Len: {len(r.text)}")
         if r.status_code != 200:
             return []
         text = r.text
@@ -839,7 +857,7 @@ async def _fetch_google_rss_items(query: str, limit: int, language: str | None, 
                             if dt < fallback_dt:
                                 continue # Too old even for fallback
                 except Exception as e:
-                    print(f"[DEBUG] Date parse error: {e}")
+                    logger.debug(f"Date parse error: {e}")
                     pass
             
             item = {
@@ -861,12 +879,12 @@ async def _fetch_google_rss_items(query: str, limit: int, language: str | None, 
                     candidates.append(item)
 
         if not normalized and candidates:
-             print(f"[DEBUG] No recent news found, using {len(candidates)} fallback candidates")
+             logger.debug(f"No recent news found, using {len(candidates)} fallback candidates")
              return candidates[:limit]
              
         return normalized
     except Exception as e:
-        print(f"Google RSS error for {query}: {e}")
+        logger.error(f"Google RSS error for {query}: {e}", exc_info=True)
         return []
 
 async def fetch_google_news(query: str, limit: int, language: str | None, hours: int, country: str | None):
@@ -1001,12 +1019,12 @@ async def get_news(
         elif symbol_upper.endswith(".SS") or symbol_upper.endswith(".SZ"): country = "cn"
 
     # Debug log for request
-    print(f"[DEBUG] get_news request: symbol='{symbol}' country='{country}' trusted_only={trusted_only}", flush=True)
+    logger.debug(f"get_news request: symbol='{symbol}' country='{country}' trusted_only={trusted_only}")
     
-    key = f"news-v14|{symbol.upper()}|{limit}|{language or ''}|{hours}|{country or ''}|{trusted_only}"
+    key = f"news-v21|{symbol.upper()}|{limit}|{language or ''}|{hours}|{country or ''}|{trusted_only}"
     cached = _cache_get(key)
     if cached is not None:
-        print(f"[DEBUG] Returning cached result for {key}", flush=True)
+        logger.debug(f"Returning cached result for {key}")
         return {
             "symbol": symbol.upper(),
             "total": len(cached["news"]),
@@ -1033,7 +1051,7 @@ async def get_news(
                 if q_data and q_data.get("name"):
                     company_name = q_data.get("name")
         except Exception as e:
-            print(f"Error looking up company name for {symbol}: {e}")
+            logger.warning(f"Error looking up company name for {symbol}: {e}")
 
     # Fetch news, quote, logo in parallel (but now we might have already fetched quote)
     # To optimize, we can reuse q_data if we fetched it.
@@ -1062,7 +1080,7 @@ async def get_news(
     if trusted_only:
         items = [i for i in items if i.get("is_trusted")]
         
-    print(f"[DEBUG] Fetched {len(items)} items for {symbol} (trusted_only={trusted_only})", flush=True)
+    logger.debug(f"Fetched {len(items)} items for {symbol} (trusted_only={trusted_only})")
 
     payload = {"news": items, "quote": quote, "logo_url": logo_url}
     _cache_set(key, payload, ttl=NEWS_TTL_SECONDS)
@@ -1090,7 +1108,7 @@ GLOBAL_MARKET_CONFIG = [
     {"code": "JP", "query": "日本株式市場 OR 日経平均株価", "lang": "ja"},
     {"code": "SG", "query": "Singapore Stock Market OR STI Index OR SGX OR Straits Times Index OR Singapore Exchange OR DBS Group OR UOB OR OCBC OR Singtel OR Keppel Ltd OR Wilmar International OR CapitaLand", "lang": "en"},
     {"code": "TW", "query": "台灣股市 OR 加權指數", "lang": "zh"},
-    {"code": "CN", "query": "中国股市 OR A股 OR 上證指數 OR 深證成指 OR 滬深300 OR 貴州茅台 OR 騰訊控股 OR 阿里巴巴 OR 工商銀行", "lang": "zh"},
+    {"code": "CN", "query": "中国股市 OR A股 OR 上證指數 OR 深證成指 OR 滬深300 OR 中概股 OR 恒生科技指數 OR 貴州茅台 OR 騰訊控股 OR 阿里巴巴 OR 工商銀行 OR China Stock Market", "lang": "zh"},
     {"code": "VN", "query": "Thị trường chứng khoán Việt Nam OR VN-Index OR HNX-Index OR VN30 OR Vingroup OR Vietcombank OR Hoa Phat Group OR Masan Group", "lang": "vi"}
 ]
 
@@ -1104,10 +1122,10 @@ async def get_global_news(
     Fetch news from all major markets in parallel.
     Aggregates results server-side to reduce frontend requests.
     """
-    # Cache for 10 minutes (600s)
-    response.headers["Cache-Control"] = "public, max-age=600"
+    # Cache for 1 minute (60s)
+    response.headers["Cache-Control"] = "public, max-age=60"
     
-    key = f"news-global-v8|{limit}|{trusted_only}"
+    key = f"news-global-v10|{limit}|{trusted_only}"
     cached = _cache_get(key)
     if cached:
         return {"news": cached, "cached": True}
@@ -1137,7 +1155,7 @@ async def get_global_news(
     # Sort by date
     merged.sort(key=lambda x: x.get("published_at") or "", reverse=True)
     
-    _cache_set(key, merged, ttl=600) # Cache for 10 minutes
+    _cache_set(key, merged, ttl=120) # Cache for 2 minutes
     
     return {"news": merged, "cached": False}
 
@@ -1150,19 +1168,20 @@ class BatchTickerRequest(BaseModel):
     country: str | None = None
     language: str | None = None
 
-@app.post("/api/batch-ticker-data")
+@app.post("/api/batch-stock-data")
 async def get_batch_ticker_data(req: BatchTickerRequest, response: Response):
     """
     Fetch quote and latest news for multiple symbols in one go.
+    Renamed from 'batch-ticker-data' to avoid AdBlocker issues.
     """
-    # Cache for 5 minutes (300s)
-    response.headers["Cache-Control"] = "public, max-age=300"
+    # Cache for 1 minute (60s)
+    response.headers["Cache-Control"] = "public, max-age=60"
     
     # Create unique key for caching this batch request?
     # Batch requests can vary wildly, so maybe short cache or no cache if user specific?
     # Let's try to cache individual components or just the whole thing for short time.
     symbols_key = ",".join(sorted(req.symbols))
-    key = f"batch-data-v4|{symbols_key}|{req.hours}|{req.limit}|{req.country}|{req.language}"
+    key = f"batch-data-v6|{symbols_key}|{req.hours}|{req.limit}|{req.country}|{req.language}"
     
     cached = _cache_get(key)
     if cached:
@@ -1182,7 +1201,7 @@ async def get_batch_ticker_data(req: BatchTickerRequest, response: Response):
                 "news": news_items[0] if news_items else None # Return only top news for "Latest Updates" card
             }
         except Exception as e:
-            print(f"Batch fetch error for {sym}: {e}")
+            logger.error(f"Batch fetch error for {sym}: {e}", exc_info=True)
             return None
 
     tasks = [fetch_one(s) for s in req.symbols]
@@ -1196,12 +1215,31 @@ async def get_batch_ticker_data(req: BatchTickerRequest, response: Response):
     
     final_data = [r for r in results if r and r.get("news")]
     
-    # Sort by news time
-    final_data.sort(key=lambda x: (x["news"].get("published_at") or ""), reverse=True)
+    # Sort by news time (Handle mixed types: int timestamp vs ISO string)
+    def get_sort_timestamp(item):
+        pub = item["news"].get("published_at")
+        if isinstance(pub, (int, float)):
+            return pub
+        if isinstance(pub, str) and pub:
+            try:
+                return datetime.fromisoformat(pub.replace("Z", "+00:00")).timestamp()
+            except ValueError:
+                return 0
+        return 0
+
+    final_data.sort(key=get_sort_timestamp, reverse=True)
     
-    _cache_set(key, final_data, ttl=300) # 5 mins
+    _cache_set(key, final_data, ttl=120) # 2 mins
     
     return {"data": final_data, "cached": False}
+
+@app.post("/api/batch-ticker-data")
+async def get_batch_ticker_data_legacy(req: BatchTickerRequest, response: Response):
+    """
+    Legacy alias for batch-stock-data to support older frontends.
+    """
+    return await get_batch_ticker_data(req, response)
+
 
 import random
 
@@ -1284,7 +1322,7 @@ async def fetch_tv_quote(symbol: str):
             elif symbol.endswith(".SS"): tv_symbol = f"SSE:{symbol.replace('.SS','')}"
             elif symbol.endswith(".SZ"): tv_symbol = f"SZSE:{symbol.replace('.SZ','')}"
     except Exception as e:
-        print(f"Error resolving TV symbol for {symbol}: {e}")
+        logger.warning(f"Error resolving TV symbol for {symbol}: {e}")
         
     # 2. Fetch
     params = {
@@ -1316,7 +1354,7 @@ async def fetch_tv_quote(symbol: str):
                         "source": "tradingview"
                     }
         except Exception as e:
-            print(f"TV fetch error for {tv_symbol}: {e}")
+            logger.warning(f"TV fetch error for {tv_symbol}: {e}")
             
     return None
 
@@ -1345,17 +1383,17 @@ async def get_quote(symbol: str):
                 if q.get("c") != 0:
                      success = True
         except Exception as e:
-            print(f"Finnhub quote exception for {symbol}: {e}")
+            logger.warning(f"Finnhub quote exception for {symbol}: {e}")
 
     # 3. Fallback to internal list (Cached TV data) if both failed
     if not success:
-        print(f"Finnhub failed/empty for {symbol}, trying internal list fallback")
+        logger.info(f"Finnhub failed/empty for {symbol}, trying internal list fallback")
         try:
             all_symbols = await get_symbols()
             match = next((s for s in all_symbols if s["symbol"] == symbol), None)
             
             if match:
-                print(f"Found fallback data for {symbol}")
+                logger.debug(f"Found fallback data for {symbol}")
                 return {
                     "symbol": symbol,
                     "price": match.get("price", 0),
@@ -1369,7 +1407,7 @@ async def get_quote(symbol: str):
                     "source": "fallback"
                 }
         except Exception as e:
-            print(f"Fallback quote error: {e}")
+            logger.error(f"Fallback quote error: {e}", exc_info=True)
     
     if not success and not q:
         return {
@@ -1439,7 +1477,7 @@ async def get_company_news(
             country = "CN"
 
     # Cache check
-    key = f"company_news_v5|{symbol.upper()}|{hours}|{limit}|{country}|{language}"
+    key = f"company_news_v7|{symbol.upper()}|{hours}|{limit}|{country}|{language}"
     if not force_refresh:
         cached = _cache_get(key)
         if cached:
@@ -1465,7 +1503,7 @@ async def get_company_news(
                 if q_data and q_data.get("name"):
                     company_name = q_data.get("name")
         except Exception as e:
-            print(f"Error looking up company name for {symbol}: {e}")
+            logger.warning(f"Error looking up company name for {symbol}: {e}")
 
         # Force fetch_news which uses SearchAPI for these countries
         items = await fetch_news(symbol.upper(), limit, language=lang, hours=hours, country=country, company_name=company_name)
@@ -1516,7 +1554,7 @@ async def get_company_news(
         item = {
             "title": a.get("headline"),
             "summary": a.get("summary"),
-            "published_at": a.get("datetime"),
+            "published_at": datetime.fromtimestamp(a.get("datetime"), timezone.utc).isoformat() if a.get("datetime") else None,
             "source": a.get("source"),
             "url": a.get("url"),
             "image_url": a.get("image"),
@@ -1531,13 +1569,13 @@ async def get_company_news(
     # Check diversity: If we have too few non-Yahoo items, supplement with Google News
     non_yahoo_count = sum(1 for item in normalized if "yahoo" not in (item.get("source") or "").lower())
     if non_yahoo_count < 3:
-        print(f"Low diversity for {symbol} from Finnhub ({non_yahoo_count} non-Yahoo). Supplementing with Google News.")
+        logger.info(f"Low diversity for {symbol} from Finnhub ({non_yahoo_count} non-Yahoo). Supplementing with Google News.")
         try:
             query_others = f"{symbol} stock -site:yahoo.com -site:finance.yahoo.com"
             google_items = await _fetch_google_rss_items(query_others, limit, "en", hours, country)
             normalized.extend(google_items)
         except Exception as e:
-            print(f"Error supplementing news: {e}")
+            logger.warning(f"Error supplementing news: {e}")
 
     # Mix sources
     final_items = _mix_news_sources(normalized, limit)
@@ -1582,7 +1620,7 @@ async def get_stock_overview(
             if match:
                 company_name = match.get("name") or match.get("description")
         except Exception as e:
-            print(f"Error looking up company name for {symbol}: {e}")
+            logger.warning(f"Error looking up company name for {symbol}: {e}")
 
         # Fetch news using SearchAPI
         news_list = await fetch_news(symbol_upper, limit, language or "en", hours, country, company_name=company_name)
@@ -1643,13 +1681,13 @@ async def get_stock_overview(
         # Check diversity and supplement if needed
         non_yahoo_count = sum(1 for item in news_items if "yahoo" not in (item.get("source") or "").lower())
         if non_yahoo_count < 3:
-            print(f"Low diversity for {symbol} in Overview. Supplementing.")
+            logger.info(f"Low diversity for {symbol} in Overview. Supplementing.")
             try:
                 query_others = f"{symbol} stock -site:yahoo.com -site:finance.yahoo.com"
                 google_items = await _fetch_google_rss_items(query_others, limit, "en", hours, country)
                 news_items.extend(google_items)
             except Exception as e:
-                print(f"Error supplementing overview news: {e}")
+                logger.warning(f"Error supplementing overview news: {e}")
 
         # Mix sources
         news_items = _mix_news_sources(news_items, limit)
@@ -1685,7 +1723,7 @@ async def _fetch_dr_symbols(client):
                         "logo": row.get("logo") or row.get("logoUrl") or row.get("image")
                     })
     except Exception as e:
-        print(f"Error fetching DR symbols: {e}")
+        logger.warning(f"Error fetching DR symbols: {e}")
     return dr_symbols
 
 
@@ -1725,7 +1763,7 @@ async def get_symbols():
                             "country": "TH" # DRs are traded in Thailand
                         })
         except Exception as e:
-            print(f"Error fetching DR symbols: {e}")
+            logger.warning(f"Error fetching DR symbols: {e}")
             # Don't fail completely, just use fallback or empty
 
         # 2. Fetch TradingView Stocks (All Supported Regions)
@@ -1755,7 +1793,7 @@ async def get_symbols():
             if isinstance(res, list):
                 tv_symbols.extend(res)
             else:
-                print(f"Error fetching region: {res}")
+                logger.error(f"Error fetching region: {res}")
         
         # 3. Merge Lists
         # Use a dict to dedup by symbol, preferring DR info if available (or TV info if better?)
@@ -1863,7 +1901,7 @@ async def _fetch_tradingview_stocks(client, region="america", country_code="US",
 
         r = await client.post(url, json=payload, headers=headers, timeout=10)
         if r.status_code != 200:
-            print(f"TV Scanner error: {r.status_code} {r.text[:100]}")
+            logger.error(f"TV Scanner error: {r.status_code} {r.text[:100]}")
             return []
             
         data = r.json()
@@ -1960,7 +1998,7 @@ async def _fetch_tradingview_stocks(client, region="america", country_code="US",
             
         return results
     except Exception as e:
-        print(f"Error fetching TV stocks: {e}")
+        logger.error(f"Error fetching TV stocks: {e}", exc_info=True)
         return []
 
 # Removed old _fetch_and_cache_symbols as it's integrated above
