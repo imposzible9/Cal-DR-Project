@@ -1,15 +1,74 @@
 version: "3.9"
 services:
-  frontend:
+  caldr-frontend:
     build:
-      context: .
-      dockerfile: Dockerfile.frontend
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: caldr-frontend-prod
     ports:
-      - "3002:3002"   # expose nginx serving vite build
+      - "8082:5173"
+    restart: unless-stopped
+    networks:
+      - existing_net
+    volumes:
+      - /home/administrator/nginx_edit/v2/nginx_fronts/caldr.conf:/etc/nginx/conf.d/default.conf:ro
+  caldr-backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: caldr-backend-prod
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "5002:8000"
+    restart: unless-stopped
+    networks:
+      - existing_net
+  # caldr-news-backend:
+  #   build:
+  #     context: ./backend
+  #     dockerfile: Dockerfile
+  #   container_name: caldr-news-backend-prod
+  #   command: uvicorn API.news_api:app --host 0.0.0.0 --port 8000
+  #   ports:
+  #     - "50021:8000"
+  #   restart: unless-stopped
+  #   networks:
+  #     - existing_net
+  # caldr-calculation-backend:
+  #   build:
+  #     context: ./backend
+  #     dockerfile: Dockerfile
+  #   container_name: caldr-calculation-backend-prod
+  #   command: uvicorn API.dr_calculation_api:app --host 0.0.0.0 --port 8000
+  #   ports:
+  #     - "50022:8000"
+  #   restart: unless-stopped
+  #   networks:
+  #     - existing_net
+  # caldr-earning-backend:
+  #   build:
+  #     context: ./backend
+  #     dockerfile: Dockerfile
+  #   container_name: caldr-earning-backend-prod
+  #   command: uvicorn API.earnings_api:app --host 0.0.0.0 --port 8000
+  #   ports:
+  #     - "50023:8000"
+  #   restart: unless-stopped
+  #   networks:
+  #     - existing_net
+  # caldr-ratings-backend:
+  #   build:
+  #     context: ./backend
+  #     dockerfile: Dockerfile
+  #   container_name: caldr-ratings-backend-prod
+  #   command: uvicorn API.ratings_api_dynamic:app --host 0.0.0.0 --port 8000
+  #   ports:
+  #     - "50024:8000"
+  #   restart: unless-stopped
+  #   networks:
+  #     - existing_net
 
-  backend:
-    build:
-      context: .
-      dockerfile: Dockerfile.backend
-    ports:
-      - "4002:4002"
+networks: 
+  existing_net:
+    external: true 
+    name: caldr-net
