@@ -1137,27 +1137,15 @@ export default function DRList() {
               <div className="mt-0.5 text-[10px] sm:text-[12px] font-medium text-gray-800 leading-tight">Depositary Receipt on {symbolText} Issued by {issuerShortText}</div>
             </div>
             <div className="flex min-w-[140px] sm:min-w-[190px] flex-col items-start gap-0.5 sm:gap-1 pt-1 text-left">
-              <div className="flex w-full items-baseline justify-between">
-                <span className="text-[9px] sm:text-[11px] text-gray-500 whitespace-nowrap mr-2">
-                  Last Price
-                </span>
-                <div className="flex items-baseline gap-2">
-                  <span className="text-right text-lg sm:text-[23px] font-semibold leading-none text-[#E53935]">
-                    {formatNum(detailRow.last)}
-                  </span>
-                  <span
-                    className={`text-right text-[10px] sm:text-[12px] font-semibold ${detailRow.change > 0
-                      ? "text-[#27AE60]"
-                      : detailRow.change < 0
-                        ? "text-[#E53935]"
-                        : "text-gray-700"
-                      }`}
-                  >
-                    {detailRow.change > 0 ? "+" : ""}
-                    {formatNum(detailRow.change)} (
-                    {detailRow.pct > 0 ? "+" : ""}
-                    {formatNum(detailRow.pct)}
-                    %)
+              <div className="flex w-full items-start justify-between">
+                <div className="flex flex-col">
+                  <span className="text-[9px] sm:text-[11px] text-gray-500 whitespace-nowrap">Last Price</span>
+                  <span className="text-[9px] sm:text-[11px] text-gray-500 whitespace-nowrap mt-1">Last Change</span>
+                </div>
+                <div className="flex flex-col items-end">
+                  <span className="text-right text-lg sm:text-[23px] font-semibold leading-none text-[#E53935]">{formatNum(detailRow.last)}</span>
+                  <span className={`text-right text-[10px] sm:text-[12px] font-semibold mt-1 ${detailRow.change > 0 ? "text-[#27AE60]" : detailRow.change < 0 ? "text-[#E53935]" : "text-gray-700"}`}>
+                    {detailRow.change > 0 ? "+" : ""}{formatNum(detailRow.change)} ({detailRow.pct > 0 ? "+" : ""}{formatNum(detailRow.pct)}%)
                   </span>
                 </div>
               </div>
