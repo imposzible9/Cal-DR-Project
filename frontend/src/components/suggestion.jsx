@@ -689,7 +689,7 @@
           </div>
 
           {/* Timeline Section - Light Theme */}
-          <div className="bg-white p-3 sm:p-6 pb-20 sm:pb-24 max-h-[50vh] sm:max-h-[60vh] overflow-y-auto">
+          <div className="bg-white p-3 sm:p-6 pb-20 sm:pb-24 max-h-[50vh] sm:max-h-[50vh] overflow-y-auto">
             <div className="sm:mb-7 mb-4 flex items-center justify-center">
               <div className="flex items-center gap-3 w-full sm:w-auto">
                 <button
@@ -713,14 +713,15 @@
               </div>
             ) : historyData.length > 0 ? (
               <div className="relative">
-                <div className="space-y-4 sm:space-y-6 relative">
+                <div className="space-y-6 sm:space-y-8 relative">
+                  {/* Vertical timeline line (behind the dots) */}
+                  <div className="absolute left-3.5 sm:left-4 top-0 bottom-30 sm:top-0 sm:bottom-35 w-px bg-gray-200" style={{ transform: 'translateX(-50%)' }} />
                   {/* Limit daily (Open-to-Open) view to at most 10 rows */}
                   {
                     (() => {
                       const displayed = (mode === 'daily') ? (historyData || []).slice(0, 10) : (historyData || []);
                       return (
                         <div>
-                          <div className="text-xs text-gray-500 mb-2 text-right">Showing {displayed.length} of {historyData.length} entries</div>
                           {displayed.map((log, idx) => {
                             const scorePrev = RATING_SCORE[(log.prev || "").toLowerCase()] || 0;
                             const scoreCurr = RATING_SCORE[(log.rating || "").toLowerCase()] || 0;
@@ -744,7 +745,7 @@
                                 </div>
 
                                 {/* Content Card */}
-                                <div className="bg-white rounded-lg sm:rounded-xl p-3 sm:p-4 shadow-lg">
+                                <div className="bg-white rounded-lg sm:rounded-xl p-3 sm:p-4 mb-4 sm:mb-4 shadow-lg">
                                   {/* Signal Change */}
                                   <div className="mb-2 sm:mb-3 flex items-center gap-1.5 sm:gap-2 flex-wrap">
                                     <div className="px-1.5 sm:px-2 py-0.5 sm:py-1 bg-gray-100 rounded text-[10px] sm:text-xs text-gray-600 font-medium">Signal</div>
