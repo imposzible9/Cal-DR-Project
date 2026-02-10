@@ -1701,12 +1701,53 @@ def upsert_history_snapshot(
     exchange: str,
     market_data: dict,
 ):
-
+    # Ensure timezone-aware (assume Thai time if missing)
     if snapshot_ts_thai.tzinfo is None:
-        # ถ้าไม่มี timezone ให้ถือว่าเป็นเวลาไทย
         bkk_tz = ZoneInfo("Asia/Bangkok")
         snapshot_ts_thai = snapshot_ts_thai.replace(tzinfo=bkk_tz)
-    
+
+    # Determine local time in market timezone (if available) to check weekends/holidays
+    local_ts = snapshot_ts_thai
+    try:
+        if market_code:
+            tz_name = MARKET_TIMEZONE.get(market_code)
+            if tz_name:
+                try:
+                    market_tz = ZoneInfo(tz_name)
+                    local_ts = snapshot_ts_thai.astimezone(market_tz)
+                except Exception:
+                    # fallback to snapshot_ts_thai if timezone fails
+                    local_ts = snapshot_ts_thai
+    except Exception:
+        local_ts = snapshot_ts_thai
+
+    # Skip weekend snapshots for rating_history (Sat/Sun in market local time)
+    try:
+        if local_ts.weekday() in (5, 6):
+            return
+    except Exception:
+        pass
+
+    # Optional: support market-specific holiday list via backend/API/market_holidays.json
+    # Format: { "US": ["2026-01-01", "2026-12-25"], "JP": ["2026-01-01"] }
+    try:
+        import json, os
+        from pathlib import Path
+
+        holidays_file = Path(os.path.dirname(__file__)) / "market_holidays.json"
+        if holidays_file.exists():
+            with open(holidays_file, "r", encoding="utf-8") as hf:
+                hol = json.load(hf)
+            # accept either upper/lower keys
+            market_hols = hol.get(market_code) or hol.get(market_code.upper()) or hol.get(market_code.lower()) or []
+            if isinstance(market_hols, list):
+                local_date_str = local_ts.date().isoformat()
+                if local_date_str in market_hols:
+                    return
+    except Exception:
+        # If holiday check fails, do not block insertion (we already filtered weekends)
+        pass
+
     ts_str = snapshot_ts_thai.replace(tzinfo=None).isoformat()
     date_str = snapshot_ts_thai.date().isoformat()
     
@@ -4402,15 +4443,26 @@ def recalculate_accuracy_endpoint(
 
 @app.get("/dr-list")
 def get_local_dr_list():
-    """Returns the locally cached DR list from dr_list.json"""
+    """Return DR list by fetching from external DR_LIST_URL (no local fallback).
+
+    This endpoint will always attempt to GET the URL configured in the
+    `DR_LIST_URL` environment variable. If that variable is not set, it
+    defaults to `https://api.ideatrade1.com/caldr`.
+    """
     try:
-        local_dr_file = os.path.join(os.path.dirname(__file__), "dr_list.json")
-        if os.path.exists(local_dr_file):
-            with open(local_dr_file, "r", encoding="utf-8") as f:
-                 return json.load(f)
-        return {"count": 0, "rows": []}
+        url = DR_LIST_URL or "https://api.ideatrade1.com/caldr"
+        # Use requests (synchronous handler) to fetch external DR list
+        import requests
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        return resp.json()
     except Exception as e:
-        return {"error": str(e)}
+        # Return an error response so the caller knows external fetch failed
+        try:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=502, content={"error": "Failed to fetch DR list from external source", "detail": str(e)})
+        except Exception:
+            return {"error": str(e)}
 
 @app.get("/from-dr-api")
 def ratings_from_dr_api():
