@@ -275,6 +275,12 @@
         }
       }
 
+      // Quick special-case for Palo Alto Networks
+      try {
+        const up = String(name || '').toUpperCase();
+        if (/PALO\s*ALTO/.test(up) || /PALOALTO/.test(up)) return 'palo-alto-networks';
+      } catch (e) { /* ignore */ }
+
       // Convert to lowercase
       let slug = cleanName.toLowerCase();
 
@@ -708,84 +714,94 @@
             ) : historyData.length > 0 ? (
               <div className="relative">
                 <div className="space-y-4 sm:space-y-6 relative">
-                  <div className="absolute left-3.5 sm:left-4 w-0.5 bg-gray-200" style={{ top: '20px', bottom: '150px' }}></div>
-                  {historyData.map((log, idx) => {
-                    const scorePrev = RATING_SCORE[(log.prev || "").toLowerCase()] || 0;
-                    const scoreCurr = RATING_SCORE[(log.rating || "").toLowerCase()] || 0;
-                    const isPositive = (scoreCurr > scorePrev);
-                    const isNegative = (scoreCurr < scorePrev);
+                  {/* Limit daily (Open-to-Open) view to at most 10 rows */}
+                  {
+                    (() => {
+                      const displayed = (mode === 'daily') ? (historyData || []).slice(0, 10) : (historyData || []);
+                      return (
+                        <div>
+                          <div className="text-xs text-gray-500 mb-2 text-right">Showing {displayed.length} of {historyData.length} entries</div>
+                          {displayed.map((log, idx) => {
+                            const scorePrev = RATING_SCORE[(log.prev || "").toLowerCase()] || 0;
+                            const scoreCurr = RATING_SCORE[(log.rating || "").toLowerCase()] || 0;
+                            const isPositive = (scoreCurr > scorePrev);
+                            const isNegative = (scoreCurr < scorePrev);
 
-                    let dotColor = "bg-gray-400";
-                    if (isPositive) dotColor = "bg-[#27AE60]";
-                    else if (isNegative) dotColor = "bg-[#EB5757]";
+                            let dotColor = "bg-gray-400";
+                            if (isPositive) dotColor = "bg-[#27AE60]";
+                            else if (isNegative) dotColor = "bg-[#EB5757]";
 
-                    const changePct = (log.change_pct_open ?? log.change_pct ?? log.changePct ?? log.change ?? 0);
+                            const changePct = (log.change_pct_open ?? log.change_pct ?? log.changePct ?? log.change ?? 0);
 
-                    return (
-                      <div key={idx} className="relative pl-9 sm:pl-12">
-                        {/* Timeline Dot and Date */}
-                        <div className="flex items-center mb-1.5 sm:mb-2">
-                          <div className={`absolute left-3.5 sm:left-4 w-7 h-7 sm:w-9 sm:h-9 rounded-full ${dotColor} flex items-center justify-center`} style={{ transform: 'translateX(-50%)' }}>
-                            <div className="w-4 h-4 sm:w-5 sm:h-5 rounded-full bg-white"></div>
-                          </div>
-                          <span className="text-xs sm:text-sm font-semibold text-gray-900">{formatModalDate(log.timestamp || log.date)}</span>
-                        </div>
+                            return (
+                              <div key={idx} className="relative pl-9 sm:pl-12">
+                                {/* Timeline Dot and Date */}
+                                <div className="flex items-center mb-1.5 sm:mb-2">
+                                  <div className={`absolute left-3.5 sm:left-4 w-7 h-7 sm:w-9 sm:h-9 rounded-full ${dotColor} flex items-center justify-center`} style={{ transform: 'translateX(-50%)' }}>
+                                    <div className="w-4 h-4 sm:w-5 sm:h-5 rounded-full bg-white"></div>
+                                  </div>
+                                  <span className="text-xs sm:text-sm font-semibold text-gray-900">{formatModalDate(log.timestamp || log.date)}</span>
+                                </div>
 
-                        {/* Content Card */}
-                        <div className="bg-white rounded-lg sm:rounded-xl p-3 sm:p-4 shadow-lg">
-                          {/* Signal Change */}
-                          <div className="mb-2 sm:mb-3 flex items-center gap-1.5 sm:gap-2 flex-wrap">
-                            <div className="px-1.5 sm:px-2 py-0.5 sm:py-1 bg-gray-100 rounded text-[10px] sm:text-xs text-gray-600 font-medium">Signal</div>
-                            <span className={`text-xs sm:text-sm font-bold ${getRatingTextColor(log.prev)}`}>{log.prev ?? log.rating ?? "Unknown"}</span>
-                            <svg className="w-3 h-3 sm:w-4 sm:h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
-                            </svg>
-                            <span className={`text-xs sm:text-sm font-bold ${getRatingTextColor(log.rating)}`}>{log.rating}</span>
-                          </div>
+                                {/* Content Card */}
+                                <div className="bg-white rounded-lg sm:rounded-xl p-3 sm:p-4 shadow-lg">
+                                  {/* Signal Change */}
+                                  <div className="mb-2 sm:mb-3 flex items-center gap-1.5 sm:gap-2 flex-wrap">
+                                    <div className="px-1.5 sm:px-2 py-0.5 sm:py-1 bg-gray-100 rounded text-[10px] sm:text-xs text-gray-600 font-medium">Signal</div>
+                                    <span className={`text-xs sm:text-sm font-bold ${getRatingTextColor(log.prev)}`}>{log.prev ?? log.rating ?? "Unknown"}</span>
+                                    <svg className="w-3 h-3 sm:w-4 sm:h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+                                    </svg>
+                                    <span className={`text-xs sm:text-sm font-bold ${getRatingTextColor(log.rating)}`}>{log.rating}</span>
+                                  </div>
 
-                          {/* Horizontal Divider */}
-                          <div className="border-b border-gray-300 mb-1.5 sm:mb-2"></div>
+                                  {/* Horizontal Divider */}
+                                  <div className="border-b border-gray-300 mb-1.5 sm:mb-2"></div>
 
-                          {/* Price Info */}
-                          <div className="flex items-start justify-between text-xs sm:text-base">
-                            <div className="flex flex-col">
-                              <div className="text-[10px] sm:text-sm text-gray-500 mb-0">{mode === 'intraday' ? 'Entry' : 'Open Price'}</div>
-                              <div className="text-[10px] sm:text-xs text-gray-700 mb-1">
-                                {mode === 'intraday' ? (
-                                  <>
-                                    {formatModalDate(log.prev_timestamp ?? historyData[idx + 1]?.timestamp ?? historyData[idx + 1]?.date ?? null)}{' '}
-                                    {formatModalTime(log.prev_timestamp ?? historyData[idx + 1]?.timestamp ?? historyData[idx + 1]?.date ?? null)}
-                                  </>
-                                ) : (
-                                  formatModalDate(log.prev_timestamp ?? historyData[idx + 1]?.timestamp ?? historyData[idx + 1]?.date ?? log.timestamp ?? log.date ?? null)
-                                )}
+                                  {/* Price Info */}
+                                  <div className="flex items-start justify-between text-xs sm:text-base">
+                                    <div className="flex flex-col">
+                                      <div className="text-[10px] sm:text-sm text-gray-500 mb-0">{mode === 'intraday' ? 'Entry' : 'Open Price'}</div>
+                                      <div className="text-[10px] sm:text-xs text-gray-700 mb-1">
+                                        {mode === 'intraday' ? (
+                                          <>
+                                            {formatModalDate(log.prev_timestamp ?? historyData[idx + 1]?.timestamp ?? historyData[idx + 1]?.date ?? null)}{' '}
+                                            {formatModalTime(log.prev_timestamp ?? historyData[idx + 1]?.timestamp ?? historyData[idx + 1]?.date ?? null)}
+                                          </>
+                                        ) : (
+                                          formatModalDate(log.prev_timestamp ?? historyData[idx + 1]?.timestamp ?? historyData[idx + 1]?.date ?? log.timestamp ?? log.date ?? null)
+                                        )}
+                                      </div>
+                                      <div className="text-sm sm:text-lg font-semibold text-gray-900 font-mono">${formatPrice(log.prev_open ?? log.prev_close ?? 0)}</div>
+                                    </div>
+                                    <div className="flex items-center -space-x-2 sm:-space-x-3 text-gray-500 pt-3 sm:pt-5">
+                                      <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                                      </svg>
+                                      <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                                      </svg>
+                                      <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                                      </svg>
+                                    </div>
+                                    <div className="text-right flex flex-col">
+                                      <div className="text-[10px] sm:text-sm text-gray-500 mb-0">{mode === 'intraday' ? 'Exit' : 'Open Price'}</div>
+                                      <div className="text-[10px] sm:text-xs text-gray-700 mb-1">{mode === 'intraday' ? formatModalTime(log.timestamp ?? log.date) : formatModalDate(log.timestamp ?? log.date)}</div>
+                                      <div className="text-sm sm:text-lg font-semibold text-gray-900 font-mono">${formatPrice(log.result_open ?? log.result_price ?? 0)}</div>
+                                      <div className={`text-xs sm:text-sm font-semibold mt-0 font-mono ${changePct >= 0 ? "text-[#27AE60]" : "text-[#EB5757]"}`}>
+                                        ({changePct >= 0 ? "+" : ""}{formatPct(changePct)}%)
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
                               </div>
-                              <div className="text-sm sm:text-lg font-semibold text-gray-900 font-mono">${formatPrice(log.prev_open ?? log.prev_close ?? 0)}</div>
-                            </div>
-                            <div className="flex items-center -space-x-2 sm:-space-x-3 text-gray-500 pt-3 sm:pt-5">
-                              <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                              </svg>
-                              <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                              </svg>
-                              <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                              </svg>
-                            </div>
-                            <div className="text-right flex flex-col">
-                              <div className="text-[10px] sm:text-sm text-gray-500 mb-0">{mode === 'intraday' ? 'Exit' : 'Open Price'}</div>
-                              <div className="text-[10px] sm:text-xs text-gray-700 mb-1">{mode === 'intraday' ? formatModalTime(log.timestamp ?? log.date) : formatModalDate(log.timestamp ?? log.date)}</div>
-                              <div className="text-sm sm:text-lg font-semibold text-gray-900 font-mono">${formatPrice(log.result_open ?? log.result_price ?? 0)}</div>
-                              <div className={`text-xs sm:text-sm font-semibold mt-0 font-mono ${changePct >= 0 ? "text-[#27AE60]" : "text-[#EB5757]"}`}>
-                                ({changePct >= 0 ? "+" : ""}{formatPct(changePct)}%)
-                              </div>
-                            </div>
-                          </div>
+                            );
+                          })}
                         </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    })()
+                  }
                 </div>
               </div>
             ) : (
