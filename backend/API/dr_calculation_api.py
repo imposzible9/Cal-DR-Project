@@ -121,12 +121,13 @@ def _now() -> float:
 # -----------------------------
 # CORS (ให้ frontend เครื่องอื่นเรียกได้)
 # -----------------------------
+# DEV ONLY: Using wildcard CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],   # prod ควร lock domain
     allow_methods=["*"],
     allow_headers=["*"],
-    allow_credentials=False,
+    allow_credentials=True,
 )
 
 # -----------------------------
