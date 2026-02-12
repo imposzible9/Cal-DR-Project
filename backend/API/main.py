@@ -108,6 +108,7 @@ app = FastAPI(
 )
 
 # Add CORS middleware
+# DEV ONLY: Using wildcard for all origins temporarily
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
