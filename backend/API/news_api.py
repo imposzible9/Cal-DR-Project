@@ -35,12 +35,13 @@ app = FastAPI(title="News API")
 
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
+# DEV ONLY: Using wildcard CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
-    allow_credentials=False,
+    allow_credentials=True,
 )
 
 _client: httpx.AsyncClient | None = None
