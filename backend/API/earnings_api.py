@@ -1,6 +1,7 @@
+# --- Intraday History API ---
+from fastapi import HTTPException, Request
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
 from contextlib import asynccontextmanager
 import httpx
 import uvicorn
@@ -8,961 +9,4611 @@ import asyncio
 import json
 import os
 import re
-import time as time_module
-from datetime import datetime, timedelta, time, timezone
+import random
+import sqlite3
+from datetime import datetime, timedelta, time
+from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env'))
 
-# Silence prints from this module by default. Set ENABLE_EARNINGS_LOGS=1 in env to enable.
-try:
-    ENABLE_EARNINGS_LOGS = os.getenv("ENABLE_EARNINGS_LOGS", "0") == "1"
-except Exception:
-    ENABLE_EARNINGS_LOGS = False
+# Debug logging setup
+DEBUG_LOG_PATH = os.getenv("DEBUG_LOG_PATH") or r"c:\Users\Thoz\Desktop\New-Cal-DR-Project-main\.cursor\debug.log"
 
-if not ENABLE_EARNINGS_LOGS:
-    def _noop_print(*args, **kwargs):
-        return None
-    print = _noop_print
+def debug_log(session_id, run_id, hypothesis_id, location, message, data):
+    """Write debug log to NDJSON file"""
+    try:
+        log_entry = {
+            "sessionId": session_id,
+            "runId": run_id,
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": int(datetime.now().timestamp() * 1000)
+        }
+        with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+    except Exception:
+        pass  
 
-# ================= CONFIG =================
-TRADINGVIEW_SCAN_URL = os.getenv("TRADINGVIEW_SCAN_URL") or "https://scanner.tradingview.com/{market}/scan?label-product=screener-stock-old"
-# ✅ เพิ่ม DR_LIST_URL เพื่อใช้ดึงรายชื่อหุ้นที่มี DR
-DR_LIST_URL = "https://api.ideatrade1.com/caldr"
-# ✅ เพิ่มการตั้งค่าเปิด-ปิดฟิลเตอร์ DR (True = กรองเฉพาะหุ้นที่มี DR, False = เอาหุ้นทั้งหมด)
-ENABLE_DR_FILTER = os.getenv("ENABLE_DR_FILTER", "True").lower() == "true"
-CACHE_FILE = "earnings_cache.json"
-UPDATE_INTERVAL_SECONDS = int(os.getenv("EARNINGS_UPDATE_INTERVAL_SECONDS") or "3600")
-# Show detailed filter warnings (set env SHOW_FILTER_WARNINGS=true to enable)
-SHOW_FILTER_WARNINGS = os.getenv("SHOW_FILTER_WARNINGS", "False").lower() == "true"
+# ---------- CONFIG ----------
+DR_LIST_URL = os.getenv("DR_LIST_URL")
+TRADINGVIEW_BASE = os.getenv("TRADINGVIEW_BASE_URL") or "https://scanner.tradingview.com/symbol"
+TV_FIELDS = "Recommend.All,Recommend.All|1W,close,open,change,change_abs,high,low,volume,currency"
+
+
+# --- Performance tuning ---
+# เพิ่ม MAX_CONCURRENCY เพื่อให้ยิง request พร้อมกันได้มากขึ้น (เช่น 16)
+MAX_CONCURRENCY = int(os.getenv("MAX_CONCURRENCY") or "16")
+# ลด timeout ถ้า API ตอบเร็ว (เช่น 10 วินาที)
+REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT") or "10")
+# ลด interval ถ้าต้องการอัปเดตเร็วขึ้น (หรือปรับตามต้องการ)
+UPDATE_INTERVAL_SECONDS = int(os.getenv("UPDATE_INTERVAL_SECONDS") or "180")
+# ลด sleep หลัง batch (เช่น 0.2 วินาที)
+BATCH_SLEEP_SECONDS = float(os.getenv("BATCH_SLEEP_SECONDS") or "0.2")
+
+
+
+
+"""
+Market Open Time + 30 Minutes (Buffer)
+"""
+MARKET_OPEN_CONFIG = {
+    # US
+    "US": {"winter": time(22, 0), "summer": time(21, 0)},
+
+    # Europe
+    "FR": {"winter": time(15, 30), "summer": time(14, 30)},
+    "IT": {"winter": time(15, 30), "summer": time(14, 30)},
+    "NL": {"winter": time(15, 30), "summer": time(14, 30)},
+    "DK": {"winter": time(15, 30), "summer": time(14, 30)},
+
+    # Asia
+    "JP": {"winter": time(7, 30), "summer": time(7, 30)},
+    "HK": {"winter": time(9, 0), "summer": time(9, 0)},
+    "CN": {"winter": time(9, 0), "summer": time(9, 0)},
+    "TW": {"winter": time(8, 30), "summer": time(8, 30)},
+    "SG": {"winter": time(8, 30), "summer": time(8, 30)},
+    "VN": {"winter": time(9, 30), "summer": time(9, 30)},
+}
+
+# Market timezone mapping (used to determine local weekday for each market)
+MARKET_TIMEZONE = {
+    "US": "America/New_York",
+    "DK": "Europe/Copenhagen",
+    "NL": "Europe/Amsterdam",
+    "FR": "Europe/Paris",
+    "IT": "Europe/Rome",
+    "HK": "Asia/Hong_Kong",
+    "JP": "Asia/Tokyo",
+    "SG": "Asia/Singapore",
+    "TW": "Asia/Taipei",
+    "CN": "Asia/Shanghai",
+    "VN": "Asia/Ho_Chi_Minh",
+}
+
+# --- Database Config ---
+DB_FILE = "ratings.sqlite"
+# --- Old JSON file paths for migration ---
+OLD_CACHE_FILE = "ratings_cache_smart.json"
+OLD_STATS_FILE = "ratings_stats.json" 
+OLD_HISTORY_FILE = "ratings_history.json"
+
+# Alias for backward compatibility
+CACHE_FILE = OLD_CACHE_FILE
+
+# --- Mock Data Config ---
+USE_MOCK_DATA = False  # Enable mock rating history from AAPL JSON file 
 
 FAKE_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
     "Origin": "https://www.tradingview.com",
-    "Referer": "https://www.tradingview.com/"
+    "Referer": "https://www.tradingview.com/",
+    "Accept": "application/json, text/plain, */*",
 }
 
-COLUMNS_MAP = [
-    "logoid", "name", "market_cap_basic", "earnings_per_share_forecast_next_fq",
-    "earnings_per_share_fq", "eps_surprise_fq", "eps_surprise_percent_fq",
-    "revenue_forecast_next_fq", "revenue_fq", "earnings_release_next_date",
-    "earnings_release_next_calendar_date", "earnings_release_next_time",
-    "description", "type", "subtype", "update_mode",
-    "earnings_per_share_forecast_fq", "revenue_forecast_fq", "earnings_release_date",
-    "earnings_release_calendar_date", "earnings_release_time", "currency",
-    "fundamental_currency_code", "exchange"
-]
+# --- Database Initialization & Migration ---
 
-MARKET_DISPLAY_NAMES = {
-    "america": "US United States", "thailand": "TH Thailand", "hongkong": "HK Hong Kong",
-    "japan": "JP Japan", "china": "CN China", "singapore": "SG Singapore",
-    "vietnam": "VN Vietnam", "france": "FR France", "germany": "DE Germany",
-    "netherlands": "NL Netherlands", "denmark": "DK Denmark", "italy": "IT Italy",
-    "taiwan": "TW Taiwan"
-}
-
-# Global DB
-_earnings_db = {}
-_last_update_str = "-"
-_previous_earnings_db = {}  # Store previous earnings state for comparison
-
-# SSE Client Management
-_sse_clients: list[asyncio.Queue] = []
-_sse_lock = asyncio.Lock()
-
-# ================= HELPERS =================
-def get_market_code(country_code: str):
-    mapping = {
-        "US": "america", "TH": "thailand", "HK": "hongkong", "JP": "japan",
-        "CN": "china", "SG": "singapore", "VN": "vietnam", "FR": "france",
-        "DE": "germany", "NL": "netherlands", "DK": "denmark", "IT": "italy",
-        "TW": "taiwan"
-    }
-    return mapping.get(country_code.upper())
-
-def get_tradingview_range(country: str = "US"):
-    now_utc = datetime.now(timezone.utc)
-    today_date = now_utc.date()
-    # ✅ คำนวณวันจันทร์ของสัปดาห์หน้า (next Monday)
-    # weekday() คืนค่า 0=Monday, 1=Tuesday, ..., 6=Sunday
-    # ถ้าวันนี้เป็นวันจันทร์ (weekday=0) จะได้ next_monday = today_date + 7 days
-    # ถ้าวันนี้เป็นวันอังคาร-อาทิตย์ จะได้ next_monday = today_date + (7 - weekday) days
-    days_until_monday = 7 - today_date.weekday()
-    if days_until_monday == 0:  # ถ้าวันนี้เป็นวันจันทร์ ให้ไปสัปดาห์หน้า
-        days_until_monday = 7
-    next_monday = today_date + timedelta(days=days_until_monday)
-    next_monday_dt = datetime.combine(next_monday, time.min).replace(tzinfo=timezone.utc)
-    offset_hours = 15 if country.upper() == "JP" else 0
-    start_dt = next_monday_dt + timedelta(hours=offset_hours)
-    end_dt = start_dt + timedelta(days=7)
-    return int(start_dt.timestamp()), int(end_dt.timestamp())
-
-async def fetch_tradingview_earnings(market_code: str, start_ts: int, end_ts: int):
-    """Fetch earnings data from TradingView with pagination to get all results"""
-    url = TRADINGVIEW_SCAN_URL.format(market=market_code)
-    all_data = []
-    page_size = 500  # ดึงครั้งละ 500 ตัว
-    offset = 0
-    
-    async with httpx.AsyncClient() as client:
-        while True:
-            payload = {
-                "filter": [
-                    {"left": "is_primary", "operation": "equal", "right": True},
-                    {"left": "earnings_release_date,earnings_release_next_date", "operation": "in_range", "right": [start_ts, end_ts]},
-                    {"left": "earnings_release_date,earnings_release_next_date", "operation": "nequal", "right": end_ts}
-                ],
-                "options": {"lang": "th"},
-                "markets": [market_code],
-                "symbols": {
-                    "query": {"types": []},
-                    "tickers": []
-                },
-                "columns": COLUMNS_MAP,
-                "sort": {"sortBy": "market_cap_basic", "sortOrder": "desc"},
-                "preset": None,
-                "range": [offset, offset + page_size]
-            }
-            try:
-                resp = await client.post(url, json=payload, headers=FAKE_HEADERS, timeout=15)
-                if resp.status_code != 200:
-                    break
-                
-                page_data = resp.json().get("data", [])
-                if not page_data:
-                    break
-                
-                all_data.extend(page_data)
-                
-                # ถ้าดึงมาได้น้อยกว่า page_size แสดงว่าเป็นหน้าสุดท้ายแล้ว
-                if len(page_data) < page_size:
-                    break
-                
-                offset += page_size
-                
-                # จำกัดสูงสุดที่ 5000 ตัวเพื่อป้องกัน infinite loop
-                if offset >= 5000:
-                    break
-                    
-            except Exception as e:
-                print(f"[WARN] Error fetching page {offset}: {e}")
-                break
-    
-    return all_data
-
-# ✅ แก้ไขให้รับ valid_tickers และ ticker_mapping เพื่อกรองเอาเฉพาะหุ้นที่มี DR
-def map_tv_data_to_object(raw_data, valid_tickers: set = None, ticker_mapping: dict = None):
-    mapped_list = []
-    seen = set()
-    current_ts = datetime.now(timezone.utc).timestamp()
-    for item in raw_data:
-        d = item.get("d", [])
-        if not d or len(d) < len(COLUMNS_MAP): continue
-        obj = {COLUMNS_MAP[i]: d[i] for i in range(len(COLUMNS_MAP))}
-        
-        # ✅ ใช้ logoid เป็น ticker symbol (ถ้ามี) หรือใช้ name เป็น fallback
-        # logoid มักจะเป็น ticker symbol เช่น "AAPL", "AMZN" 
-        # name มักจะเป็นชื่อเต็ม เช่น "APPLE INC", "AMAZON.COM, INC"
-        logoid = str(obj.get("logoid") or "").upper().strip()
-        ticker_name = str(obj["name"]).upper().strip()
-        description = str(obj.get("description") or "").upper().strip()
-        
-        # ✅ กำหนดค่าเริ่มต้นสำหรับ matched_underlying (ใช้เมื่อ DR Filter ปิด)
-        matched_underlying = None
-        
-        # ✅ ตัวกรอง: ถ้ามี Whitelist ให้ตรวจสอบทั้ง logoid และ ticker_name
-        # ใช้ ticker_mapping เพื่อ match ticker จาก TradingView กับ underlying code
-        if valid_tickers is not None:
-            matched = False
-            matched_ticker = None
-            matched_underlying = None
-            
-            # ลำดับการตรวจสอบ:
-            # 1) ตรวจสอบ ticker_name ใน valid_tickers โดยตรง
-            if ticker_name in valid_tickers:
-                matched = True
-                matched_ticker = ticker_name
-                matched_underlying = ticker_name
-            # 2) ตรวจสอบ ticker_name ใน ticker_mapping (ถ้ามี)
-            elif ticker_mapping and ticker_name in ticker_mapping:
-                matched_underlying = ticker_mapping[ticker_name]
-                if matched_underlying in valid_tickers:
-                    matched = True
-                    matched_ticker = ticker_name
-                    # Debug: แสดง warning ถ้า match กับ underlying code ที่ไม่ตรงกับ ticker_name
-                    if matched_underlying != ticker_name and len(mapped_list) < 10:
-                        print(f"  [WARN] Warning: ticker_name='{ticker_name}' matched with underlying='{matched_underlying}' (via mapping)")
-            # 3) ตรวจสอบ logoid ใน valid_tickers
-            elif logoid and logoid in valid_tickers:
-                matched = True
-                matched_ticker = logoid
-                matched_underlying = logoid
-            # 4) ตรวจสอบ logoid ใน ticker_mapping (ถ้ามี)
-            elif ticker_mapping and logoid and logoid in ticker_mapping:
-                matched_underlying = ticker_mapping[logoid]
-                if matched_underlying in valid_tickers:
-                    matched = True
-                    matched_ticker = logoid
-            # 5) ลอง extract ticker symbol จาก name (ถ้า format เป็น "TICKER" หรือ "TICKER - ...")
-            # 6) ลอง extract ticker symbol จาก description (ถ้ามี)
-            if not matched:
-                # ลอง extract ticker symbol จาก name (เอาคำแรก หรือส่วนก่อน "-" หรือ ",")
-                name_parts = re.split(r'[-,\s]+', ticker_name)
-                for part in name_parts:
-                    if part and part in valid_tickers:
-                        matched = True
-                        matched_ticker = part
-                        matched_underlying = part
-                        break
-                    elif ticker_mapping and part and part in ticker_mapping:
-                        matched_underlying = ticker_mapping[part]
-                        if matched_underlying in valid_tickers:
-                            matched = True
-                            matched_ticker = part
-                            break
-                
-                # ⚠️ ไม่ใช้ description เพื่อ match เพราะอาจจะ match ผิด (เช่น "JP Morgan" -> "JP" ซึ่งอาจ match กับ underlying code อื่น)
-                # ถ้าต้องการใช้ description ต้องระวังมาก เพราะอาจ match ผิดได้
-            
-            if not matched:
-                # Debug: แสดง ticker ที่ไม่ match (แสดงแค่ 10 ตัวแรกเพื่อไม่ให้ log เยอะเกินไป)
-                if SHOW_FILTER_WARNINGS:
-                    if len([x for x in mapped_list if not hasattr(x, '_debug_shown')]) < 10:
-                        print(f"  [WARN] Filtered out: logoid='{logoid}', name='{ticker_name}' (not in {len(valid_tickers)} DR tickers)")
-                continue  # ไม่พบใน whitelist ให้ข้าม
-            else:
-                # Debug: แสดง ticker ที่ match ได้ (แสดงแค่ 10 ตัวแรก)
-                if len(mapped_list) < 10:
-                    print(f"  [OK] Matched: logoid='{logoid}', name='{ticker_name}' -> underlying='{matched_underlying}'")
-        
-        event_date = obj["earnings_release_next_date"] or obj["earnings_release_date"]
-        
-        # ✅ ใช้ (ticker, date) เป็น unique key เพื่อป้องกัน duplicate
-        # ใช้ matched_underlying ถ้ามี (เพื่อให้ตรงกับ DR underlying code)
-        # ถ้าไม่มี matched_underlying ให้ใช้ ticker_name (กรณีที่ไม่ได้ filter)
-        final_ticker_for_key = matched_underlying if matched_underlying else ticker_name
-        
-        if event_date:
-            unique_key = (final_ticker_for_key, event_date)
-            if unique_key in seen: 
-                continue
-            seen.add(unique_key)
-        else:
-            # ถ้าไม่มี date ให้ใช้ logoid หรือ ticker เป็น fallback
-            unique_id = obj.get("logoid") or final_ticker_for_key
-            if unique_id in seen: 
-                continue
-            seen.add(unique_id)
-        
-        is_future = event_date and event_date > current_ts
-        
-        # ✅ ใช้ matched_underlying เป็น ticker ถ้ามี (เพื่อให้ตรงกับ DR underlying code)
-        # ถ้าไม่มี matched_underlying ให้ใช้ ticker_name (กรณีที่ไม่ได้ filter)
-        final_ticker = matched_underlying if matched_underlying else ticker_name
-        
-        mapped_list.append({
-            "ticker": final_ticker,
-            "company": obj["description"],
-            "marketCap": obj["market_cap_basic"], 
-            "epsEstimate": obj["earnings_per_share_forecast_next_fq"],
-            "epsReported": None if is_future else obj["earnings_per_share_fq"],
-            "surprise": None if is_future else obj["eps_surprise_fq"],
-            "pctSurprise": None if is_future else obj["eps_surprise_percent_fq"],
-            "revenueForecast": obj["revenue_forecast_next_fq"],
-            "revenueActual": None if is_future else obj["revenue_fq"],
-            "date": event_date, 
-            "period": obj["earnings_release_next_calendar_date"],
-            "currency": obj["currency"],
-            "exchange": obj["exchange"]
-        })
-    return mapped_list
-
-# ================= PERSISTENCE LOGIC =================
-def load_db_from_disk():
-    global _earnings_db, _last_update_str, _previous_earnings_db
-    if os.path.exists(CACHE_FILE):
-        try:
-            with open(CACHE_FILE, "r", encoding="utf-8") as f:
-                loaded = json.load(f)
-                _earnings_db = loaded.get("data", {})
-                _last_update_str = loaded.get("meta", {}).get("updated_at", "-")
-                # Initialize previous_earnings_db with current data (so first update won't trigger false positives)
-                _previous_earnings_db = _earnings_db.copy()
-            print(f"[OK] Loaded cache: {len(_earnings_db)} markets.")
-        except Exception as e: print(f"[WARN] Load fail: {e}")
-
-def save_db_to_disk():
+def check_table_schema(cur, table_name):
+    """Check if table exists and has the correct schema (new structure without timeframe)."""
     try:
-        with open(CACHE_FILE, "w", encoding="utf-8") as f:
-            json.dump({"meta": {"updated_at": _last_update_str}, "data": _earnings_db}, f, ensure_ascii=False)
-    except Exception as e: print(f"[WARN] Save fail: {e}")
-
-async def broadcast_to_sse_clients(message: dict):
-    """Broadcast message to all connected SSE clients"""
-    async with _sse_lock:
-        client_count = len(_sse_clients)
-        if client_count > 0:
-            print(f"[SSE] Broadcasting to {client_count} client(s): {message.get('type', 'unknown')}")
-        disconnected_clients = []
-        for queue in _sse_clients:
-            try:
-                await queue.put(message)
-            except Exception as e:
-                # Mark for removal if queue is closed
-                print(f"[SSE] Failed to send to client: {e}")
-                disconnected_clients.append(queue)
+        cur.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table_name,))
+        if not cur.fetchone():
+            return False  
+               
+        cur.execute(f"PRAGMA table_info({table_name})")
+        columns = [row[1] for row in cur.fetchall()]
         
-        # Remove disconnected clients
-        for queue in disconnected_clients:
-            if queue in _sse_clients:
-                _sse_clients.remove(queue)
+        has_daily_rating = "daily_rating" in columns
+        has_weekly_rating = "weekly_rating" in columns
+        has_timeframe = "timeframe" in columns
+        
+        return has_daily_rating and has_weekly_rating and not has_timeframe
+    except:
+        return False
 
-def get_earnings_set(earnings_db: dict) -> set:
-    """Convert earnings_db to a set of (ticker, date) tuples for comparison"""
-    earnings_set = set()
-    for market_data in earnings_db.values():
-        if isinstance(market_data, dict) and "data" in market_data:
-            for earning in market_data["data"]:
-                ticker = earning.get("ticker", "")
-                date = earning.get("date")
-                if ticker and date:
-                    earnings_set.add((ticker, date))
-    return earnings_set
+def init_database():
+    """Initializes the SQLite database and creates tables if they don't exist.
+    If old schema is detected, drops and recreates tables with new schema.
+    """
+    try:
+        con = sqlite3.connect(DB_FILE)
+        cur = con.cursor()
+        
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA busy_timeout=30000")
+        
+        needs_recreate = False
+        if os.path.exists(DB_FILE):
+            if not check_table_schema(cur, "rating_stats") or \
+               not check_table_schema(cur, "rating_main") or \
+               not check_table_schema(cur, "rating_history"):
+                needs_recreate = True
+                print("⚠️ Old database schema detected. Recreating tables with new schema...")
+        
+        if needs_recreate:
+            # Drop old tables
+            cur.execute("DROP TABLE IF EXISTS rating_stats")
+            cur.execute("DROP TABLE IF EXISTS rating_main")
+            cur.execute("DROP TABLE IF EXISTS rating_history")
+            print("   -> Dropped old tables")
+        
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS rating_stats (
+                ticker TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                at_price REAL,
+                daily_val REAL,
+                daily_rating TEXT,
+                daily_changed_at TEXT,
+                weekly_val REAL,
+                weekly_rating TEXT,
+                weekly_changed_at TEXT,
+                PRIMARY KEY (ticker, timestamp)
+            )
+        """)
 
-def find_new_earnings(current_db: dict, previous_db: dict) -> list:
-    """Find new earnings by comparing current_db with previous_db"""
-    current_set = get_earnings_set(current_db)
-    previous_set = get_earnings_set(previous_db)
-    
-    new_keys = current_set - previous_set
-    
-    # Extract full earning objects for new keys
-    new_earnings = []
-    for market_data in current_db.values():
-        if isinstance(market_data, dict) and "data" in market_data:
-            for earning in market_data["data"]:
-                ticker = earning.get("ticker", "")
-                date = earning.get("date")
-                if (ticker, date) in new_keys:
-                    new_earnings.append(earning)
-    
-    return new_earnings
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS rating_main (
+                ticker TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                at_price REAL,
+                daily_val REAL,
+                daily_rating TEXT,
+                daily_prev TEXT,
+                daily_changed_at TEXT,
+                weekly_val REAL,
+                weekly_rating TEXT,
+                weekly_prev TEXT,
+                weekly_changed_at TEXT,
+                currency TEXT,
+                price REAL,
+                change_pct REAL,
+                change_abs REAL,
+                high REAL,
+                low REAL,
+                PRIMARY KEY (ticker, timestamp)
+            )
+        """)
+        
+        # Create index on rating_main for faster queries (WHERE ticker=? ORDER BY timestamp DESC)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_rating_main_ticker_timestamp 
+            ON rating_main(ticker, timestamp DESC)
+        """)
 
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS rating_history (
+                ticker TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                daily_val REAL,
+                daily_rating TEXT,
+                daily_prev TEXT,
+                daily_changed_at TEXT,
+                weekly_val REAL,
+                weekly_rating TEXT,
+                weekly_prev TEXT,
+                weekly_changed_at TEXT,
+                exchange TEXT,
+                market TEXT,
+                currency TEXT,
+                open REAL,
+                price REAL,
+                change_pct REAL,
+                change_abs REAL,
+                high REAL,
+                low REAL,
+                PRIMARY KEY (ticker, timestamp)
+            )
+        """)
+
+        # Ensure new market-data / market-info columns exist on old databases
+        try:
+            cur.execute("PRAGMA table_info(rating_history)")
+            existing_cols = {row[1] for row in cur.fetchall()}
+            for col_def in [
+                ("exchange", "TEXT"),
+                ("market", "TEXT"),
+                ("currency", "TEXT"),
+                ("open", "REAL"),
+                ("price", "REAL"),
+                ("change_pct", "REAL"),
+                ("change_abs", "REAL"),
+                ("high", "REAL"),
+                ("low", "REAL"),
+            ]:
+                col_name, col_type = col_def
+                if col_name not in existing_cols:
+                    cur.execute(f"ALTER TABLE rating_history ADD COLUMN {col_name} {col_type}")
+        except Exception as e:
+            print(f"⚠️ Failed to ensure rating_history market-data columns: {e}")
+
+        # Ensure rating_stats has the new at_price column on old databases
+        try:
+            cur.execute("PRAGMA table_info(rating_stats)")
+            existing_stats_cols = {row[1] for row in cur.fetchall()}
+            if "at_price" not in existing_stats_cols:
+                cur.execute("ALTER TABLE rating_stats ADD COLUMN at_price REAL")
+        except Exception as e:
+            print(f"⚠️ Failed to ensure rating_stats at_price column: {e}")
+
+        # Ensure rating_main has the new at_price column on old databases
+        try:
+            cur.execute("PRAGMA table_info(rating_main)")
+            existing_main_cols = {row[1] for row in cur.fetchall()}
+            if "at_price" not in existing_main_cols:
+                cur.execute("ALTER TABLE rating_main ADD COLUMN at_price REAL")
+                # Populate at_price from rating_stats if possible
+                try:
+                    cur.execute("""
+                        UPDATE rating_main
+                        SET at_price = (
+                            SELECT at_price FROM rating_stats rs
+                            WHERE rs.ticker = rating_main.ticker AND rs.timestamp = rating_main.timestamp
+                        )
+                        WHERE at_price IS NULL
+                    """)
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"⚠️ Failed to ensure rating_main at_price column: {e}")
+
+        # Helper: sync at_price for any rows in rating_main from rating_stats
+        def sync_at_price_from_stats(cur_conn):
+            try:
+                cur_conn.execute("""
+                    UPDATE rating_main
+                    SET at_price = (
+                        SELECT at_price FROM rating_stats rs
+                        WHERE rs.ticker = rating_main.ticker AND rs.timestamp = rating_main.timestamp
+                    )
+                    WHERE at_price IS NULL
+                """)
+            except Exception:
+                pass
+
+        # Run sync to ensure existing rows pick up at_price from rating_stats
+        try:
+            sync_at_price_from_stats(cur)
+        except Exception:
+            pass
+
+        # If rating_main still has legacy 'open' column, rebuild table to remove it (SQLite cannot DROP COLUMN)
+        try:
+            cur.execute("PRAGMA table_info(rating_main)")
+            main_cols_now = [r[1] for r in cur.fetchall()]
+            if "open" in main_cols_now:
+                print("⚠️ Detected 'open' column in rating_main, rebuilding table to remove it...")
+                desired_main_cols = [
+                    'ticker','timestamp','at_price','daily_val','daily_rating','daily_prev','daily_changed_at',
+                    'weekly_val','weekly_rating','weekly_prev','weekly_changed_at',
+                    'currency','price','change_pct','change_abs','high','low'
+                ]
+                # Create temp table with desired schema (without 'open')
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS rating_main_new (
+                        ticker TEXT NOT NULL,
+                        timestamp TEXT NOT NULL,
+                        at_price REAL,
+                        daily_val REAL,
+                        daily_rating TEXT,
+                        daily_prev TEXT,
+                        daily_changed_at TEXT,
+                        weekly_val REAL,
+                        weekly_rating TEXT,
+                        weekly_prev TEXT,
+                        weekly_changed_at TEXT,
+                        currency TEXT,
+                        price REAL,
+                        change_pct REAL,
+                        change_abs REAL,
+                        high REAL,
+                        low REAL,
+                        PRIMARY KEY (ticker, timestamp)
+                    )
+                """)
+
+                available_main = [c for c in desired_main_cols if c in main_cols_now]
+                if available_main:
+                    cols_csv = ",".join(available_main)
+                    cur.execute(f"INSERT INTO rating_main_new ({cols_csv}) SELECT {cols_csv} FROM rating_main")
+
+                cur.execute("DROP TABLE rating_main")
+                cur.execute("ALTER TABLE rating_main_new RENAME TO rating_main")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_rating_main_ticker_timestamp ON rating_main(ticker, timestamp DESC)")
+                print("   -> Removed 'open' from rating_main and rebuilt table.")
+        except Exception as e:
+            print(f"⚠️ Failed to remove open from rating_main: {e}")
+
+        # If old DB accidentally has 'open_prev' column in rating_history, remove it by rebuilding table
+        try:
+            cur.execute("PRAGMA table_info(rating_history)")
+            cols_after = [r[1] for r in cur.fetchall()]
+            if "open_prev" in cols_after:
+                print("⚠️ Detected 'open_prev' in rating_history, rebuilding table to remove it...")
+                # Desired columns for rating_history (explicit order)
+                desired_cols = [
+                    'ticker','timestamp','daily_val','daily_rating','daily_prev','daily_changed_at',
+                    'weekly_val','weekly_rating','weekly_prev','weekly_changed_at',
+                    'exchange','market','currency','open','price','change_pct','change_abs','high','low'
+                ]
+
+                # Create temp table with desired schema
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS rating_history_new (
+                        ticker TEXT NOT NULL,
+                        timestamp TEXT NOT NULL,
+                        daily_val REAL,
+                        daily_rating TEXT,
+                        daily_prev TEXT,
+                        daily_changed_at TEXT,
+                        weekly_val REAL,
+                        weekly_rating TEXT,
+                        weekly_prev TEXT,
+                        weekly_changed_at TEXT,
+                        exchange TEXT,
+                        market TEXT,
+                        currency TEXT,
+                        open REAL,
+                        price REAL,
+                        change_pct REAL,
+                        change_abs REAL,
+                        high REAL,
+                        low REAL,
+                        PRIMARY KEY (ticker, timestamp)
+                    )
+                """)
+
+                # Copy data for columns that exist
+                available = [c for c in desired_cols if c in cols_after]
+                if available:
+                    cols_csv = ",".join(available)
+                    cur.execute(f"INSERT INTO rating_history_new ({cols_csv}) SELECT {cols_csv} FROM rating_history")
+
+                # Replace old table
+                cur.execute("DROP TABLE rating_history")
+                cur.execute("ALTER TABLE rating_history_new RENAME TO rating_history")
+                # Recreate index
+                cur.execute("")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_rating_history_ticker_timestamp ON rating_history(ticker, timestamp DESC)")
+                print("   -> Removed 'open_prev' from rating_history and rebuilt table.")
+        except Exception as e:
+            print(f"⚠️ Failed to remove open_prev from rating_history: {e}")
+
+        # If old DB accidentally has 'open_prev' column in rating_main, remove it by rebuilding table
+        try:
+            cur.execute("PRAGMA table_info(rating_main)")
+            main_cols = [r[1] for r in cur.fetchall()]
+            if "open_prev" in main_cols:
+                print("⚠️ Detected 'open_prev' in rating_main, rebuilding table to remove it...")
+                desired_main_cols = [
+                    'ticker','timestamp','daily_val','daily_rating','daily_prev','daily_changed_at',
+                    'weekly_val','weekly_rating','weekly_prev','weekly_changed_at',
+                    'currency','price','change_pct','change_abs','high','low'
+                ]
+
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS rating_main_new (
+                        ticker TEXT NOT NULL,
+                        timestamp TEXT NOT NULL,
+                        daily_val REAL,
+                        daily_rating TEXT,
+                        daily_prev TEXT,
+                        daily_changed_at TEXT,
+                        weekly_val REAL,
+                        weekly_rating TEXT,
+                        weekly_prev TEXT,
+                        weekly_changed_at TEXT,
+                        currency TEXT,
+                        price REAL,
+                        change_pct REAL,
+                        change_abs REAL,
+                        high REAL,
+                        low REAL,
+                        PRIMARY KEY (ticker, timestamp)
+                    )
+                """)
+
+                available_main = [c for c in desired_main_cols if c in main_cols]
+                if available_main:
+                    cols_csv = ",".join(available_main)
+                    cur.execute(f"INSERT INTO rating_main_new ({cols_csv}) SELECT {cols_csv} FROM rating_main")
+
+                cur.execute("DROP TABLE rating_main")
+                cur.execute("ALTER TABLE rating_main_new RENAME TO rating_main")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_rating_main_ticker_timestamp ON rating_main(ticker, timestamp DESC)")
+                print("   -> Removed 'open_prev' from rating_main and rebuilt table.")
+        except Exception as e:
+            print(f"⚠️ Failed to remove open_prev from rating_main: {e}")
+
+        try:
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", ("rating_accuracy",))
+            if cur.fetchone():
+                cur.execute("PRAGMA table_info(rating_accuracy)")
+                columns = [row[1] for row in cur.fetchall()]
+                if "timeframe" in columns or "currency" not in columns or "high" not in columns or "low" not in columns or "price_prev" not in columns:
+                    print("⚠️ Old rating_accuracy schema detected. Dropping and recreating table...")
+                    cur.execute("DROP TABLE IF EXISTS rating_accuracy")
+                    print("   -> Dropped old rating_accuracy table")
+        except Exception as e:
+            print(f"⚠️ Error checking rating_accuracy schema: {e}")
+        
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS rating_accuracy (
+                ticker TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                price REAL,
+                price_prev REAL,
+                open_prev REAL,
+                open REAL,
+                change_pct REAL,
+                currency TEXT,
+                high REAL,
+                low REAL,
+                window_day INTEGER NOT NULL,
+                daily_rating TEXT,
+                daily_prev TEXT,
+                samplesize_daily INTEGER NOT NULL,
+                correct_daily INTEGER NOT NULL,
+                incorrect_daily INTEGER NOT NULL,
+                accuracy_daily REAL NOT NULL,
+                weekly_rating TEXT,
+                weekly_prev TEXT,
+                samplesize_weekly INTEGER NOT NULL,
+                correct_weekly INTEGER NOT NULL,
+                incorrect_weekly INTEGER NOT NULL,
+                accuracy_weekly REAL NOT NULL,
+                PRIMARY KEY (ticker, timestamp)
+            )
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS user_tracking (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ip_address TEXT,
+                session_id TEXT,
+                event_type TEXT,
+                event_data TEXT,
+                page_path TEXT,
+                timestamp TEXT,
+                user_agent TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Check and migrate user_tracking if it has old schema (user_id instead of ip_address)
+        try:
+            cur.execute("PRAGMA table_info(user_tracking)")
+            ut_cols = [r[1] for r in cur.fetchall()]
+            if "user_id" in ut_cols:
+                print("⚠️ Migrating user_tracking to match user_behavior schema...")
+                cur.execute("ALTER TABLE user_tracking RENAME TO user_tracking_old")
+                cur.execute("""
+                    CREATE TABLE user_tracking (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        ip_address TEXT,
+                        session_id TEXT,
+                        event_type TEXT,
+                        event_data TEXT,
+                        page_path TEXT,
+                        timestamp TEXT,
+                        user_agent TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                # Restore data (set ip_address to 'migrated')
+                cur.execute("""
+                    INSERT INTO user_tracking (session_id, event_type, event_data, page_path, timestamp, user_agent, created_at, ip_address)
+                    SELECT session_id, event_type, event_data, page_path, timestamp, user_agent, created_at, 'migrated'
+                    FROM user_tracking_old
+                """)
+                cur.execute("DROP TABLE user_tracking_old")
+                print("   -> user_tracking migrated successfully.")
+        except Exception as e:
+            print(f"⚠️ Error check/migrating user_tracking: {e}")
+
+
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_rating_accuracy_ticker 
+            ON rating_accuracy(ticker)
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_rating_accuracy_ticker_timestamp 
+            ON rating_accuracy(ticker, timestamp DESC)
+        """)
+
+        # Ensure 'open' and 'open_prev' columns exist on older DBs for history/accuracy only
+        try:
+            for tbl in ("rating_history", "rating_accuracy"):
+                cur.execute(f"PRAGMA table_info({tbl})")
+                existing_cols = [r[1] for r in cur.fetchall()]
+                if "open" not in existing_cols:
+                    cur.execute(f"ALTER TABLE {tbl} ADD COLUMN open REAL")
+                # Only add open_prev to rating_accuracy
+                if tbl == "rating_accuracy":
+                    if "open_prev" not in existing_cols:
+                        try:
+                            cur.execute(f"ALTER TABLE {tbl} ADD COLUMN open_prev REAL")
+                        except Exception:
+                            # some tables may not accept new columns in older SQLite versions; ignore
+                            pass
+        except Exception:
+            # best-effort migration; don't fail init if ALTER TABLE not possible
+            pass
+
+        con.commit()
+        con.close()
+        if needs_recreate:
+            print("[INFO] SQLite database recreated with new schema successfully.")
+        else:
+            print("[INFO] SQLite database and tables initialized successfully.")
+    except Exception as e:
+        print(f"[ERROR] Database initialization failed: {e}")
+        import traceback
+        traceback.print_exc()
+
+def migrate_from_json_if_needed():
+    """Reads data from old JSON files and loads it into the SQLite database."""
+    if not os.path.exists(DB_FILE):
+        print("[INFO] New database, migration not possible.")
+        return
+
+    try:
+        con = sqlite3.connect(DB_FILE)
+        cur = con.cursor()
+        
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA busy_timeout=30000")
+
+        cur.execute("SELECT COUNT(*) FROM rating_stats")
+        if cur.fetchone()[0] > 0:
+            print("[INFO] Database already contains data. Skipping migration.")
+            con.close()
+            return
+
+        print("[INFO] Migrating data from JSON to SQLite...")
+
+        # --- Migrate Ratings ---
+        if os.path.exists(CACHE_FILE):
+            try:
+                with open(CACHE_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                
+                # Use transaction for faster inserts
+                cur.execute("BEGIN TRANSACTION")
+                count = 0
+                for ticker, details in data.items():
+                    # Check if keys exist, handle missing keys gracefully
+                    cur.execute("""
+                        INSERT OR REPLACE INTO rating_stats 
+                        (ticker, daily_rating, weekly_rating, timestamp)
+                        VALUES (?, ?, ?, ?)
+                    """, (
+                        ticker,
+                        details.get("rating_daily"),
+                        details.get("rating_weekly"),
+                        details.get("timestamp", datetime.now().isoformat())
+                    ))
+                    count += 1
+                cur.execute("COMMIT")
+                print(f"[INFO] Migrated {count} records to rating_stats.")
+            except Exception as e:
+                print(f"[WARN] Failed to migrate cache file: {e}")
+
+        # --- Migrate Intraday History ---
+        # Assuming we don't need to migrate history from JSON as it's fetched live/daily 
+        # but if we did, logic would go here.
+
+        con.close()
+        print("[INFO] Migration completed successfully.")
+
+    except Exception as e:
+        print(f"[ERROR] Migration Error: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        if 'con' in locals() and con:
+            con.close()
+
+
+# --- Helper Functions ---
+def rating_from_recommend_tradingview(v):
+    try:
+        val = float(v)
+    except (ValueError, TypeError):
+        return "Unknown"
+    
+    if val >= 0.5: return "Strong Buy"
+    if val >= 0.1: return "Buy"
+    if val > -0.1: return "Neutral"
+    if val > -0.5: return "Sell"
+    return "Strong Sell"
+
+def rating_from_recommend_custom(v):
+    """
+    Custom mapping for Recommend.All / Recommend.All|1W used for backtest/history:
+        v >= 0.5        -> Strong Buy
+        0 <= v < 0.5    -> Buy
+        -0.5 < v < 0    -> Sell
+        v <= -0.5       -> Strong Sell
+    """
+    try:
+        val = float(v)
+    except (ValueError, TypeError):
+        return "Unknown"
+
+    if val >= 0.5:
+        return "Strong Buy"
+    if 0 <= val < 0.5:
+        return "Buy"
+    if -0.5 < val < 0:
+        return "Sell"
+    return "Strong Sell"
+
+def _find_key_recursive(obj, key):
+    if obj is None: return None
+    if isinstance(obj, dict):
+        if key in obj: return obj[key]
+        for v in obj.values():
+            r = _find_key_recursive(v, key)
+            if r is not None: return r
+    elif isinstance(obj, list):
+        for item in obj:
+            r = _find_key_recursive(item, key)
+            if r is not None: return r
+    return None
+
+def construct_tv_symbol(ticker: str, name: str, exchange: str, dr_symbol: str):
+    ticker = ticker.strip().upper()
+    exchange = " ".join(exchange.upper().split()) if exchange else ""
+    name = name.strip() if name else ""
+    dr_symbol = dr_symbol.strip().upper() if dr_symbol else ""
+
+    real_ticker = ticker 
+    # If ticker looks like numeric with an exchange suffix (e.g. 3692.HK, 3692-HK, 3692:HKEX),
+    # strip the suffix so TradingView receives just the numeric code (e.g. 3692).
+    m_num_suffix = re.match(r'^([0-9]+)[\.\:\-].*$', real_ticker)
+    if m_num_suffix:
+        real_ticker = m_num_suffix.group(1)
+
+    match = re.search(r'\(([A-Z0-9.\-_]+)\)$', name)
+    if match:
+        matched = match.group(1)
+        # If matched begins with digits (numeric HK/TW style), strip suffix like '.HK' -> '3692'
+        if re.match(r'^\d+', matched):
+            real_ticker = re.sub(r'[\.\:\-].*$', '', matched)
+        else:
+            # Preserve non-numeric tickers including class suffixes (e.g. 'BRK.B' or 'NOVO-B')
+            real_ticker = matched
+    else:
+        if dr_symbol:
+            # Normalize dr_symbol by removing common suffixes (.HK, -HK, :HKEX)
+            dr_clean = re.sub(r'[\.\:\-].*$', '', dr_symbol).strip()
+            if len(dr_clean) >= 1:
+                real_ticker = dr_clean
+
+    if any(k in exchange for k in ("MILAN", "MIL")): return f"MIL:{real_ticker}"
+    if any(k in exchange for k in ("COPENHAGEN", "OMX")): return f"OMXCOP:{real_ticker.replace('-', '_')}"
+    if any(k in exchange for k in ("EURONEXT", "PARIS", "AMSTERDAM", "BRUSSELS", "FRANCE", "NETHERLANDS")): return f"EURONEXT:{real_ticker}"
+    if any(k in exchange for k in ("SHANGHAI", "SSE", "SHANGHAI STOCK EXCHANGE")): return f"SSE:{real_ticker}"
+    if any(k in exchange for k in ("SHENZHEN", "SZSE")): return f"SZSE:{real_ticker}"
+    if any(k in exchange for k in ("HONG", "HK", "HKEX")): return f"HKEX:{real_ticker}"
+    if any(k in exchange for k in ("VIET", "HOCHIMINH", "HOSE", "HNX")): return f"HOSE:{real_ticker}"
+    if any(k in exchange for k in ("TOKYO", "JAPAN", "TSE", "JP")): return f"TSE:{real_ticker}"
+    if any(k in exchange for k in ("SINGAPORE", "SGX", "SG")): return f"SGX:{real_ticker}"
+    if any(k in exchange for k in ("TAIWAN", "TWSE", "TW")): return f"TWSE:{real_ticker}"
+    if "NASDAQ" in exchange: return f"NASDAQ:{real_ticker}"
+    if any(k in exchange for k in ("NEW YORK", "NYSE", "NY")):     
+        if any(sub_k in exchange for sub_k in ("ARCHIPELAGO", "ARCA", "AMEX")): return f"AMEX:{real_ticker}"
+        return f"NYSE:{real_ticker}"
+    if re.match(r'^\d+$', real_ticker): return f"HKEX:{real_ticker}" 
+    return f"NASDAQ:{real_ticker}" 
+
+
+def market_code_from_exchange(exchange: str) -> str:
+    """
+    Map exchange/market description from DR API to high-level market code
+    used in MARKET_CLOSE_CONFIG.
+    """
+    if not exchange:
+        return "US"
+
+    ex = exchange.upper()
+
+    # ใช้การ map แบบเดียวกับ frontend (DRList.jsx) - ตรวจสอบแบบเต็มก่อน
+    ex_lower = ex.lower()
+    
+    # Europe - ตรวจสอบแบบเต็มตาม frontend
+    if "euronext amsterdam" in ex_lower:
+        return "NL"
+    if "euronext milan" in ex_lower:
+        return "IT"
+    if "euronext paris" in ex_lower:
+        return "FR"
+    if "nasdaq copenhagen" in ex_lower:
+        return "DK"
+    
+    if ("ho chi minh" in ex_lower or "hochiminh" in ex_lower or 
+        "hanoi" in ex_lower or "hnx" in ex_lower):
+        return "VN"
+    
+    if "shenzhen" in ex_lower or "shanghai" in ex_lower:
+        return "CN" 
+  
+    if "singapore exchange" in ex_lower or "sgx" in ex_lower:
+        return "SG"
+   
+    if "taiwan stock exchange" in ex_lower:
+        return "TW"
+    
+    if "stock exchange of hong kong" in ex_lower or "hkex" in ex_lower:
+        return "HK"
+    
+    if "tokyo stock exchange" in ex_lower:
+        return "JP"
+    
+    if ("nasdaq global select market" in ex_lower or 
+        "nasdaq stock market" in ex_lower or 
+        "new york stock exchange archipelago" in ex_lower or  # ตรวจสอบ Archipelago ก่อน (เพราะมี "new york stock exchange" อยู่ด้วย)
+        "new york stock exchange" in ex_lower or 
+        "nyse" in ex_lower or 
+        "nasdaq" in ex_lower):
+        return "US"
+    
+    # Fallback: ตรวจสอบแบบย่อสำหรับกรณีที่ไม่ได้ระบุแบบเต็ม
+    if any(k in ex for k in ("COPENHAGEN", "DENMARK", "OMXCOP", "DK")):
+        return "DK"
+    if any(k in ex for k in ("AMSTERDAM", "NETHERLANDS")):
+        return "NL"
+    if any(k in ex for k in ("PARIS", "FRANCE")):
+        return "FR"
+    if any(k in ex for k in ("MILAN", "ITALY", "BORSA ITALIANA")):
+        return "IT"
+    if any(k in ex for k in ("VIET", "VIETNAM", "HOCHIMINH", "HOSE", "HNX", "VN")):
+        return "VN"
+    if any(k in ex for k in ("SHANGHAI", "SSE", "SZSE", "SHENZHEN", "CHINA", "CN")):
+        return "CN"
+    if any(k in ex for k in ("SINGAPORE", "SGX", "SG")):
+        return "SG"
+    if any(k in ex for k in ("TAIWAN", "TWSE", "TW")):
+        return "TW"
+    if any(k in ex for k in ("HONG", "HKEX", "HONG KONG", "HK")):
+        return "HK"
+    if any(k in ex for k in ("TOKYO", "JAPAN", "TSE", "JP")):
+        return "JP"
+    if any(k in ex for k in ("NASDAQ", "NYSE", "NEW YORK", "AMEX", "ARCHIPELAGO", "ARCA")):
+        return "US"
+    # Note: ไม่มี TH (Thailand) เพราะระบบไม่มีหุ้นไทย
+
+    # Default: treat as US if ไม่แมตช์
+    return "US"
+
+
+def generate_tv_candidates(ticker: str, name: str, exchange: str, dr_symbol: str):
+    """
+    Generate a prioritized list of TradingView symbol candidates based on
+    the provided exchange/name/dr_symbol. This helps when the default
+    constructed symbol returns no data — we can try alternates.
+    """
+    candidates = []
+    # Normalize base by removing common exchange suffixes (e.g. .HK, -HK, :HKEX)
+    base_raw = (ticker or "").strip().upper()
+    base = re.sub(r'[\.\:\-].*$', '', base_raw)
+    exch = (exchange or "").upper()
+
+    # If ticker looks numeric, prefer raw numeric and common HK prefix
+    if re.match(r'^\d+$', base):
+        candidates.extend([f"HKEX:{base}", f"HK:{base}", f"TWSE:{base}"])
+
+    # If dr_symbol or name suggests a specific market, add corresponding prefixes
+    d = (dr_symbol or "").upper()
+    d = re.sub(r'[\.\:\-].*$', '', d)
+    if d:
+        # Manual map for known mismatches (dr_symbol -> TradingView symbol)
+        tv_manual_map = {
+            "E1VFVN3001": "HOSE:E1VFVN30",
+            "FUEVFVND01": "HOSE:FUEVFVND",
+            "3692.HK": "HKEX:3692",
+            "1177.HK": "HKEX:1177",
+        }
+        if d in tv_manual_map:
+            candidates.append(tv_manual_map[d])
+        # try dr_symbol as-is (it may already contain prefix)
+        candidates.append(d)
+        # For VN ETF-like dr_symbols, try trimmed variants (drop common trailing numeric groupings)
+        if any(k in exch for k in ("VIET", "VIETNAM", "HOCHIMINH", "HOSE", "HNX", "VN")):
+            # remove common suffix patterns like 01, 001, 0001
+            m_trim = re.match(r'^(.*?)(?:0*\d{1,4})$', d)
+            if m_trim:
+                base_trim = m_trim.group(1)
+                if base_trim and base_trim != d:
+                    candidates.append(base_trim)
+            # also try removing only last 2 digits if present
+            if re.match(r'^.+\d{2}$', d):
+                candidates.append(d[:-2])
+            # try with HOSE: prefix explicitly
+            candidates.append(f"HOSE:{d}")
+            # and with trimmed HOSE
+            if re.match(r'^.+\d{2}$', d):
+                candidates.append(f"HOSE:{d[:-2]}")
+
+    # Map exchange keywords to likely prefixes
+    if any(k in exch for k in ("HKEX", "HONG", "HK")):
+        candidates.extend([f"HKEX:{base}", f"HK:{base}"])
+    if any(k in exch for k in ("TWSE", "TAIWAN", "TW")):
+        candidates.append(f"TWSE:{base}")
+    if any(k in exch for k in ("TSE", "TOKYO", "JP")):
+        candidates.append(f"TSE:{base}")
+    if any(k in exch for k in ("SGX", "SINGAPORE", "SG")):
+        candidates.append(f"SGX:{base}")
+    if any(k in exch for k in ("SSE", "SHANGHAI", "SZSE", "SHENZHEN")):
+        candidates.append(f"SSE:{base}")
+    if any(k in exch for k in ("NASDAQ", "NYSE", "AMEX", "US")):
+        candidates.append(f"NASDAQ:{base}")
+
+    # Trim duplicates while preserving order
+    seen = set()
+    uniq = []
+    for c in candidates:
+        if not c or c in seen:
+            continue
+        seen.add(c)
+        uniq.append(c)
+
+    return uniq
+
+
+def is_summer_time(ref_thai: datetime) -> bool:
+    """
+    ตรวจสอบว่าตอนนี้เป็นหน้าร้อน (Summer/DST) หรือหน้าหนาว (Winter)
+    โดยตรวจสอบจาก US DST schedule:
+    - Summer: วันอาทิตย์ที่ 2 ของมีนาคม ถึง วันอาทิตย์แรกของพฤศจิกายน
+    - Winter: นอกช่วง Summer
+    """
+    year = ref_thai.year
+    month = ref_thai.month
+    
+    # ถ้าเป็นเดือน พ.ย. - ก.พ. = หน้าหนาว
+    if month in [11, 12, 1, 2]:
+        return False
+    # ถ้าเป็นเดือน เม.ย. - ต.ค. = หน้าร้อน
+    if month in [4, 5, 6, 7, 8, 9, 10]:
+        return True
+    
+    # มีนาคม: ตรวจสอบว่าหลังวันอาทิตย์ที่ 2 ของมีนาคมหรือไม่
+    if month == 3:
+        # หาวันอาทิตย์แรกของมีนาคม
+        first_day = datetime(year, 3, 1, tzinfo=ref_thai.tzinfo)
+        first_sunday = first_day + timedelta(days=(6 - first_day.weekday()) % 7)
+        # วันอาทิตย์ที่ 2 = วันอาทิตย์แรก + 7 วัน
+        second_sunday = first_sunday + timedelta(days=7)
+        return ref_thai >= second_sunday
+    
+    # พฤศจิกายน: ตรวจสอบว่าก่อนวันอาทิตย์แรกของพฤศจิกายนหรือไม่
+    if month == 11:
+        # หาวันอาทิตย์แรกของพฤศจิกายน
+        first_day = datetime(year, 11, 1, tzinfo=ref_thai.tzinfo)
+        first_sunday = first_day + timedelta(days=(6 - first_day.weekday()) % 7)
+        return ref_thai < first_sunday
+    
+    return False
+
+def get_market_open_thai(market_code: str, ref_thai: datetime) -> datetime:
+    """
+    Given market code and current Thai time, return the next market-open datetime (Thai time)
+    for that market using MARKET_OPEN_CONFIG (which represents market open + 30min buffer).
+    """
+    cfg = MARKET_OPEN_CONFIG.get(market_code, MARKET_OPEN_CONFIG["US"])
+
+    # ตรวจสอบฤดูกาล (summer/winter)
+    is_summer = is_summer_time(ref_thai)
+
+    if "winter" in cfg and "summer" in cfg:
+        open_time = cfg["summer"] if is_summer else cfg["winter"]
+    else:
+        open_time = cfg.get("winter") or cfg.get("summer") or time(3, 0)
+
+    thai_date = ref_thai.date()
+    open_thai = datetime.combine(thai_date, open_time, tzinfo=ref_thai.tzinfo)
+
+    # If open time already passed today, schedule for next day
+    if open_thai <= ref_thai:
+        open_thai = open_thai + timedelta(days=1)
+
+    return open_thai
+
+async def fetch_single_ticker(client: httpx.AsyncClient, item_data):
+    ticker = item_data.get("u_code")
+    # ... (rest of the function is identical to the user's provided code)
+    name = item_data.get("u_name")
+    exchange = item_data.get("u_exch")
+    dr_symbol = item_data.get("dr_sym")
+
+    tv_symbol = construct_tv_symbol(ticker, name, exchange, dr_symbol)
+    
+    params = {
+        "symbol": tv_symbol, 
+        "fields": TV_FIELDS,
+        "no_404": "true",
+        "label-product": "popup-technicals",
+    }
+    
+    # ลด sleep ให้สั้นลงเพื่อความเร็ว (หรือเอาออกถ้า API ต้นทางรับไหว)
+    await asyncio.sleep(random.uniform(0.01, 0.05))
+
+    # Prepare list of symbol candidates to try (primary first)
+    tv_candidates = [tv_symbol] + generate_tv_candidates(ticker, name, exchange, dr_symbol)
+    # Dedupe while preserving order
+    seen_sym = set()
+    tv_candidates_unique = []
+    for s in tv_candidates:
+        if not s or s in seen_sym:
+            continue
+        seen_sym.add(s)
+        tv_candidates_unique.append(s)
+
+    payload = None
+    chosen_symbol = None
+
+    # Try a couple of overall attempts (with backoff) and within each attempt try candidates
+    for attempt in range(2):
+        try:
+            for candidate in tv_candidates_unique:
+                params['symbol'] = candidate
+                try:
+                    resp = await client.get(TRADINGVIEW_BASE, params=params, headers=FAKE_HEADERS, timeout=REQUEST_TIMEOUT)
+                except Exception as e:
+                    # network/timeout for this candidate -> try next candidate
+                    continue
+
+                if resp.status_code == 429:
+                    # Rate limited - back off and retry this attempt
+                    wait_time = 2 * (2 ** attempt)
+                    await asyncio.sleep(wait_time)
+                    break
+
+                try:
+                    resp.raise_for_status()
+                except Exception:
+                    continue
+
+                candidate_payload = resp.json()
+                # Consider it successful if payload contains 'data' dict or has price/recommend keys
+                has_data = False
+                if isinstance(candidate_payload, dict):
+                    if 'data' in candidate_payload and isinstance(candidate_payload['data'], dict) and candidate_payload['data']:
+                        has_data = True
+                    elif _find_key_recursive(candidate_payload, 'close') is not None or _find_key_recursive(candidate_payload, 'Recommend.All') is not None:
+                        has_data = True
+
+                if has_data:
+                    payload = candidate_payload
+                    chosen_symbol = candidate
+                    break
+
+            if payload is None:
+                # No candidate produced usable data in this attempt, backoff slightly then retry
+                await asyncio.sleep(1 + attempt)
+                continue
+
+            rec_daily = None
+            rec_weekly = None
+            p_close = p_change_pct = p_change_abs = p_high = p_low = p_currency = p_open = None
+
+            if isinstance(payload, dict):
+                if chosen_symbol:
+                    tv_symbol = chosen_symbol
+                if "data" in payload and isinstance(payload["data"], dict):
+                    d = payload["data"]
+                    rec_daily = d.get("Recommend.All")
+                    rec_weekly = d.get("Recommend.All|1W")
+                    p_close = d.get("close")
+                    p_change_pct = d.get("change")
+                    p_change_abs = d.get("change_abs")
+                    p_high = d.get("high")
+                    p_low = d.get("low")
+                    p_currency = d.get("currency")
+                
+                if rec_daily is None: rec_daily = _find_key_recursive(payload, "Recommend.All")
+                if rec_weekly is None: rec_weekly = _find_key_recursive(payload, "Recommend.All|1W")
+                if p_close is None: p_close = _find_key_recursive(payload, "close")
+                if p_change_pct is None: p_change_pct = _find_key_recursive(payload, "change")
+                if p_change_abs is None: p_change_abs = _find_key_recursive(payload, "change_abs")
+                if p_high is None: p_high = _find_key_recursive(payload, "high")
+                if p_low is None: p_low = _find_key_recursive(payload, "low")
+                if p_currency is None: p_currency = _find_key_recursive(payload, "currency")
+
+            def safe_float(x):
+                try: return float(x) if x is not None else None
+                except: return None
+
+            d_val = safe_float(rec_daily)
+            w_val = safe_float(rec_weekly)
+            val_close = safe_float(p_close)
+            val_change_pct = safe_float(p_change_pct)
+            val_change_abs = safe_float(p_change_abs)
+            val_high = safe_float(p_high)
+            val_low = safe_float(p_low)
+
+            return {
+                "ticker": ticker, 
+                "tv_symbol": tv_symbol,
+                "success": True,
+                "data": {
+                    "daily": {"val": d_val, "rating": rating_from_recommend_tradingview(d_val) if d_val is not None else "Unknown"},
+                    "weekly": {"val": w_val, "rating": rating_from_recommend_tradingview(w_val) if w_val is not None else "Unknown"},
+                    "currency": str(p_currency) if p_currency else "",
+                    "market_data": {
+                        "price": val_close,
+                        "change_pct": val_change_pct,
+                        "change_abs": val_change_abs,
+                        "high": val_high,
+                        "low": val_low
+                    }
+                }
+            }
+        except Exception as e:
+            print(f"      - Error fetching {ticker} (attempt {attempt + 1}/3): {e}")
+            await asyncio.sleep(1)
+            
+    print(f"      - ❌ Failed to fetch data for {ticker} after 3 attempts")
+    return {"ticker": ticker, "success": False, "error": "Max retries exceeded"}
+
+
+async def fetch_single_ticker_for_history(client: httpx.AsyncClient, item_data):
+
+    ticker = item_data.get("u_code")
+    name = item_data.get("u_name")
+    exchange = item_data.get("u_exch") or ""
+    dr_symbol = item_data.get("dr_sym")
+
+    tv_symbol = construct_tv_symbol(ticker, name, exchange, dr_symbol)
+
+    params = {
+        "symbol": tv_symbol,
+        "fields": TV_FIELDS,
+        "no_404": "true",
+        "label-product": "popup-technicals",
+    }
+
+    # ลด sleep ให้สั้นลงเพื่อความเร็ว (หรือเอาออกถ้า API ต้นทางรับไหว)
+    await asyncio.sleep(random.uniform(0.005, 0.02))
+
+    # ลดจำนวน retry เหลือ 2 รอบ (หรือ 1 ถ้า API เสถียร)
+    for attempt in range(2):
+        try:
+            resp = await client.get(TRADINGVIEW_BASE, params=params, headers=FAKE_HEADERS, timeout=REQUEST_TIMEOUT)
+
+            if resp.status_code == 429:
+                wait_time = 2 * (2 ** attempt)
+                await asyncio.sleep(wait_time)
+                continue
+
+            resp.raise_for_status()
+            payload = resp.json()
+
+            rec_daily = None
+            rec_weekly = None
+            p_close = p_change_pct = p_change_abs = p_high = p_low = p_currency = p_open = None
+
+            # --- DEBUG: print payload['data'] และ payload ทั้งก้อน (เฉพาะ 2 ticker แรก) ---
+            if ticker in ["AAPL", "ABBV"]:
+                print(f"[DEBUG] {ticker} payload['data']: {payload.get('data')}")
+                print(f"[DEBUG] {ticker} payload (full): {payload}")
+
+            if isinstance(payload, dict):
+                if "data" in payload and isinstance(payload["data"], dict):
+                    d = payload["data"]
+                    rec_daily = d.get("Recommend.All")
+                    rec_weekly = d.get("Recommend.All|1W")
+                    p_close = d.get("close")
+                    p_change_pct = d.get("change")
+                    p_change_abs = d.get("change_abs")
+                    p_high = d.get("high")
+                    p_low = d.get("low")
+                    p_currency = d.get("currency")
+
+                if rec_daily is None:
+                    rec_daily = _find_key_recursive(payload, "Recommend.All")
+                if rec_weekly is None:
+                    rec_weekly = _find_key_recursive(payload, "Recommend.All|1W")
+                if p_close is None:
+                    p_close = _find_key_recursive(payload, "close")
+                if p_change_pct is None:
+                    p_change_pct = _find_key_recursive(payload, "change")
+                if p_change_abs is None:
+                    p_change_abs = _find_key_recursive(payload, "change_abs")
+                if p_high is None:
+                    p_high = _find_key_recursive(payload, "high")
+                if p_low is None:
+                    p_low = _find_key_recursive(payload, "low")
+                if p_currency is None:
+                    p_currency = _find_key_recursive(payload, "currency")
+                if p_open is None:
+                    # TradingView sometimes provides 'open' in nested structures
+                    p_open = _find_key_recursive(payload, "open")
+
+            def safe_float(x):
+                try:
+                    return float(x) if x is not None else None
+                except Exception:
+                    return None
+
+            d_val = safe_float(rec_daily)
+            w_val = safe_float(rec_weekly)
+            val_close = safe_float(p_close)
+            val_change_pct = safe_float(p_change_pct)
+            val_change_abs = safe_float(p_change_abs)
+            val_high = safe_float(p_high)
+            val_low = safe_float(p_low)
+            val_open = safe_float(p_open)
+
+            # Debug log สำหรับตรวจสอบค่า open
+            print(f"[DEBUG] {ticker} | p_open(raw): {p_open} | val_open(float): {val_open}")
+
+            daily_rating = rating_from_recommend_custom(d_val) if d_val is not None else "Unknown"
+            weekly_rating = rating_from_recommend_custom(w_val) if w_val is not None else "Unknown"
+
+            return {
+                "ticker": ticker,
+                "exchange": exchange,
+                "tv_symbol": tv_symbol,
+                "success": True,
+                "data": {
+                    "daily_val": d_val,
+                    "daily_rating": daily_rating,
+                    "weekly_val": w_val,
+                    "weekly_rating": weekly_rating,
+                    "currency": str(p_currency) if p_currency else "",
+                    "market_data": {
+                        "price": val_close,
+                        "open": val_open,
+                        "change_pct": val_change_pct,
+                        "change_abs": val_change_abs,
+                        "high": val_high,
+                        "low": val_low,
+                    },
+                },
+            }
+        except Exception as e:
+            print(f"      - [history] Error fetching {ticker} (attempt {attempt + 1}/3): {e}")
+            await asyncio.sleep(1)
+
+    print(f"      - ❌ [history] Failed to fetch data for {ticker} after 3 attempts")
+    return {"ticker": ticker, "exchange": exchange, "success": False, "error": "Max retries exceeded"}
+
+
+# --- History Logic: A-B-C / A-B-A Filter ---
+def filter_noise_from_stats(stats_list):
+    if not stats_list:
+        return []
+    
+    filtered = [stats_list[0]]
+    a_idx = 0 
+    i = 1
+    while i < len(stats_list):
+        b = stats_list[i]
+        if i + 1 < len(stats_list):
+            c = stats_list[i + 1]
+            a = stats_list[a_idx]
+            if c["rating"] == a["rating"]:
+                i += 2 
+            else:
+                filtered.append(b)
+                filtered.append(c)
+                a_idx = i + 1 
+                i += 2
+        else:
+            break
+    return filtered
+
+def update_rating_stats(cur, ticker, timestamp_str, daily_val, daily_rating, weekly_val, weekly_rating, at_price=None):
+    cur.execute("""
+        SELECT daily_rating, weekly_rating 
+        FROM rating_stats 
+        WHERE ticker=? 
+        ORDER BY ticker, timestamp DESC 
+        LIMIT 1
+    """, (ticker,))
+    last_record = cur.fetchone()
+    
+    # Check if rating has changed
+    rating_changed = False
+    
+    if not last_record:
+        # First record for this ticker - always insert
+        rating_changed = True
+    else:
+        last_daily_rating = last_record[0]
+        last_weekly_rating = last_record[1]
+        
+        # Check if daily or weekly rating has changed
+        if (daily_rating and daily_rating != last_daily_rating) or \
+           (weekly_rating and weekly_rating != last_weekly_rating):
+            rating_changed = True
+    
+    # Insert only if rating has changed
+    if rating_changed:
+        cur.execute("""
+            INSERT INTO rating_stats 
+            (ticker, timestamp, at_price, daily_val, daily_rating, daily_changed_at, weekly_val, weekly_rating, weekly_changed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            ticker, timestamp_str,
+            at_price,
+            daily_val, daily_rating, timestamp_str,
+            weekly_val, weekly_rating, timestamp_str
+        ))
+
+def update_rating_main(cur, ticker, timestamp_str, daily_val, daily_rating, weekly_val, weekly_rating, market_data, at_price=None):
+
+    # DEBUG: log ทุกครั้งที่ฟังก์ชันนี้ถูกเรียก
+    new_price = market_data.get("price")
+    # Enable detailed debug output only when explicitly requested via env var
+    if os.getenv("ENABLE_DEBUG_UPDATE_MAIN") == "1":
+        print(f"[DEBUG] update_rating_main: ticker={ticker}, timestamp={timestamp_str}, new_price={new_price}")
+
+    cur.execute("""
+        SELECT daily_val, daily_rating, daily_prev, daily_changed_at,
+               weekly_val, weekly_rating, weekly_prev, weekly_changed_at,
+               timestamp
+        FROM rating_main 
+        WHERE ticker=? 
+        ORDER BY timestamp DESC 
+        LIMIT 1
+    """, (ticker,))
+    current_main = cur.fetchone()
+    
+    # Current values from latest record
+    current_daily_val = current_main[0] if current_main and current_main[0] else None
+    current_daily_rating = current_main[1] if current_main and current_main[1] else None
+    current_daily_prev = current_main[2] if current_main and current_main[2] else None
+    current_daily_changed_at = current_main[3] if current_main and current_main[3] else None
+    current_weekly_val = current_main[4] if current_main and current_main[4] else None
+    current_weekly_rating = current_main[5] if current_main and current_main[5] else None
+    current_weekly_prev = current_main[6] if current_main and current_main[6] else None
+    current_weekly_changed_at = current_main[7] if current_main and current_main[7] else None
+    current_timestamp = current_main[8] if current_main and current_main[8] else None
+
+    # DEBUG: log ค่าราคาเดิม
+    if current_main:
+        cur.execute("SELECT price FROM rating_main WHERE ticker=? ORDER BY timestamp DESC LIMIT 1", (ticker,))
+        row = cur.fetchone()
+        old_price = row[0] if row else None
+        if os.getenv("ENABLE_DEBUG_UPDATE_MAIN") == "1":
+            print(f"[DEBUG] update_rating_main: ticker={ticker}, old_price={old_price}")
+    
+    # อัพเดตข้อมูลราคาที่ timestamp เดิมเสมอ (ถ้ามี record เดิม)
+    if current_main is not None and current_timestamp:
+        cur.execute("""
+            UPDATE rating_main 
+            SET price=?, high=?, low=?, change_pct=?, change_abs=?, currency=?
+            WHERE ticker=? AND timestamp=?
+        """, (
+            market_data.get("price"),
+            market_data.get("high"),
+            market_data.get("low"),
+            market_data.get("change_pct"),
+            market_data.get("change_abs"),
+            market_data.get("currency", ""),
+            ticker,
+            current_timestamp
+        ))
+    
+    # Determine what to update
+    update_daily = False
+    update_weekly = False
+    should_insert = False
+    
+    # Check if this is the first record for this ticker
+    is_first_record = current_main is None
+
+    if daily_rating:
+        if is_first_record:
+            # First record: always store
+            update_daily = True
+            should_insert = True
+        else:
+            # Subsequent records: only store if NOT Neutral AND different from current
+            if daily_rating.lower() != "neutral" and daily_rating != current_daily_rating:
+                update_daily = True
+                should_insert = True
+
+    if weekly_rating:
+        if is_first_record:
+            # First record: always store
+            update_weekly = True
+            should_insert = True
+        else:
+            # Subsequent records: only store if NOT Neutral AND different from current
+            if weekly_rating.lower() != "neutral" and weekly_rating != current_weekly_rating:
+                update_weekly = True
+                should_insert = True
+    
+    # Insert record if needed
+    if should_insert:
+        # Get previous ratings from latest record
+        prev_daily = current_daily_rating if current_daily_rating else None
+        prev_weekly = current_weekly_rating if current_weekly_rating else None
+        
+        # Prepare daily values
+        if update_daily and daily_rating and daily_rating.lower() != "neutral":
+            # Daily rating changed: use new values
+            final_daily_val = daily_val
+            final_daily_rating = daily_rating
+            final_daily_prev = prev_daily
+            final_daily_changed_at = timestamp_str
+        elif update_daily:
+            # Daily rating changed to Neutral: store as NULL
+            final_daily_val = None
+            final_daily_rating = None
+            final_daily_prev = None
+            final_daily_changed_at = None
+        else:
+            # Daily rating not changed: preserve values from latest record
+            final_daily_val = current_daily_val
+            final_daily_rating = current_daily_rating
+            final_daily_prev = current_daily_prev
+            final_daily_changed_at = current_daily_changed_at
+        
+        # Prepare weekly values
+        if update_weekly and weekly_rating and weekly_rating.lower() != "neutral":
+            # Weekly rating changed: use new values
+            final_weekly_val = weekly_val
+            final_weekly_rating = weekly_rating
+            final_weekly_prev = prev_weekly
+            final_weekly_changed_at = timestamp_str
+        elif update_weekly:
+            # Weekly rating changed to Neutral: store as NULL
+            final_weekly_val = None
+            final_weekly_rating = None
+            final_weekly_prev = None
+            final_weekly_changed_at = None
+        else:
+            # Weekly rating not changed: preserve values from latest record
+            final_weekly_val = current_weekly_val
+            final_weekly_rating = current_weekly_rating
+            final_weekly_prev = current_weekly_prev
+            final_weekly_changed_at = current_weekly_changed_at
+        
+        # Determine at_price: prefer value from rating_stats (if present) otherwise use provided at_price
+        try:
+            cur.execute("SELECT at_price FROM rating_stats WHERE ticker=? AND timestamp=?", (ticker, timestamp_str))
+            r = cur.fetchone()
+            rs_at_price = r[0] if r and r[0] is not None else None
+        except Exception:
+            rs_at_price = None
+
+        chosen_at_price = rs_at_price if rs_at_price is not None else at_price
+
+        # Insert new record
+        cur.execute("""
+            INSERT INTO rating_main 
+            (ticker, timestamp, at_price, daily_val, daily_rating, daily_prev, daily_changed_at,
+             weekly_val, weekly_rating, weekly_prev, weekly_changed_at,
+             currency, price, change_pct, change_abs, high, low)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            ticker, timestamp_str,
+            chosen_at_price,
+            final_daily_val, final_daily_rating, final_daily_prev, final_daily_changed_at,
+            final_weekly_val, final_weekly_rating, final_weekly_prev, final_weekly_changed_at,
+            market_data.get("currency", ""),
+            market_data.get("price"),
+            market_data.get("change_pct"),
+            market_data.get("change_abs"),
+            market_data.get("high"),
+            market_data.get("low")
+        ))
+
+def update_rating_history(cur, ticker):
+
+    # Deprecated: history is now built by a dedicated history updater from TradingView directly.
+    # This function is kept for backward compatibility but does nothing.
+    return
+
+def cleanup_old_records_by_date(cur):
+
+    try:
+        # Calculate the date to delete (today - 30 days) using Thai time
+        bkk_tz = ZoneInfo("Asia/Bangkok")
+        now_thai = datetime.now(bkk_tz)
+        target_date = (now_thai.date() - timedelta(days=30))
+        target_date_str = target_date.isoformat()  # Format: YYYY-MM-DD
+        
+        # Delete from rating_stats where date matches (using strftime for SQLite compatibility)
+        cur.execute("""
+            DELETE FROM rating_stats 
+            WHERE strftime('%Y-%m-%d', timestamp) = ?
+        """, (target_date_str,))
+        stats_deleted = cur.rowcount
+        
+        # Delete from rating_main where date matches
+        cur.execute("""
+            DELETE FROM rating_main 
+            WHERE strftime('%Y-%m-%d', timestamp) = ?
+        """, (target_date_str,))
+        main_deleted = cur.rowcount
+        
+        # Delete from rating_history where date matches (keep 30 days rolling window)
+        cur.execute("""
+            DELETE FROM rating_history 
+            WHERE strftime('%Y-%m-%d', timestamp) = ?
+        """, (target_date_str,))
+        history_deleted = cur.rowcount
+        
+        # Delete from rating_accuracy where date matches (keep 30 days rolling window)
+        cur.execute("""
+            DELETE FROM rating_accuracy 
+            WHERE strftime('%Y-%m-%d', timestamp) = ?
+        """, (target_date_str,))
+        accuracy_deleted = cur.rowcount
+        
+        if stats_deleted > 0 or main_deleted > 0 or history_deleted > 0 or accuracy_deleted > 0:
+            print(f"   -> ✅ Cleanup (30-day rolling window): Deleted records from {target_date_str}")
+            print(f"      - rating_stats: {stats_deleted} records")
+            print(f"      - rating_main: {main_deleted} records")
+            print(f"      - rating_history: {history_deleted} records")
+            print(f"      - rating_accuracy: {accuracy_deleted} records")
+        
+        return stats_deleted, main_deleted, history_deleted, accuracy_deleted
+    except Exception as e:
+        print(f"   -> ❌ Error during cleanup by date (30-day window): {e}")
+        import traceback
+        traceback.print_exc()
+        return 0, 0, 0, 0
+
+# --- Background Updater ---
 async def background_updater():
-    global _earnings_db, _last_update_str, _previous_earnings_db
+    bkk_tz = ZoneInfo("Asia/Bangkok")
     while True:
         try:
-            print(f"[Background] Updating Earnings Data at {datetime.now()}")
+            now_thai = datetime.now(bkk_tz)
+            print(f"[Background] Starting ratings update cycle at {now_thai.strftime('%Y-%m-%d %H:%M:%S')} ไทย")
+            # --- Scheduler: trigger per-market history fetch at market-open times ---
+            try:
+                # initialize per-market last-fetched map
+                if not hasattr(background_updater, "_last_fetched_date"):
+                    background_updater._last_fetched_date = {}
+
+                for market_code in MARKET_TIMEZONE.keys():
+                    try:
+                        open_thai = get_market_open_thai(market_code, now_thai)
+                        last_date = background_updater._last_fetched_date.get(market_code)
+                        fetched_already = (last_date == open_thai.date())
+                        # Log planned next-open time and whether it's already fetched for that open
+                        try:
+                            print(f"[Scheduler] Market {market_code} next open (TH): {open_thai.strftime('%Y-%m-%d %H:%M:%S')} | fetched_today={fetched_already}")
+                        except Exception:
+                            # In case of any formatting issue, still continue
+                            print(f"[Scheduler] Market {market_code} next open (TH): {open_thai} | fetched_today={fetched_already}")
+
+                        # If we've reached or passed today's open and haven't fetched for that open yet
+                        if now_thai >= open_thai and not fetched_already:
+                            print(f"[Scheduler] Market {market_code} open at {open_thai.strftime('%Y-%m-%d %H:%M:%S')}. Scheduling fetch...")
+                            # schedule non-blocking task so batch processing continues
+                            try:
+                                asyncio.create_task(fetch_market_history(market_code))
+                                background_updater._last_fetched_date[market_code] = open_thai.date()
+                            except Exception as task_e:
+                                print(f"[Scheduler] Failed to create task for {market_code}: {task_e}")
+                        else:
+                            # It's possible the scheduler loop missed the exact open moment (cycle gap).
+                            # Check previous open (open_thai - 1 day) and allow a short grace window to catch missed opens.
+                            try:
+                                prev_open = open_thai - timedelta(days=1)
+                                grace_window = timedelta(minutes=15)
+                                prev_fetched = (background_updater._last_fetched_date.get(market_code) == prev_open.date())
+                                if not prev_fetched and now_thai >= prev_open and now_thai < prev_open + grace_window:
+                                    print(f"[Scheduler] Missed open detected for {market_code} at {prev_open.strftime('%Y-%m-%d %H:%M:%S')}. Scheduling fetch (missed-window).")
+                                    try:
+                                        asyncio.create_task(fetch_market_history(market_code))
+                                        background_updater._last_fetched_date[market_code] = prev_open.date()
+                                    except Exception as task_e:
+                                        print(f"[Scheduler] Failed to create missed-window task for {market_code}: {task_e}")
+                            except Exception as miss_e:
+                                # swallow errors here to avoid breaking scheduler
+                                pass
+                    except Exception as me:
+                        print(f"[Scheduler] Error computing open time for {market_code}: {me}")
+            except Exception:
+                # scheduler must not break main loop
+                pass
             
-            # ✅ ปรับปรุง Logic การดึงรายชื่อหุ้นที่มี DR ตามค่า ENABLE_DR_FILTER
-            valid_dr_tickers = None
-            ticker_mapping = {}  # Mapping table: {ticker_from_tv: underlying_code}
-            if ENABLE_DR_FILTER:
-                valid_dr_tickers = set()
-                skipped_count = 0
-                skipped_reasons = {}
-                skipped_items = []  # เก็บรายการที่ถูก skip เพื่อ debug
+            async with httpx.AsyncClient() as client:
+                # Get the full list of DRs
                 try:
-                    async with httpx.AsyncClient() as client:
-                        r_dr = await client.get(DR_LIST_URL, timeout=10)
-                        dr_rows = r_dr.json().get("rows", [])
-                        print(f"  [Background] Total DR rows from API: {len(dr_rows)}")
-                        for item in dr_rows:
-                            u_code = None
-                            source = None
-                            
-                            # ✅ ลำดับความสำคัญ: 1) extract จาก underlyingName ที่มี format "(TICKER)" ก่อน
-                            underlying_name = item.get("underlyingName") or ""
-                            match = re.search(r'\(([A-Z0-9.\-_]+)\)$', underlying_name)
-                            if match:
-                                u_code = match.group(1)
-                                source = "underlyingName"
-                            else:
-                                # 2) ใช้ underlying field (ถ้ามี)
-                                u_code = item.get("underlying")
-                                if u_code:
-                                    source = "underlying"
-                                else:
-                                    # 3) extract จาก symbol (เช่น "JPM80" -> "JPM")
-                                    sym = item.get("symbol") or ""
-                                    if "80" in sym: 
-                                        u_code = sym.replace("80", "")
-                                        source = "symbol(80)"
-                                    elif "19" in sym: 
-                                        u_code = sym.replace("19", "")
-                                        source = "symbol(19)"
-                            
-                            if u_code:
-                                u_code = u_code.strip().upper()
-                                # ✅ กรองเฉพาะ ticker symbol (ไม่ใช่ชื่อเต็มที่มี space หลายตัว)
-                                # เช่น "JPM", "BAC", "CNSEMI" ผ่าน แต่ "CNSEMI ETF" ไม่ผ่าน
-                                # อนุญาตให้มี dash/underscore/dot ได้ (เช่น "A-B", "A_B", "A.B")
-                                if u_code and len(u_code) > 0:
-                                    # ถ้ามี space แสดงว่าเป็นชื่อเต็ม ให้ลอง extract ticker จากหลายวิธี
-                                    if ' ' in u_code:
-                                        # วิธี 1: ลอง extract ticker จาก underlyingName อีกครั้ง (อาจมี format อื่น)
-                                        name_match_alt = re.search(r'\(([A-Z0-9.\-_]+)\)', underlying_name.upper())
-                                        if name_match_alt:
-                                            alt_ticker = name_match_alt.group(1).strip()
-                                            if alt_ticker and ' ' not in alt_ticker and len(alt_ticker) <= 15:
-                                                u_code = alt_ticker
-                                                source = "underlyingName(alt)"
-                                            else:
-                                                # วิธี 2: ลอง extract ticker จาก underlying โดยลบคำว่า "ETF", "DIAMOND ETF" ฯลฯ
-                                                u_code_clean = re.sub(r'\s+(ETF|DIAMOND ETF|FUND|TRUST).*$', '', u_code, flags=re.IGNORECASE).strip()
-                                                if u_code_clean and ' ' not in u_code_clean and len(u_code_clean) <= 15:
-                                                    u_code = u_code_clean
-                                                    source = "underlying(clean)"
-                                                else:
-                                                    # วิธี 3: ลองใช้ symbol โดยลบ suffix (เช่น "E1VFVN3001" -> "E1VFVN30", "FUEVFVND01" -> "FUEVFVND")
-                                                    sym = item.get("symbol") or ""
-                                                    if sym:
-                                                        # ลบ suffix ตัวเลขท้าย (เช่น "01", "24", "3001")
-                                                        sym_clean = re.sub(r'\d+$', '', sym).strip()
-                                                        if sym_clean and len(sym_clean) >= 2 and len(sym_clean) <= 15:
-                                                            u_code = sym_clean.upper()
-                                                            source = "symbol(clean)"
-                                                        else:
-                                                            skipped_count += 1
-                                                            skipped_reasons['has_space'] = skipped_reasons.get('has_space', 0) + 1
-                                                            skipped_items.append({
-                                                                'symbol': item.get('symbol', 'N/A'),
-                                                                'underlyingName': underlying_name[:50],
-                                                                'u_code': u_code,
-                                                                'reason': 'has_space'
-                                                            })
-                                                            continue
-                                                    else:
-                                                        skipped_count += 1
-                                                        skipped_reasons['has_space'] = skipped_reasons.get('has_space', 0) + 1
-                                                        skipped_items.append({
-                                                            'symbol': item.get('symbol', 'N/A'),
-                                                            'underlyingName': underlying_name[:50],
-                                                            'u_code': u_code,
-                                                            'reason': 'has_space'
-                                                        })
-                                                        continue
-                                        else:
-                                            # วิธี 2: ลอง extract ticker จาก underlying โดยลบคำว่า "ETF", "DIAMOND ETF" ฯลฯ
-                                            u_code_clean = re.sub(r'\s+(ETF|DIAMOND ETF|FUND|TRUST).*$', '', u_code, flags=re.IGNORECASE).strip()
-                                            if u_code_clean and ' ' not in u_code_clean and len(u_code_clean) <= 15:
-                                                u_code = u_code_clean
-                                                source = "underlying(clean)"
-                                            else:
-                                                # วิธี 3: ลองใช้ symbol โดยลบ suffix (เช่น "E1VFVN3001" -> "E1VFVN30", "FUEVFVND01" -> "FUEVFVND")
-                                                sym = item.get("symbol") or ""
-                                                if sym:
-                                                    # ลบ suffix ตัวเลขท้าย (เช่น "01", "24", "3001")
-                                                    sym_clean = re.sub(r'\d+$', '', sym).strip()
-                                                    if sym_clean and len(sym_clean) >= 2 and len(sym_clean) <= 15:
-                                                        u_code = sym_clean.upper()
-                                                        source = "symbol(clean)"
-                                                    else:
-                                                        skipped_count += 1
-                                                        skipped_reasons['has_space'] = skipped_reasons.get('has_space', 0) + 1
-                                                        skipped_items.append({
-                                                            'symbol': item.get('symbol', 'N/A'),
-                                                            'underlyingName': underlying_name[:50],
-                                                            'u_code': u_code,
-                                                            'reason': 'has_space'
-                                                        })
-                                                        continue
-                                                else:
-                                                    skipped_count += 1
-                                                    skipped_reasons['has_space'] = skipped_reasons.get('has_space', 0) + 1
-                                                    skipped_items.append({
-                                                        'symbol': item.get('symbol', 'N/A'),
-                                                        'underlyingName': underlying_name[:50],
-                                                        'u_code': u_code,
-                                                        'reason': 'has_space'
-                                                    })
-                                                    continue
-                                    # ถ้ายาวเกิน 15 ตัวอักษร อาจเป็นชื่อเต็ม ให้ข้าม
-                                    if len(u_code) > 15:
-                                        skipped_count += 1
-                                        skipped_reasons['too_long'] = skipped_reasons.get('too_long', 0) + 1
-                                        skipped_items.append({
-                                            'symbol': item.get('symbol', 'N/A'),
-                                            'underlyingName': underlying_name[:50],
-                                            'u_code': u_code,
-                                            'reason': 'too_long'
-                                        })
-                                        continue
-                                    valid_dr_tickers.add(u_code)
-                                    
-                                    # ✅ สร้าง mapping table: ใช้ underlying code เป็น key และ value
-                                    # และเพิ่ม alias จาก symbol (เช่น "JPM80" -> "JPM")
-                                    ticker_mapping[u_code] = u_code
-                                    
-                                    # เพิ่ม alias จาก symbol (ถ้า symbol ไม่ใช่ underlying code)
-                                    sym_clean = item.get("symbol", "").strip().upper()
-                                    if sym_clean and sym_clean != u_code:
-                                        # ลบ suffix "80", "19" จาก symbol
-                                        sym_no_suffix = sym_clean.replace("80", "").replace("19", "").strip()
-                                        if sym_no_suffix and sym_no_suffix != u_code and len(sym_no_suffix) <= 15 and ' ' not in sym_no_suffix:
-                                            ticker_mapping[sym_no_suffix] = u_code
-                                    
-                                    # ✅ เพิ่ม alias จาก underlyingName (extract ticker จากชื่อบริษัท)
-                                    # เช่น "บริษัท JP MORGAN CHASE & CO. (JPM)" -> "JPM"
-                                    if underlying_name:
-                                        name_match = re.search(r'\(([A-Z0-9.\-_]+)\)', underlying_name.upper())
-                                        if name_match:
-                                            name_ticker = name_match.group(1).strip()
-                                            if name_ticker and name_ticker != u_code and len(name_ticker) <= 15 and ' ' not in name_ticker:
-                                                ticker_mapping[name_ticker] = u_code
-                                    
-                                    # Debug: แสดงตัวอย่างการ extract (เฉพาะ 10 ตัวแรก)
-                                    if len(valid_dr_tickers) <= 10:
-                                        print(f"    [OK] Extracted: {u_code} from {source} (symbol: {item.get('symbol', 'N/A')}, underlyingName: {underlying_name[:50]})")
+                    # Prefer local file to avoid asking source as requested
+                    local_dr_file = os.path.join(os.path.dirname(__file__), "dr_list.json")
+                    if os.path.exists(local_dr_file):
+                        with open(local_dr_file, "r", encoding="utf-8") as f:
+                            rows = json.load(f).get("rows", [])
+                            print(f"[Background] Loaded {len(rows)} items from local DR list.")
+                    else:
+                        r_dr = await client.get(DR_LIST_URL, timeout=20)
+                        r_dr.raise_for_status()
+                        rows = r_dr.json().get("rows", [])
+                        print(f"Found {len(rows)} total items from DR API.")
+                except Exception as dr_e:
+                    print(f"❌ Could not fetch DR list: {dr_e}. Retrying in {UPDATE_INTERVAL_SECONDS}s.")
+                    await asyncio.sleep(UPDATE_INTERVAL_SECONDS)
+                    continue
+
+                # Create a unique list of underlying stocks to query
+                underlying_map = {}
+                for item in rows:
+                    u_code = item.get("underlying") or (item.get("symbol") or "").replace("80", "").replace("19", "")
+                    if u_code:
+                        u_code = u_code.strip().upper()
+                        if u_code not in underlying_map or (not underlying_map[u_code]["u_exch"] and item.get("underlyingExchange")):
+                            underlying_map[u_code] = {
+                                "u_code": u_code, "u_name": item.get("underlyingName", ""),
+                                "u_exch": item.get("underlyingExchange", ""), "dr_sym": item.get("symbol", "")
+                            }
+                
+                tasks_data = list(underlying_map.values())
+                print(f"Processing {len(tasks_data)} unique underlying tickers.")
+                if not tasks_data:
+                    await asyncio.sleep(UPDATE_INTERVAL_SECONDS)
+                    continue
+
+                # Process tickers in batches
+                total_batches = (len(tasks_data) + MAX_CONCURRENCY - 1) // MAX_CONCURRENCY
+                for i in range(0, len(tasks_data), MAX_CONCURRENCY):
+                    batch_num = i // MAX_CONCURRENCY + 1
+                    batch_data = tasks_data[i:i+MAX_CONCURRENCY]
                     
-                    # Debug: แสดงจำนวนที่ถูก skip
-                    if skipped_count > 0:
-                        print(f"  [WARN] Skipped {skipped_count} items: {skipped_reasons}")
-                        # แสดงรายละเอียดของ items ที่ถูก skip (เฉพาะ 5 ตัวแรก)
-                        for skipped in skipped_items[:5]:
-                            print(f"    - Skipped: symbol='{skipped['symbol']}', u_code='{skipped['u_code']}', reason={skipped['reason']}, underlyingName='{skipped['underlyingName']}'")
-                    print(f"[Background] DR Filter is ENABLED. Found {len(valid_dr_tickers)} unique symbols (from {len(dr_rows)} DR rows, skipped {skipped_count}).")
-                    # Debug: ตรวจสอบว่ามี underlying codes ซ้ำกันหรือไม่
-                    if len(valid_dr_tickers) < len(dr_rows) - skipped_count:
-                        duplicate_count = len(dr_rows) - skipped_count - len(valid_dr_tickers)
-                        print(f"  [NOTE] Note: {duplicate_count} underlying codes are duplicates (multiple DR rows share the same underlying code)")
-                    # Debug: แสดง sample ของ underlying codes (เฉพาะ ticker symbols ไม่ใช่ชื่อเต็ม)
-                    # กรองเฉพาะ ticker symbols ที่ไม่มี space และไม่ยาวเกินไป
-                    clean_tickers = [c for c in valid_dr_tickers if ' ' not in c and len(c) <= 15]
-                    sample_codes = sorted(clean_tickers)[:10]
-                    print(f"  [SAMPLE] Sample ticker symbols: {sample_codes}")
-                    # Debug: แสดง ticker symbols ที่มี space (ชื่อเต็ม) เพื่อตรวจสอบ - ควรไม่มี
-                    full_names = [c for c in valid_dr_tickers if ' ' in c]
-                    if full_names:
-                        print(f"  [WARN] Found {len(full_names)} full names (should be filtered out): {full_names[:5]}")
-                    # Debug: ตรวจสอบว่ามี "JPM", "WFC", "BAC", "MS" อยู่ใน valid_dr_tickers หรือไม่
-                    test_tickers = ["JPM", "WFC", "BAC", "MS", "GS", "C"]
-                    found_test = [t for t in test_tickers if t in valid_dr_tickers]
-                    missing_test = [t for t in test_tickers if t not in valid_dr_tickers]
-                    if found_test:
-                        print(f"  [OK] Found test tickers in DR list: {found_test}")
-                    if missing_test:
-                        print(f"  [WARN] Missing test tickers in DR list: {missing_test}")
-                    # Debug: แสดง sample ของ ticker_mapping
-                    if ticker_mapping:
-                        mapping_samples = list(ticker_mapping.items())[:10]
-                        print(f"  [SAMPLE] Sample ticker mapping: {mapping_samples}")
-                except Exception as dr_err:
-                    print(f"[ERROR] [Background] Failed to fetch DR whitelist: {dr_err}")
-                    # กรณีดึงข้อมูล DR ไม่ได้ ให้ยกเลิกการกรองชั่วคราวเพื่อป้องกันข้อมูลว่างเปล่า
-                    valid_dr_tickers = None 
-            else:
-                print(f"[INFO] [Background] DR Filter is DISABLED. Fetching all stocks.")
+                    results = await asyncio.gather(*[fetch_single_ticker(client, item) for item in batch_data])
+                    
+                    successful_updates_in_batch = 0
+                    con = None # Ensure 'con' is defined before try block
+                    try:
+                        con = sqlite3.connect(DB_FILE, timeout=10)
+                        con.row_factory = sqlite3.Row
+                        cur = con.cursor()
+                        
+                        # Enable WAL mode for better concurrency
+                        cur.execute("PRAGMA journal_mode=WAL")
+                        cur.execute("PRAGMA busy_timeout=30000")
+                        
+                        # ใช้เวลาไทยเท่านั้น
+                        now_thai = datetime.now(bkk_tz)
+                        current_timestamp_str = now_thai.replace(tzinfo=None).isoformat()
 
-            new_db = {}
-            all_markets = ["america", "hongkong", "japan", "china", "singapore", "vietnam", "france", "netherlands", "denmark", "italy", "taiwan", "thailand"]
-            
-            for m in all_markets:
-                c_code = "JP" if m == "japan" else "US"
-                s_ts, e_ts = get_tradingview_range(c_code)
-                print(f"[DATE] [Background] [{m}] Date range: {datetime.fromtimestamp(s_ts, tz=timezone.utc)} to {datetime.fromtimestamp(e_ts, tz=timezone.utc)}")
-                
-                raw_data = await fetch_tradingview_earnings(m, s_ts, e_ts)
-                print(f"[DATA] [Background] [{m}] Received {len(raw_data)} raw items from TradingView")
-                
-                # Debug: แสดง sample ของ raw data structure (เฉพาะ 2 ตัวแรก)
-                if raw_data and len(raw_data) > 0:
-                    sample = raw_data[0]
-                    if isinstance(sample, dict) and "d" in sample:
-                        d = sample.get("d", [])
-                        if len(d) >= len(COLUMNS_MAP):
-                            sample_obj = {COLUMNS_MAP[i]: d[i] for i in range(min(len(d), len(COLUMNS_MAP)))}
-                            print(f"  [DEBUG] Sample TradingView item: logoid='{sample_obj.get('logoid')}', name='{sample_obj.get('name')}', description='{sample_obj.get('description', '')[:50]}'")
-                
-                # ตรวจสอบหุ้น 2653 ใน raw_data สำหรับตลาดญี่ปุ่น
-                if m == "japan":
-                    raw_2653 = [item for item in raw_data if item.get("d") and len(item.get("d", [])) > 1 and "2653" in str(item.get("d", [])[1]).upper()]
-                    if raw_2653:
-                        print(f"[OK] [Background] Found 2653 in raw_data: {raw_2653}")
-                    else:
-                        print(f"[WARN] [Background] 2653 NOT found in raw_data")
-                
-                # ✅ ส่ง valid_dr_tickers และ ticker_mapping ไปใช้กรองข้อมูล (ถ้าเป็น None จะไม่กรอง)
-                if valid_dr_tickers:
-                    print(f"  [DEBUG] [Background] [{m}] Filtering with {len(valid_dr_tickers)} DR tickers. Sample: {list(valid_dr_tickers)[:5]}")
-                    print(f"  [DEBUG] [Background] [{m}] Ticker mapping table has {len(ticker_mapping)} entries")
-                stock_list = map_tv_data_to_object(raw_data, valid_dr_tickers, ticker_mapping)
-                print(f"[OK] [Background] [{m}] Mapped to {len(stock_list)} stocks (from {len(raw_data)} raw items)")
-                
-                # ตรวจสอบหุ้น 2653 ใน stock_list สำหรับตลาดญี่ปุ่น
-                if m == "japan":
-                    ticker_2653 = [s for s in stock_list if "2653" in s.get("ticker", "")]
-                    if ticker_2653:
-                        print(f"[OK] [Background] Found 2653 in stock_list: {ticker_2653}")
-                    else:
-                        print(f"[WARN] [Background] 2653 NOT found in stock_list (was filtered out)")
-                
-                stock_list.sort(key=lambda x: x["date"] if x["date"] else float('inf'))
-                
-                display_name = MARKET_DISPLAY_NAMES.get(m, m.upper())
-                if stock_list:
-                    new_db[display_name] = {"totalCount": len(stock_list), "data": stock_list}
-                await asyncio.sleep(0.5) 
+                        for res in results:
+                            if not res.get("success"):
+                                print(f"      - Ticker {res.get('ticker', 'N/A')} failed: {res.get('error', 'Unknown reason')}")
+                                continue
 
-            # Detect new earnings before updating
-            new_earnings = find_new_earnings(new_db, _previous_earnings_db)
+                            ticker = res["ticker"]
+                            new_data = res["data"]
+                            
+                            daily_rating = new_data["daily"]["rating"]
+                            weekly_rating = new_data["weekly"]["rating"]
+                            
+                            # If we get an invalid rating from TradingView, skip the entire update for this ticker.
+                            if daily_rating == "Unknown" or weekly_rating == "Unknown":
+                                print(f"      - Ticker {ticker} has an Unknown rating. Skipping all DB updates for this cycle.")
+                                continue
+
+                            # This is a successful update
+                            successful_updates_in_batch += 1
+                            
+                            # Prepare market data
+                            market_data = {
+                                "currency": new_data.get("currency", ""),
+                                "price": new_data.get("market_data", {}).get("price"),
+                                "change_pct": new_data.get("market_data", {}).get("change_pct"),
+                                "change_abs": new_data.get("market_data", {}).get("change_abs"),
+                                "high": new_data.get("market_data", {}).get("high"),
+                                "low": new_data.get("market_data", {}).get("low")
+                            }
+                            
+                            # Step 1: Update rating_stats (raw data - both daily and weekly in one row)
+                            update_rating_stats(cur, ticker, current_timestamp_str, 
+                                              new_data["daily"]["val"], daily_rating,
+                                              new_data["weekly"]["val"], weekly_rating,
+                                              market_data.get("price"))
+                            
+                            # Step 2: Update rating_main (filtered: no Neutral, no duplicates - separate for daily/weekly)
+                            update_rating_main(cur, ticker, current_timestamp_str,
+                                             new_data["daily"]["val"], daily_rating,
+                                             new_data["weekly"]["val"], weekly_rating,
+                                             market_data, market_data.get("price"))
+                            
+                            # Step 3: Update rating_history (from rating_main with A-B-A filter - separate for daily/weekly)
+                            update_rating_history(cur, ticker)
+                        
+                        con.commit()
+                        # แสดง log เฉพาะทุก 10 batches หรือ batch สุดท้าย
+                        if batch_num % 10 == 0 or batch_num == total_batches:
+                            print(f"    Batch {batch_num}/{total_batches}: {successful_updates_in_batch} updates committed")
+
+                    except Exception as batch_e:
+                        print(f"    ❌ Error during DB operation for batch {batch_num}: {batch_e}")
+                    finally:
+                        if con:
+                            con.close()
+
+                    await asyncio.sleep(BATCH_SLEEP_SECONDS)
             
-            # Update earnings database
-            _earnings_db = new_db
-            _last_update_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            save_db_to_disk()
-            
-            # Broadcast new earnings to SSE clients
-            if new_earnings:
-                print(f"[SSE] [Background] Found {len(new_earnings)} new earnings, broadcasting to SSE clients")
-                await broadcast_to_sse_clients({
-                    "type": "new_earnings",
-                    "earnings": new_earnings,
-                    "count": len(new_earnings),
-                    "updated_at": _last_update_str
-                })
-            
-            # Update previous earnings state for next comparison
-            _previous_earnings_db = new_db.copy()
-            
-            print(f"[OK] [Background] Update complete. (ENABLE_DR_FILTER={ENABLE_DR_FILTER})")
-        except Exception as e: print(f"[ERROR] Updater error: {e}")
+            # Cleanup old records by specific date after all batches are done
+            try:
+                print("🧹 Cleaning up old records by date...")
+                con = sqlite3.connect(DB_FILE, timeout=10)
+                cur = con.cursor()
+                
+                # Enable WAL mode for better concurrency
+                cur.execute("PRAGMA journal_mode=WAL")
+                cur.execute("PRAGMA busy_timeout=30000")
+                
+                cleanup_old_records_by_date(cur)
+                con.commit()
+                con.close()
+            except Exception as cleanup_e:
+                print(f"   -> ❌ Error during cleanup: {cleanup_e}")
+            finally:
+                if 'con' in locals() and con:
+                    con.close()
+
+
+            print(f"✅ Background update cycle finished.")
+
+        except Exception as e:
+            print(f"❌ An unexpected critical error occurred in the background updater: {e}")
+            if 'con' in locals() and con:
+                con.close()
+        
+        print(f"--- Sleeping for {UPDATE_INTERVAL_SECONDS} seconds before next cycle ---")
         await asyncio.sleep(UPDATE_INTERVAL_SECONDS)
+
+
+def upsert_history_snapshot(
+    cur,
+    ticker: str,
+    market_code: str,
+    snapshot_ts_thai: datetime,
+    daily_val,
+    daily_rating: str,
+    weekly_val,
+    weekly_rating: str,
+    exchange: str,
+    market_data: dict,
+):
+    # Ensure timezone-aware (assume Thai time if missing)
+    if snapshot_ts_thai.tzinfo is None:
+        bkk_tz = ZoneInfo("Asia/Bangkok")
+        snapshot_ts_thai = snapshot_ts_thai.replace(tzinfo=bkk_tz)
+
+    # Determine local time in market timezone (if available) to check weekends/holidays
+    local_ts = snapshot_ts_thai
+    try:
+        if market_code:
+            tz_name = MARKET_TIMEZONE.get(market_code)
+            if tz_name:
+                try:
+                    market_tz = ZoneInfo(tz_name)
+                    local_ts = snapshot_ts_thai.astimezone(market_tz)
+                except Exception:
+                    # fallback to snapshot_ts_thai if timezone fails
+                    local_ts = snapshot_ts_thai
+    except Exception:
+        local_ts = snapshot_ts_thai
+
+    # Skip weekend snapshots for rating_history (Sat/Sun in market local time)
+    try:
+        if local_ts.weekday() in (5, 6):
+            return
+    except Exception:
+        pass
+
+    # Optional: support market-specific holiday list via backend/API/market_holidays.json
+    # Format: { "US": ["2026-01-01", "2026-12-25"], "JP": ["2026-01-01"] }
+    try:
+        import json, os
+        from pathlib import Path
+
+        holidays_file = Path(os.path.dirname(__file__)) / "market_holidays.json"
+        if holidays_file.exists():
+            with open(holidays_file, "r", encoding="utf-8") as hf:
+                hol = json.load(hf)
+            # accept either upper/lower keys
+            market_hols = hol.get(market_code) or hol.get(market_code.upper()) or hol.get(market_code.lower()) or []
+            if isinstance(market_hols, list):
+                local_date_str = local_ts.date().isoformat()
+                if local_date_str in market_hols:
+                    return
+    except Exception:
+        # If holiday check fails, do not block insertion (we already filtered weekends)
+        pass
+
+    ts_str = snapshot_ts_thai.replace(tzinfo=None).isoformat()
+    date_str = snapshot_ts_thai.date().isoformat()
+    
+    # Check if we already have a record for this ticker and date
+    cur.execute(
+        """
+        SELECT timestamp, daily_rating, weekly_rating
+        FROM rating_history
+        WHERE ticker=? AND strftime('%Y-%m-%d', timestamp)=?
+        LIMIT 1
+        """,
+        (ticker, date_str),
+    )
+    existing = cur.fetchone()
+    if existing:
+        # Already have snapshot for this day -> nothing to do
+        return
+
+    # Find previous history record (for prev fields and price calculation)
+    cur.execute(
+        """
+        SELECT daily_rating, weekly_rating, price
+        FROM rating_history
+        WHERE ticker=? AND timestamp < ?
+        ORDER BY timestamp DESC
+        LIMIT 1
+        """,
+        (ticker, ts_str),
+    )
+    prev = cur.fetchone()
+    prev_daily = prev[0] if prev else None
+    prev_weekly = prev[1] if prev else None
+    prev_price = prev[2] if prev else None
+
+    # คำนวณ change_pct จาก price และ prev_price
+    current_price = market_data.get("price")
+    calculated_change_pct = 0.0
+    calculated_change_abs = 0.0
+    if prev_price and current_price and prev_price > 0:
+        calculated_change_pct = ((current_price - prev_price) / prev_price) * 100
+        calculated_change_abs = current_price - prev_price
+
+    cur.execute(
+        """
+        INSERT INTO rating_history (
+            ticker, timestamp,
+            daily_val, daily_rating, daily_prev, daily_changed_at,
+            weekly_val, weekly_rating, weekly_prev, weekly_changed_at,
+            exchange, market,
+            currency, open, price, change_pct, change_abs, high, low
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            ticker,
+            ts_str,
+            daily_val,
+            daily_rating,
+            prev_daily,
+            ts_str,
+            weekly_val,
+            weekly_rating,
+            prev_weekly,
+            ts_str,
+            exchange or "",
+            market_code or "",
+            market_data.get("currency", ""),
+            market_data.get("open"),
+            current_price,
+            calculated_change_pct,
+            calculated_change_abs,
+            market_data.get("high"),
+            market_data.get("low"),
+        ),
+    )
+
+
+async def analyze_all_tickers():
+    """
+    วิเคราะห์ tickers ทั้งหมดจาก DR API และแสดงสรุปการ mapping
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            r_dr = await client.get(DR_LIST_URL, timeout=20)
+            r_dr.raise_for_status()
+            rows = r_dr.json().get("rows", [])
+            
+            print("\n" + "=" * 80)
+            print("[MAPPING ANALYSIS] วิเคราะห์การ Mapping Tickers ทั้งหมด")
+            print("=" * 80)
+            
+            total_tickers = 0
+            market_counts = {}
+            exchange_counts = {}
+            unmapped_tickers = []
+            
+            for item in rows:
+                u_code = item.get("underlying") or (item.get("symbol") or "").replace("80", "").replace("19", "")
+                if u_code:
+                    u_code = u_code.strip().upper()
+                    exchange = item.get("underlyingExchange", "")
+                    market = market_code_from_exchange(exchange)
+                    
+                    total_tickers += 1
+                    
+                    # นับตาม market
+                    if market not in market_counts:
+                        market_counts[market] = 0
+                    market_counts[market] += 1
+                    
+                    # นับตาม exchange
+                    if exchange:
+                        if exchange not in exchange_counts:
+                            exchange_counts[exchange] = {"count": 0, "market": market}
+                        exchange_counts[exchange]["count"] += 1
+                    else:
+                        unmapped_tickers.append(u_code)
+            
+            print(f"\n[SUMMARY] สรุปการ Mapping:")
+            print(f"  จำนวน Tickers ทั้งหมดจาก DR API: {total_tickers}")
+            print(f"  จำนวน Markets ที่พบ: {len(market_counts)}")
+            print(f"  จำนวน Exchanges ที่พบ: {len(exchange_counts)}")
+            if unmapped_tickers:
+                print(f"  Tickers ที่ไม่มี Exchange: {len(unmapped_tickers)}")
+            
+            print(f"\n[MARKET DISTRIBUTION] แยกตาม Market:")
+            for market in sorted(market_counts.keys()):
+                count = market_counts[market]
+                pct = (count / total_tickers * 100) if total_tickers > 0 else 0
+                print(f"  {market:3s}: {count:4d} tickers ({pct:5.1f}%)")
+            
+            print(f"\n[EXCHANGE DISTRIBUTION] แยกตาม Exchange (Top 20):")
+            sorted_exchanges = sorted(exchange_counts.items(), key=lambda x: x[1]["count"], reverse=True)
+            for exchange, info in sorted_exchanges[:20]:
+                count = info["count"]
+                market = info["market"]
+                print(f"  {exchange:60s} -> {market:3s} ({count:3d} tickers)")
+            
+            if len(sorted_exchanges) > 20:
+                print(f"  ... และอีก {len(sorted_exchanges) - 20} exchanges")
+            
+            # ตรวจสอบ US exchanges
+            print(f"\n[US EXCHANGES] Exchange ที่ Map เป็น US:")
+            us_exchanges = {ex: info for ex, info in exchange_counts.items() if info["market"] == "US"}
+            if us_exchanges:
+                total_us = sum(info["count"] for info in us_exchanges.values())
+                print(f"  พบ {len(us_exchanges)} unique exchanges, รวม {total_us} tickers")
+                for exchange, info in sorted(us_exchanges.items(), key=lambda x: x[1]["count"], reverse=True):
+                    print(f"    {exchange:60s}: {info['count']:3d} tickers")
+            else:
+                print("  ไม่พบ exchange ที่ map เป็น US")
+            
+            # ตรวจสอบ HK exchanges
+            print(f"\n[HK EXCHANGES] Exchange ที่ Map เป็น HK:")
+            hk_exchanges = {ex: info for ex, info in exchange_counts.items() if info["market"] == "HK"}
+            if hk_exchanges:
+                total_hk = sum(info["count"] for info in hk_exchanges.values())
+                print(f"  พบ {len(hk_exchanges)} unique exchanges, รวม {total_hk} tickers")
+                for exchange, info in sorted(hk_exchanges.items(), key=lambda x: x[1]["count"], reverse=True):
+                    print(f"    {exchange:60s}: {info['count']:3d} tickers")
+            else:
+                print("  ไม่พบ exchange ที่ map เป็น HK")
+            
+            print("=" * 80 + "\n")
+            
+            return {
+                "total_tickers": total_tickers,
+                "market_counts": market_counts,
+                "exchange_counts": exchange_counts,
+            }
+    except Exception as e:
+        print(f"[MAPPING ANALYSIS] Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+async def fetch_market_history(market_code: str):
+    """
+    ดึงข้อมูล history สำหรับ market ที่ระบุ
+    เรียกใช้เมื่อถึงเวลาปิดตลาดของ market นั้น
+    """
+    bkk_tz = ZoneInfo("Asia/Bangkok")
+    now_thai = datetime.now(bkk_tz)
+    
+    print(f"[History] [{market_code}] Starting fetch at {now_thai.strftime('%Y-%m-%d %H:%M:%S')} ไทย")
+    
+    async with httpx.AsyncClient() as client:
+        # Get DR list
+        try:
+            r_dr = await client.get(DR_LIST_URL, timeout=20)
+            r_dr.raise_for_status()
+            rows = r_dr.json().get("rows", [])
+        except Exception as dr_e:
+            print(f"[History] [{market_code}] Could not fetch DR list: {dr_e}")
+            return
+        
+        # วิเคราะห์ข้อมูลทั้งหมดก่อน (แสดงครั้งแรกเท่านั้น)
+        if not hasattr(fetch_market_history, "_analysis_done"):
+            await analyze_all_tickers()
+            fetch_market_history._analysis_done = True
+        
+        # Filter tickers for this market
+        market_tickers = []
+        all_exchanges = set()  # Debug: เก็บ exchange names ทั้งหมด
+        total_from_dr = 0
+        
+        for item in rows:
+            u_code = item.get("underlying") or (item.get("symbol") or "").replace("80", "").replace("19", "")
+            if u_code:
+                u_code = u_code.strip().upper()
+                total_from_dr += 1
+                exchange = item.get("underlyingExchange", "")
+                if exchange:
+                    all_exchanges.add(exchange)  # Debug: เก็บ exchange name
+                ticker_market = market_code_from_exchange(exchange)
+                if ticker_market == market_code:
+                    market_tickers.append({
+                        "u_code": u_code,
+                        "u_name": item.get("underlyingName", ""),
+                        "u_exch": exchange,
+                        "dr_sym": item.get("symbol", ""),
+                    })
+
+        # Deduplicate market_tickers by underlying code to avoid fetching same underlying multiple times
+        if market_tickers:
+            grouped = {}
+            for it in market_tickers:
+                code = (it.get("u_code") or "").strip().upper()
+                if not code:
+                    continue
+                grouped.setdefault(code, []).append(it)
+
+            deduped_list = []
+            for code, lst in grouped.items():
+                if len(lst) == 1:
+                    deduped_list.append(lst[0])
+                    continue
+
+                # Prefer item that has a DR symbol (dr_sym) if available
+                preferred = None
+                for it in lst:
+                    if it.get("dr_sym"):
+                        preferred = it
+                        break
+
+                # If none has dr_sym, use market-specific exchange keyword matching to choose best row
+                if preferred is None:
+                    keywords = []
+                    if market_code == "HK":
+                        keywords = ["HONG", "HK", "HKEX", "SEHK"]
+                    elif market_code == "US":
+                        keywords = ["NASDAQ", "NYSE", "AMEX"]
+                    elif market_code in ("NL", "FR", "IT", "DK"):
+                        keywords = ["EURONEXT", "AMSTERDAM", "MILAN", "PARIS", "COPENHAGEN"]
+                    elif market_code == "JP":
+                        keywords = ["TSE", "TYO", "TOKYO"]
+                    elif market_code == "SG":
+                        keywords = ["SGX", "SINGAPORE"]
+                    elif market_code == "CN":
+                        keywords = ["SSE", "SHANGHAI", "SZSE", "SHENZHEN"]
+
+                    for kw in keywords:
+                        found = next((it for it in lst if kw in (it.get("u_exch") or "").upper()), None)
+                        if found:
+                            preferred = found
+                            break
+
+                # Fallback to first occurrence
+                if preferred is None:
+                    preferred = lst[0]
+
+                if len(lst) > 1:
+                    try:
+                        print(f"[History] [{market_code}] Deduped {code}: kept exchange {preferred.get('u_exch')} (removed {len(lst)-1})")
+                    except Exception:
+                        pass
+
+                deduped_list.append(preferred)
+
+            market_tickers = deduped_list
+        
+        print(f"[History] [{market_code}] Total tickers from DR API: {total_from_dr}")
+        print(f"[History] [{market_code}] Tickers mapped to {market_code}: {len(market_tickers)}")
+        
+        if not market_tickers:
+            print(f"[History] [{market_code}] No tickers found for this market")
+            # Debug: แสดง exchange names ที่มี (เฉพาะที่อาจเกี่ยวข้อง)
+            upper_exchanges = [ex.upper() for ex in all_exchanges]
+            if market_code in ["NL", "IT"]:
+                relevant_exchanges = [ex for ex in upper_exchanges if any(k in ex for k in ("AMSTERDAM", "NETHERLANDS", "MILAN", "ITALY", "EURONEXT"))]
+                if relevant_exchanges:
+                    print(f"[History] [{market_code}] Debug (EU): {', '.join(sorted(relevant_exchanges))}")
+            elif market_code == "HK":
+                # Debug: แสดง exchange ทั้งหมดที่ map เป็น HK
+                hk_exchanges_found = []
+                for ex in all_exchanges:
+                    mapped = market_code_from_exchange(ex)
+                    if mapped == "HK":
+                        hk_exchanges_found.append(ex)
+                if hk_exchanges_found:
+                    print(f"[History] [HK] Debug: Found {len(hk_exchanges_found)} exchanges that map to HK:")
+                    for ex in sorted(set(hk_exchanges_found))[:10]:
+                        print(f"[History] [HK]   - {ex}")
+                # Debug: แสดง exchange ที่มีคำว่า HONG, HK, HKEX แต่ไม่ map เป็น HK
+                relevant_exchanges = [ex for ex in upper_exchanges if any(k in ex for k in ("HONG", "HK", "HKEX", "SEHK"))]
+                if relevant_exchanges:
+                    print(f"[History] [HK] Debug: Exchanges containing HONG/HK/HKEX keywords: {len(relevant_exchanges)}")
+                    non_hk_exchanges = []
+                    for ex in relevant_exchanges:
+                        mapped = market_code_from_exchange(ex)
+                        if mapped != "HK":
+                            non_hk_exchanges.append(f"{ex} -> {mapped}")
+                    if non_hk_exchanges:
+                        print(f"[History] [HK] Warning: {len(non_hk_exchanges)} exchanges with HK keywords but mapped to other market:")
+                        for ex_map in non_hk_exchanges[:5]:
+                            print(f"[History] [HK]   - {ex_map}")
+                else:
+                    print(f"[History] [HK] Debug: No exchanges found with HONG/HK/HKEX keywords")
+            elif market_code == "VN":
+                relevant_exchanges = [ex for ex in upper_exchanges if any(k in ex for k in ("VIET", "HOCHIMINH", "HOSE", "HNX"))]
+                if relevant_exchanges:
+                    print(f"[History] [VN] Debug exchanges: {', '.join(sorted(relevant_exchanges))}")
+            elif market_code == "US":
+                # Debug สำหรับ US: แสดง exchange ทั้งหมดที่ map เป็น US
+                us_exchanges_found = []
+                for ex in all_exchanges:
+                    mapped = market_code_from_exchange(ex)
+                    if mapped == "US":
+                        us_exchanges_found.append(ex)
+                if us_exchanges_found:
+                    print(f"[History] [US] Debug: Found {len(us_exchanges_found)} exchanges that map to US:")
+                    for ex in sorted(set(us_exchanges_found))[:10]:
+                        print(f"[History] [US]   - {ex}")
+                # แสดง exchange ที่ไม่ map เป็น US (เพื่อ debug)
+                non_us_exchanges = [ex for ex in all_exchanges if market_code_from_exchange(ex) != "US"]
+                if non_us_exchanges:
+                    print(f"[History] [US] Debug: {len(non_us_exchanges)} exchanges that DON'T map to US (sample):")
+                    for ex in sorted(set(non_us_exchanges))[:5]:
+                        mapped = market_code_from_exchange(ex)
+                        print(f"[History] [US]   - {ex} -> {mapped}")
+            else:
+                if upper_exchanges:
+                    print(f"[History] [{market_code}] Debug exchanges sample: {', '.join(sorted(upper_exchanges)[:10])}")
+            return
+        
+        print(f"[History] [{market_code}] Found {len(market_tickers)} tickers")
+        
+        # Debug: แสดง exchange distribution สำหรับ US
+        if market_code == "US":
+            exchange_dist = {}
+            for item in market_tickers:
+                ex = item.get("u_exch", "") or "NULL"
+                if ex not in exchange_dist:
+                    exchange_dist[ex] = 0
+                exchange_dist[ex] += 1
+            print(f"[History] [US] Exchange distribution:")
+            for ex, count in sorted(exchange_dist.items(), key=lambda x: x[1], reverse=True):
+                print(f"[History] [US]   {ex:60s}: {count:3d} tickers")
+        
+        con = None
+        max_retries = 5
+        retry_delay = 0.5  # seconds
+        session_id = "concurrent-db-check"
+        run_id = "run1"
+        
+        # #region agent log
+        debug_log(session_id, run_id, "A", f"fetch_market_history:{market_code}:connection_start", 
+                  f"Starting connection for {market_code}", {"market_code": market_code, "timestamp": now_thai.isoformat()})
+        # #endregion
+        
+        for retry in range(max_retries):
+            try:
+
+                debug_log(session_id, run_id, "B", f"fetch_market_history:{market_code}:before_connect",
+                          f"Before connecting to DB for {market_code}", {"market_code": market_code, "retry": retry})
+                # #endregion
+                
+                con = sqlite3.connect(DB_FILE, timeout=3)  # ลด timeout เป็น 5 วินาที (ลด lock time)
+                con.row_factory = sqlite3.Row
+                cur = con.cursor()
+                
+                cur.execute("PRAGMA journal_mode=WAL")
+                wal_result = cur.fetchone()
+                
+                # #region agent log
+                debug_log(session_id, run_id, "B", f"fetch_market_history:{market_code}:after_wal",
+                          f"WAL mode set for {market_code}", {"market_code": market_code, "wal_mode": wal_result[0] if wal_result else "unknown"})
+                # #endregion
+                
+                # ตั้ง timeout สำหรับ database lock (ลดลงเพื่อลด lock time)
+                cur.execute("PRAGMA busy_timeout=2000")  # 2 seconds timeout (ลดจาก 30 วินาที)
+                # ปรับเพิ่ม cache size เพื่อ performance
+                cur.execute("PRAGMA cache_size=-64000")  # 64MB cache
+                
+                # #region agent log
+                debug_log(session_id, run_id, "C", f"fetch_market_history:{market_code}:connection_success",
+                          f"Connection established for {market_code}", {"market_code": market_code, "retry": retry})
+                # #endregion
+                
+                break  # Connection successful, exit retry loop
+            except sqlite3.OperationalError as e:
+                # #region agent log
+                debug_log(session_id, run_id, "D", f"fetch_market_history:{market_code}:connection_error",
+                          f"Database connection error for {market_code}", {"market_code": market_code, "error": str(e), "retry": retry, "is_locked": "locked" in str(e).lower()})
+                # #endregion
+                
+                if "locked" in str(e).lower() and retry < max_retries - 1:
+                    print(f"[History] [{market_code}] Database locked, retrying in {retry_delay}s (attempt {retry + 1}/{max_retries})...")
+                    await asyncio.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                    if con:
+                        con.close()
+                else:
+                    raise
+        
+        try:
+            fetched_count = 0
+            skipped_count = 0
+            
+            for item in market_tickers:
+                ticker = item.get("u_code")
+                exchange = item.get("u_exch") or ""
+                
+                # ใช้วันที่ของ now_thai โดยตรง (ไม่ใช้ get_market_close_thai เพราะอาจคำนวณผิด)
+                date_str = now_thai.date().isoformat()
+                ts_str = now_thai.replace(tzinfo=None).isoformat()
+                cur.execute(
+                    """
+                    SELECT 1 FROM rating_history
+                    WHERE ticker=? AND strftime('%Y-%m-%d', timestamp)=?
+                    LIMIT 1
+                    """,
+                    (ticker, date_str),
+                )
+                if cur.fetchone():
+                    skipped_count += 1
+                    continue
+                
+                # Fetch data from TradingView
+                res = await fetch_single_ticker_for_history(client, item)
+                if not res.get("success"):
+                    print(f"[History] [{market_code}] Failed to fetch {ticker}: {res.get('error', 'Unknown error')}")
+                    continue
+                
+                data = res["data"]
+                daily_val = data.get("daily_val")
+                weekly_val = data.get("weekly_val")
+                daily_rating = data.get("daily_rating")
+                weekly_rating = data.get("weekly_rating")
+                
+                if (not daily_rating or daily_rating == "Unknown") and (
+                    not weekly_rating or weekly_rating == "Unknown"
+                ):
+                    print(f"[History] [{market_code}] Warning: {ticker} has both daily and weekly as Unknown, but will still be saved")
+                
+                market_data = {
+                    "currency": data.get("currency", ""),
+                    "price": data.get("market_data", {}).get("price"),
+                    "open": data.get("market_data", {}).get("open"),
+                    "change_pct": data.get("market_data", {}).get("change_pct"),
+                    "change_abs": data.get("market_data", {}).get("change_abs"),
+                    "high": data.get("market_data", {}).get("high"),
+                    "low": data.get("market_data", {}).get("low"),
+                }
+                
+                # Retry upsert with exponential backoff if database is locked
+                upsert_success = False
+                # #region agent log
+                debug_log(session_id, run_id, "E", f"fetch_market_history:{market_code}:before_upsert",
+                          f"Before upsert for {ticker}", {"market_code": market_code, "ticker": ticker})
+                # #endregion
+                
+                for upsert_retry in range(3):
+                    try:
+                        upsert_history_snapshot(
+                            cur,
+                            ticker=ticker,
+                            market_code=market_code,
+                            snapshot_ts_thai=now_thai,
+                            daily_val=daily_val,
+                            daily_rating=daily_rating,
+                            weekly_val=weekly_val,
+                            weekly_rating=weekly_rating,
+                            exchange=exchange,
+                            market_data=market_data,
+                        )
+                        upsert_success = True
+                        # #region agent log
+                        debug_log(session_id, run_id, "E", f"fetch_market_history:{market_code}:upsert_success",
+                                  f"Upsert successful for {ticker}", {"market_code": market_code, "ticker": ticker, "retry": upsert_retry})
+                        # #endregion
+                        break
+                    except sqlite3.OperationalError as e:
+                        # #region agent log
+                        debug_log(session_id, run_id, "E", f"fetch_market_history:{market_code}:upsert_error",
+                                  f"Upsert error for {ticker}", {"market_code": market_code, "ticker": ticker, "error": str(e), "retry": upsert_retry, "is_locked": "locked" in str(e).lower()})
+                        # #endregion
+                        
+                        if "locked" in str(e).lower() and upsert_retry < 2:
+                            await asyncio.sleep(0.2 * (upsert_retry + 1))  # 0.2s, 0.4s, 0.6s
+                            continue
+                        else:
+                            raise
+                
+                if upsert_success:
+                    fetched_count += 1
+                else:
+                    print(f"[History] [{market_code}] Failed to upsert {ticker} after retries")
+                
+                # Small delay between requests
+                await asyncio.sleep(0.1)
+            
+            # คำนวณ accuracy สำหรับทุก ticker ในวันนี้ (ก่อน commit)
+            # Query ทุก ticker ที่มีข้อมูลในวันนี้ (รวมที่ skip และที่เพิ่งดึงใหม่)
+            date_str = now_thai.date().isoformat()
+            cur.execute("""
+                SELECT ticker, timestamp, price, change_pct, currency, high, low
+                FROM rating_history
+                WHERE strftime('%Y-%m-%d', timestamp) = ?
+                AND market = ?
+                ORDER BY ticker
+            """, (date_str, market_code))
+            
+            all_tickers_today = cur.fetchall()
+            
+            if all_tickers_today:
+                print(f"[Accuracy] [{market_code}] Calculating accuracy for {len(all_tickers_today)} tickers from today's data...")
+                accuracy_calculated = 0
+                accuracy_errors = 0
+                
+                for row in all_tickers_today:
+                    ticker = row[0]
+                    timestamp_str = row[1]
+                    price = row[2]
+                    change_pct = row[3]
+                    currency = row[4]
+                    high = row[5]
+                    low = row[6]
+                    
+                    try:
+                        calculate_and_save_accuracy_for_ticker(
+                            cur, 
+                            ticker, 
+                            timestamp_str,
+                            price,
+                            change_pct,
+                            currency,
+                            high,
+                            low,
+                            window_days=90
+                        )
+                        accuracy_calculated += 1
+                    except Exception as ticker_e:
+                        accuracy_errors += 1
+                        print(f"[Accuracy] [{market_code}] Error calculating accuracy for {ticker}: {ticker_e}")
+                
+                print(f"[Accuracy] [{market_code}] Completed: {accuracy_calculated}/{len(all_tickers_today)} tickers calculated, {accuracy_errors} errors")
+            
+            # Commit with retry (ทั้ง history และ accuracy ใน transaction เดียว)
+            commit_success = False
+            # #region agent log
+            debug_log(session_id, run_id, "F", f"fetch_market_history:{market_code}:before_commit",
+                      f"Before commit for {market_code}", {"market_code": market_code, "fetched_count": fetched_count})
+            # #endregion
+            
+            for commit_retry in range(3):
+                try:
+                    con.commit()
+                    commit_success = True
+                    # #region agent log
+                    debug_log(session_id, run_id, "F", f"fetch_market_history:{market_code}:commit_success",
+                              f"Commit successful for {market_code}", {"market_code": market_code, "retry": commit_retry})
+                    # #endregion
+                    break
+                except sqlite3.OperationalError as e:
+                    # #region agent log
+                    debug_log(session_id, run_id, "F", f"fetch_market_history:{market_code}:commit_error",
+                              f"Commit error for {market_code}", {"market_code": market_code, "error": str(e), "retry": commit_retry, "is_locked": "locked" in str(e).lower()})
+                    # #endregion
+                    
+                    if "locked" in str(e).lower() and commit_retry < 2:
+                        await asyncio.sleep(0.5 * (commit_retry + 1))
+                        continue
+                    else:
+                        raise
+            
+            if commit_success:
+                print(f"[History] [{market_code}] ✅ Completed: {fetched_count} fetched, {skipped_count} skipped")
+                # #region agent log
+                debug_log(session_id, run_id, "G", f"fetch_market_history:{market_code}:completed",
+                          f"Fetch completed for {market_code}", {"market_code": market_code, "fetched_count": fetched_count, "skipped_count": skipped_count})
+            else:
+                print(f"[History] [{market_code}] ❌ Warning: Failed to commit after retries")
+            
+            # Debug: ตรวจสอบว่ามี ticker ไหนที่ยังไม่มีใน rating_history (เฉพาะ US)
+            # ใช้ connection ใหม่สำหรับ debug query เพื่อไม่ให้ block
+            if market_code == "US" and fetched_count + skipped_count < len(market_tickers):
+                debug_con = None
+                try:
+                    debug_con = sqlite3.connect(DB_FILE, timeout=5.0)
+                    debug_cur = debug_con.cursor()
+                    debug_cur.execute("PRAGMA journal_mode=WAL")
+                    date_str = now_thai.date().isoformat()
+                    debug_cur.execute("""
+                        SELECT DISTINCT ticker FROM rating_history
+                        WHERE market = 'US' AND strftime('%Y-%m-%d', timestamp) = ?
+                    """, (date_str,))
+                    existing_tickers = {row[0] for row in debug_cur.fetchall()}
+                    missing_tickers = [item["u_code"] for item in market_tickers if item["u_code"] not in existing_tickers]
+                    if missing_tickers:
+                        print(f"[History] [US] Warning: {len(missing_tickers)} tickers not inserted into rating_history:")
+                        for ticker in missing_tickers[:10]:
+                            print(f"[History] [US]   - {ticker}")
+                        if len(missing_tickers) > 10:
+                            print(f"[History] [US]   ... and {len(missing_tickers) - 10} more")
+                finally:
+                    if debug_con:
+                        debug_con.close()
+            
+        except Exception as e:
+            print(f"[History] [{market_code}] Error: {e}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            if con:
+                con.close()
+
+
+async def market_scheduler(market_code: str):
+
+    bkk_tz = ZoneInfo("Asia/Bangkok")
+    
+    while True:
+        try:
+            now_thai = datetime.now(bkk_tz)
+            cfg = MARKET_OPEN_CONFIG.get(market_code, MARKET_OPEN_CONFIG["US"])
+
+            # ตรวจสอบฤดูกาล
+            is_summer = is_summer_time(now_thai)
+            if "winter" in cfg and "summer" in cfg:
+                open_time = cfg["summer"] if is_summer else cfg["winter"]
+            else:
+                open_time = cfg.get("winter") or cfg.get("summer") or time(3, 0)
+
+            # คำนวณเวลาเปิดตลาดของวันนี้ (open + buffer)
+            today = now_thai.date()
+            open_today = datetime.combine(today, open_time, tzinfo=bkk_tz)
+
+            # ถ้าเวลาเปิดตลาดผ่านไปแล้ว ให้ใช้ของวันถัดไป
+            if open_today <= now_thai:
+                open_today = open_today + timedelta(days=1)
+
+            # คำนวณเวลาที่เหลือจนถึงเวลาเปิดตลาด
+            wait_seconds = (open_today - now_thai).total_seconds()
+
+            # เพิ่มข้อมูล timezone-aware เพื่อแสดงว่าเวลานั้นเป็นวันหยุดในตลาดท้องถิ่นหรือไม่
+            tz_name = MARKET_TIMEZONE.get(market_code)
+            local_info = ""
+            try:
+                if tz_name:
+                    market_tz = ZoneInfo(tz_name)
+                    local_open = open_today.astimezone(market_tz)
+                    local_weekday_name = local_open.strftime('%A')
+                    is_weekend_local = local_open.weekday() in (5, 6)
+                    local_info = f" | market local: {local_open.strftime('%Y-%m-%d %H:%M:%S')} ({local_weekday_name}) weekend={is_weekend_local}"
+                else:
+                    local_info = ""
+            except Exception:
+                local_info = ""
+
+            print(f"[Scheduler] [{market_code}] Next fetch at {open_today.strftime('%Y-%m-%d %H:%M:%S')} ไทย (in {wait_seconds/60:.1f} minutes){local_info}")
+
+            # Sleep จนถึงเวลาเปิดตลาด
+            await asyncio.sleep(wait_seconds)
+            
+            # เมื่อถึงเวลา → ดึงข้อมูลทันที แต่ข้ามวันหยุดตามข้อกำหนด
+            # ตรวจสอบโดยแปลงเวลาเป็น timezone ของตลาดนั้นๆ แล้วดูว่าเป็นวันหยุด (Sat/Sun) หรือไม่
+            tz_name = MARKET_TIMEZONE.get(market_code)
+            should_skip = False
+            try:
+                if tz_name:
+                    market_tz = ZoneInfo(tz_name)
+                    local_open = open_today.astimezone(market_tz)
+                    local_weekday = local_open.weekday()  # Mon=0 .. Sun=6
+                    if local_weekday in (5, 6):
+                        should_skip = True
+                else:
+                    # Fallback: if no timezone mapping, use Thai weekday (but skip Sat/Sun)
+                    run_day = open_today.weekday()
+                    if run_day in (5, 6):
+                        should_skip = True
+            except Exception:
+                # If timezone conversion fails, default to not skipping
+                should_skip = False
+
+            if should_skip:
+                # Log using local_open if available
+                skip_date = local_open.strftime('%A %Y-%m-%d') if tz_name else open_today.strftime('%A %Y-%m-%d')
+                print(f"[Scheduler] [{market_code}] Skipping history fetch on {skip_date} per weekend policy (market local time)")
+            else:
+                # ใช้ WAL mode + connection แยก + retry logic เพื่อรองรับ concurrent access
+                await fetch_market_history(market_code)
+            
+        except Exception as e:
+            print(f"[Scheduler] [{market_code}] Error: {e}")
+            import traceback
+            traceback.print_exc()
+            # ถ้าเกิด error ให้รอ 1 นาทีแล้วลองใหม่
+            await asyncio.sleep(60)
+
+
+async def accuracy_updater():
+
+    bkk_tz = ZoneInfo("Asia/Bangkok")
+    
+    while True:
+        try:
+            # Wait until next day at 05:00 Thai time (after all markets close)
+            now_thai = datetime.now(bkk_tz)
+            today = now_thai.date()
+            
+            # Target time: 05:00 next day (after all markets close)
+            next_run = datetime.combine(today, time(5, 0), tzinfo=bkk_tz)
+            if next_run <= now_thai:
+                next_run = next_run + timedelta(days=1)
+            
+            wait_seconds = (next_run - now_thai).total_seconds()
+            print(f"[Accuracy Updater] Next run at {next_run.strftime('%Y-%m-%d %H:%M:%S')} ไทย (in {wait_seconds/3600:.1f} hours)")
+            
+            await asyncio.sleep(wait_seconds)
+            
+            # Calculate accuracy for all tickers
+            print("[Accuracy Updater] Starting accuracy recalculation...")
+            
+            try:
+                con = sqlite3.connect(DB_FILE)
+                cur = con.cursor()
+                
+                # Enable WAL mode for better concurrency
+                cur.execute("PRAGMA journal_mode=WAL")
+                cur.execute("PRAGMA busy_timeout=30000")
+                
+                # Get all unique tickers
+                cur.execute("SELECT DISTINCT ticker FROM rating_main")
+                tickers = [row[0] for row in cur.fetchall()]
+                
+                con.close()
+                
+                print(f"[Accuracy Updater] Found {len(tickers)} tickers to process")
+                
+                # Recalculate for each ticker
+                for ticker in tickers:
+                    try:
+                        # Recalculate for both timeframes
+                        recalc_and_save_accuracy_for_ticker(ticker, "1D", 90)
+                        recalc_and_save_accuracy_for_ticker(ticker, "1W", 90)
+                    except Exception as e:
+                        print(f"[Accuracy Updater] Error processing {ticker}: {e}")
+                    
+                    # Small delay between tickers
+                    await asyncio.sleep(0.5)
+                
+                print(f"[Accuracy Updater] Completed recalculation for {len(tickers)} tickers")
+                
+            except Exception as e:
+                print(f"[Accuracy Updater] Error during recalculation: {e}")
+                import traceback
+                traceback.print_exc()
+                
+        except Exception as e:
+            print(f"[Accuracy Updater] Fatal error: {e}")
+            import traceback
+            traceback.print_exc()
+            # If error, wait 1 hour before retry
+            await asyncio.sleep(3600)
+
+async def history_updater():
+    """
+    เริ่ม scheduler สำหรับทุก market
+    แต่ละ market จะมี scheduler ของตัวเองที่รันแยกกัน
+    """
+    # วิเคราะห์ข้อมูลทั้งหมดเมื่อเริ่มต้นระบบ
+    print("\n[History] Initializing history updater...")
+    await analyze_all_tickers()
+    
+    # เริ่ม scheduler สำหรับทุก market
+    markets = list(MARKET_OPEN_CONFIG.keys())
+    print(f"[History] Starting schedulers for {len(markets)} markets: {', '.join(markets)}")
+    
+    # สร้าง task สำหรับแต่ละ market
+    tasks = [asyncio.create_task(market_scheduler(market_code)) for market_code in markets]
+    
+    # รอให้ทุก task รัน (จะรันตลอดไป)
+    await asyncio.gather(*tasks)
+
+# --- FastAPI Setup ---
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    load_db_from_disk()
+    """On startup, initialize DB, migrate data, and start background task."""
+    init_database()
+    migrate_from_json_if_needed()
+    
+    # Populate accuracy data สำหรับข้อมูลที่มีใน rating_history แล้ว
+    print("\n[Startup] Populating accuracy data from existing rating_history...")
+    populate_accuracy_on_startup()
+    
     asyncio.create_task(background_updater())
+    asyncio.create_task(history_updater())
+    # accuracy_updater removed - accuracy is now calculated immediately when rating_history is updated
     yield
 
 app = FastAPI(lifespan=lifespan)
 
+# DEV ONLY: Using wildcard CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_credentials=True,
 )
 
-@app.get("/api/earnings")
-async def get_earnings(country: str = Query("US")):
-    if country.upper() == "ALL":
-        # Calculate date range for US market (default)
-        s_ts, e_ts = get_tradingview_range("US")
-        start_date = datetime.fromtimestamp(s_ts, tz=timezone.utc)
-        end_date = datetime.fromtimestamp(e_ts, tz=timezone.utc)
-        return {
-            "updated_at": _last_update_str,
-            "date_range": {
-                "start": start_date.isoformat(),
-                "end": end_date.isoformat(),
-                "start_display": start_date.strftime("%Y-%m-%d %H:%M:%S UTC"),
-                "end_display": end_date.strftime("%Y-%m-%d %H:%M:%S UTC"),
-                "note": "Shows earnings from next Monday to next Sunday (excluding end date)"
-            },
-            "data": _earnings_db
-        }
-    
-    market_code = get_market_code(country)
-    display_name = MARKET_DISPLAY_NAMES.get(market_code, "")
-    
-    # Calculate date range for the requested country
-    c_code = "JP" if market_code == "japan" else "US"
-    s_ts, e_ts = get_tradingview_range(c_code)
-    start_date = datetime.fromtimestamp(s_ts, tz=timezone.utc)
-    end_date = datetime.fromtimestamp(e_ts, tz=timezone.utc)
-    
-    if display_name in _earnings_db:
-        return {
-            "updated_at": _last_update_str,
-            "date_range": {
-                "start": start_date.isoformat(),
-                "end": end_date.isoformat(),
-                "start_display": start_date.strftime("%Y-%m-%d %H:%M:%S UTC"),
-                "end_display": end_date.strftime("%Y-%m-%d %H:%M:%S UTC"),
-                "note": "Shows earnings from next Monday to next Sunday (excluding end date)"
-            },
-            "data": {display_name: _earnings_db[display_name]}
-        }
-    return {
-        "updated_at": _last_update_str,
-        "date_range": {
-            "start": start_date.isoformat(),
-            "end": end_date.isoformat(),
-            "start_display": start_date.strftime("%Y-%m-%d %H:%M:%S UTC"),
-            "end_display": end_date.strftime("%Y-%m-%d %H:%M:%S UTC"),
-            "note": "Shows earnings from next Monday to next Sunday (excluding end date)"
-        },
-        "data": {}
-    }
+# --- Tracking Models & Endpoints ---
+from pydantic import BaseModel
 
-@app.get("/api/earnings/stream")
-async def earnings_stream():
-    """SSE endpoint for real-time earnings updates"""
-    async def event_generator():
-        # Create a queue for this client
-        queue = asyncio.Queue()
+class TrackingEvent(BaseModel):
+    session_id: str
+    user_id: str
+    event_type: str
+    event_data: dict
+    page_path: str
+    timestamp: str
+    user_agent: str
+
+@app.post("/api/track")
+async def track_event(event: TrackingEvent, req: Request):
+    """
+    Receive tracking events from frontend and save to user_tracking (realtime) 
+    and user_page_analytics (aggregated).
+    """
+    try:
+        # Note: logic aligned with user_behavior table (capturing IP, no user_id)
         
-        # Add client to the list
-        async with _sse_lock:
-            _sse_clients.append(queue)
-            client_count = len(_sse_clients)
+        client_ip = req.client.host
+        page_path = event.page_path
         
-        print(f"[SSE] New client connected. Total clients: {client_count}")
+        con = sqlite3.connect(DB_FILE)
+        cur = con.cursor()
+        
+
+
+
+        # Check for duplicate events (Strict Debounce - Sequential)
+        # If the latest event for this session is IDENTICAL to the current one, ignore it.
+        try:
+            cur.execute("""
+                SELECT event_data 
+                FROM user_tracking 
+                WHERE session_id = ? 
+                AND event_type = ? 
+                AND page_path = ? 
+                ORDER BY id DESC 
+                LIMIT 1
+            """, (event.session_id, event.event_type, page_path))
+            
+            last_record = cur.fetchone()
+            if last_record:
+                last_data_str = last_record[0]
+                
+                # Normalize JSON for comparison (sort keys)
+                try:
+                    current_data_str = json.dumps(event.event_data, sort_keys=True)
+                    # Try to parse last_data_str to re-dump with sort_keys=True to be sure
+                    last_data_obj = json.loads(last_data_str)
+                    last_data_normalized = json.dumps(last_data_obj, sort_keys=True)
+                except Exception:
+                    # Fallback to simple string comparison if parsing fails
+                    current_data_str = json.dumps(event.event_data)
+                    last_data_normalized = last_data_str
+
+                if last_data_normalized == current_data_str:
+                     # It's a duplicate (sequential), ignore it regardless of time
+                     con.close()
+                     return {"status": "ok", "saved": False, "reason": "Duplicate event ignored (sequential match)"}
+        except Exception as e:
+            print(f"⚠️ Error checking duplicates: {e}")
+
+        # 1. Save detailed event log to user_tracking
+        cur.execute("""
+            INSERT INTO user_tracking 
+            (ip_address, session_id, event_type, event_data, page_path, timestamp, user_agent)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            client_ip,
+            event.session_id, 
+            event.event_type, 
+            json.dumps(event.event_data), 
+            page_path, 
+            event.timestamp, 
+            event.user_agent
+        ))
+
+        # 2. Update aggregated stats (for quick summary)
+        # Ensure table exists (just in case)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS user_page_analytics (
+                ip_address TEXT, 
+                page_path TEXT, 
+                view_count INTEGER,
+                PRIMARY KEY (ip_address, page_path)
+            )
+        """)
+        
+        cur.execute("""
+            INSERT INTO user_page_analytics (ip_address, page_path, view_count)
+            VALUES (?, ?, 1)
+            ON CONFLICT(ip_address, page_path) DO UPDATE SET
+                view_count = view_count + 1
+        """, (client_ip, page_path))
+        
+        con.commit()
+        con.close()
+        return {"status": "ok", "saved": True}
+    except Exception as e:
+        print(f"Tracking Error: {e}")
+        return {"status": "error", "message": str(e)}
+
+# --- Auth Models & Endpoints ---
+class AuthRequest(BaseModel):
+    password: str
+
+# Stats password from environment
+STATS_PASSWORD = os.getenv("STATS_PASSWORD", "ideatrade29169")
+
+# Simple in-memory storage for authorized IPs (with expiry)
+authorized_ips = {}  # {ip: expiry_timestamp}
+AUTH_SESSION_DURATION = 2 * 60 * 60  # 2 hours in seconds
+
+@app.post("/api/auth/verify")
+async def verify_auth(request: AuthRequest, req: Request):
+    """
+    Verify password and create session for the client IP.
+    """
+    client_ip = req.client.host
+    
+    if request.password == STATS_PASSWORD:
+        # Store IP with expiry time
+        expiry = datetime.now().timestamp() + AUTH_SESSION_DURATION
+        authorized_ips[client_ip] = expiry
+        return {"success": True, "message": "Authentication successful"}
+    else:
+        raise HTTPException(status_code=401, detail="Incorrect password")
+
+@app.get("/api/auth/check")
+async def check_auth(req: Request):
+    """
+    Check if the current IP has an active session.
+    """
+    client_ip = req.client.host
+    
+    if client_ip in authorized_ips:
+        expiry = authorized_ips[client_ip]
+        if datetime.now().timestamp() < expiry:
+            return {"authenticated": True}
+        else:
+            # Session expired, remove it
+            del authorized_ips[client_ip]
+    
+    return {"authenticated": False}
+
+# --- Analytics Endpoints ---
+
+@app.get("/api/analytics/summary")
+async def get_analytics_summary():
+    """
+    Get summary analytics using real data from user_tracking and user_page_analytics.
+    - Active Users: Distinct sessions in last 5 minutes
+    - Unique Visitors: Distinct IPs from user_page_analytics
+    - Total Visits: Sum of view counts
+    """
+    try:
+        con = sqlite3.connect(DB_FILE)
+        cur = con.cursor()
+        
+        # 1. Active Users (Live) - queries user_tracking for activity in last 10 minutes
+        # We use a slightly wider window (10 mins) to capture 'reading' users
+        active_users = 0
+        try:
+            cur.execute("""
+                SELECT COUNT(DISTINCT session_id) 
+                FROM user_tracking 
+                WHERE timestamp >= datetime('now', '-10 minutes')
+            """)
+            active_users = cur.fetchone()[0] or 0
+        except Exception:
+            active_users = 0
+
+        # 2. Unique Visitors & Total Visits - from user_tracking (Real detailed logs)
+        # matches "Total Users" requirement to count all distinct users from DB
+        unique_visitors = 0
+        total_visits = 0
         
         try:
-            # Send initial connection message
-            yield f"data: {json.dumps({'type': 'connected', 'message': 'SSE connection established'})}\n\n"
-            
-            # Send heartbeat every 30 seconds to keep connection alive
-            last_heartbeat = time_module.time()
-            heartbeat_interval = 30
-            
-            while True:
-                # Wait for message with timeout for heartbeat
-                current_time = time_module.time()
-                time_since_heartbeat = current_time - last_heartbeat
-                timeout = max(0.1, heartbeat_interval - time_since_heartbeat)
+            # Check if table exists
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='user_tracking'")
+            if cur.fetchone():
+                # Count distinct User IDs (Total Users)
+                cur.execute("SELECT COUNT(DISTINCT ip_address) FROM user_tracking")
+                unique_visitors = cur.fetchone()[0] or 0
                 
-                try:
-                    message = await asyncio.wait_for(queue.get(), timeout=timeout)
-                    yield f"data: {json.dumps(message)}\n\n"
-                except asyncio.TimeoutError:
-                    # Send heartbeat (uncomment to see heartbeats in console)
-                    # print(f"💓 [SSE] Sending heartbeat to {len(_sse_clients)} clients")
-                    yield f"data: {json.dumps({'type': 'heartbeat', 'timestamp': datetime.now().isoformat()})}\n\n"
-                    last_heartbeat = time_module.time()
-                        
-        except asyncio.CancelledError:
-            # Client disconnected
-            print(f"[SSE] Client disconnected")
-        finally:
-            # Remove client from the list
-            async with _sse_lock:
-                if queue in _sse_clients:
-                    _sse_clients.remove(queue)
-                    remaining = len(_sse_clients)
-                    print(f"[SSE] Client removed. Remaining clients: {remaining}")
-    
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no"
-        }
-    )
+                # Count total page views (Total Visits)
+                cur.execute("SELECT COUNT(*) FROM user_tracking WHERE event_type = 'page_view'")
+                total_visits = cur.fetchone()[0] or 0
+        except Exception:
+            pass
 
-@app.post("/api/earnings/refresh")
-async def force_refresh_earnings():
-    """Force refresh earnings data immediately (bypass cache interval)"""
-    global _earnings_db, _last_update_str, _previous_earnings_db
-    try:
-        print(f"[REFRESH] [Manual Refresh] Forcing earnings update at {datetime.now()}")
+        # 3. Top Pages
+        top_pages = []
+        try:
+            cur.execute("""
+                SELECT page_path, SUM(view_count) as total_views 
+                FROM user_page_analytics 
+                GROUP BY page_path 
+                ORDER BY total_views DESC
+                LIMIT 10
+            """)
+            top_pages = [{"page_path": row[0], "total_views": row[1]} for row in cur.fetchall()]
+        except Exception:
+            pass
         
-        # ✅ ปรับปรุง Logic การดึงรายชื่อหุ้นที่มี DR ตามค่า ENABLE_DR_FILTER
-        valid_dr_tickers = None
-        ticker_mapping = {}  # Mapping table: {ticker_from_tv: underlying_code}
-        if ENABLE_DR_FILTER:
-            valid_dr_tickers = set()
-            skipped_count = 0
-            skipped_reasons = {}
-            skipped_items = []
-            try:
-                async with httpx.AsyncClient() as client:
-                    r_dr = await client.get(DR_LIST_URL, timeout=10)
-                    dr_rows = r_dr.json().get("rows", [])
-                    print(f"  [DATA] [Manual Refresh] Total DR rows from API: {len(dr_rows)}")
-                    for item in dr_rows:
-                        u_code = None
-                        source = None
-                        
-                        underlying_name = item.get("underlyingName") or ""
-                        match = re.search(r'\(([A-Z0-9.\-_]+)\)$', underlying_name)
-                        if match:
-                            u_code = match.group(1)
-                            source = "underlyingName"
-                        else:
-                            u_code = item.get("underlying")
-                            if u_code:
-                                source = "underlying"
-                            else:
-                                sym = item.get("symbol") or ""
-                                if "80" in sym: 
-                                    u_code = sym.replace("80", "")
-                                    source = "symbol(80)"
-                                elif "19" in sym: 
-                                    u_code = sym.replace("19", "")
-                                    source = "symbol(19)"
-                        
-                        if u_code:
-                            u_code = u_code.strip().upper()
-                            if u_code and len(u_code) > 0:
-                                if ' ' in u_code:
-                                    name_match_alt = re.search(r'\(([A-Z0-9.\-_]+)\)', underlying_name.upper())
-                                    if name_match_alt:
-                                        alt_ticker = name_match_alt.group(1).strip()
-                                        if alt_ticker and ' ' not in alt_ticker and len(alt_ticker) <= 15:
-                                            u_code = alt_ticker
-                                            source = "underlyingName(alt)"
-                                        else:
-                                            u_code_clean = re.sub(r'\s+(ETF|DIAMOND ETF|FUND|TRUST).*$', '', u_code, flags=re.IGNORECASE).strip()
-                                            if u_code_clean and ' ' not in u_code_clean and len(u_code_clean) <= 15:
-                                                u_code = u_code_clean
-                                                source = "underlying(clean)"
-                                            else:
-                                                sym = item.get("symbol") or ""
-                                                if sym:
-                                                    sym_clean = re.sub(r'\d+$', '', sym).strip()
-                                                    if sym_clean and len(sym_clean) >= 2 and len(sym_clean) <= 15:
-                                                        u_code = sym_clean.upper()
-                                                        source = "symbol(clean)"
-                                                    else:
-                                                        skipped_count += 1
-                                                        skipped_reasons['has_space'] = skipped_reasons.get('has_space', 0) + 1
-                                                        skipped_items.append({
-                                                            'symbol': item.get('symbol', 'N/A'),
-                                                            'underlyingName': underlying_name[:50],
-                                                            'u_code': u_code,
-                                                            'reason': 'has_space'
-                                                        })
-                                                        continue
-                                                else:
-                                                    skipped_count += 1
-                                                    skipped_reasons['has_space'] = skipped_reasons.get('has_space', 0) + 1
-                                                    skipped_items.append({
-                                                        'symbol': item.get('symbol', 'N/A'),
-                                                        'underlyingName': underlying_name[:50],
-                                                        'u_code': u_code,
-                                                        'reason': 'has_space'
-                                                    })
-                                                    continue
-                                    else:
-                                        u_code_clean = re.sub(r'\s+(ETF|DIAMOND ETF|FUND|TRUST).*$', '', u_code, flags=re.IGNORECASE).strip()
-                                        if u_code_clean and ' ' not in u_code_clean and len(u_code_clean) <= 15:
-                                            u_code = u_code_clean
-                                            source = "underlying(clean)"
-                                        else:
-                                            sym = item.get("symbol") or ""
-                                            if sym:
-                                                sym_clean = re.sub(r'\d+$', '', sym).strip()
-                                                if sym_clean and len(sym_clean) >= 2 and len(sym_clean) <= 15:
-                                                    u_code = sym_clean.upper()
-                                                    source = "symbol(clean)"
-                                                else:
-                                                    skipped_count += 1
-                                                    skipped_reasons['has_space'] = skipped_reasons.get('has_space', 0) + 1
-                                                    skipped_items.append({
-                                                        'symbol': item.get('symbol', 'N/A'),
-                                                        'underlyingName': underlying_name[:50],
-                                                        'u_code': u_code,
-                                                        'reason': 'has_space'
-                                                    })
-                                                    continue
-                                            else:
-                                                skipped_count += 1
-                                                skipped_reasons['has_space'] = skipped_reasons.get('has_space', 0) + 1
-                                                skipped_items.append({
-                                                    'symbol': item.get('symbol', 'N/A'),
-                                                    'underlyingName': underlying_name[:50],
-                                                    'u_code': u_code,
-                                                    'reason': 'has_space'
-                                                })
-                                                continue
-                                if len(u_code) > 15:
-                                    skipped_count += 1
-                                    skipped_reasons['too_long'] = skipped_reasons.get('too_long', 0) + 1
-                                    skipped_items.append({
-                                        'symbol': item.get('symbol', 'N/A'),
-                                        'underlyingName': underlying_name[:50],
-                                        'u_code': u_code,
-                                        'reason': 'too_long'
-                                    })
-                                    continue
-                                valid_dr_tickers.add(u_code)
-                                ticker_mapping[u_code] = u_code
-                                
-                                sym_clean = item.get("symbol", "").strip().upper()
-                                if sym_clean and sym_clean != u_code:
-                                    sym_no_suffix = sym_clean.replace("80", "").replace("19", "").strip()
-                                    if sym_no_suffix and sym_no_suffix != u_code and len(sym_no_suffix) <= 15 and ' ' not in sym_no_suffix:
-                                        ticker_mapping[sym_no_suffix] = u_code
-                                
-                                if underlying_name:
-                                    name_match = re.search(r'\(([A-Z0-9.\-_]+)\)', underlying_name.upper())
-                                    if name_match:
-                                        name_ticker = name_match.group(1).strip()
-                                        if name_ticker and name_ticker != u_code and len(name_ticker) <= 15 and ' ' not in name_ticker:
-                                            ticker_mapping[name_ticker] = u_code
-                    
-                    if skipped_count > 0:
-                        print(f"  [WARN] Skipped {skipped_count} items: {skipped_reasons}")
-                    print(f"[DATA] [Manual Refresh] DR Filter is ENABLED. Found {len(valid_dr_tickers)} unique symbols.")
-            except Exception as dr_err:
-                print(f"[ERROR] [Manual Refresh] Failed to fetch DR whitelist: {dr_err}")
-                valid_dr_tickers = None 
-        else:
-            print(f"[INFO] [Manual Refresh] DR Filter is DISABLED. Fetching all stocks.")
-
-        new_db = {}
-        all_markets = ["america", "hongkong", "japan", "china", "singapore", "vietnam", "france", "netherlands", "denmark", "italy", "taiwan", "thailand"]
-        
-        for m in all_markets:
-            c_code = "JP" if m == "japan" else "US"
-            s_ts, e_ts = get_tradingview_range(c_code)
-            print(f"[DATE] [Manual Refresh] [{m}] Date range: {datetime.fromtimestamp(s_ts, tz=timezone.utc)} to {datetime.fromtimestamp(e_ts, tz=timezone.utc)}")
-            
-            raw_data = await fetch_tradingview_earnings(m, s_ts, e_ts)
-            print(f"[DATA] [Manual Refresh] [{m}] Received {len(raw_data)} raw items from TradingView")
-            
-            stock_list = map_tv_data_to_object(raw_data, valid_dr_tickers, ticker_mapping)
-            print(f"[OK] [Manual Refresh] [{m}] Mapped to {len(stock_list)} stocks")
-            
-            stock_list.sort(key=lambda x: x["date"] if x["date"] else float('inf'))
-            
-            display_name = MARKET_DISPLAY_NAMES.get(m, m.upper())
-            if stock_list:
-                new_db[display_name] = {"totalCount": len(stock_list), "data": stock_list}
-            await asyncio.sleep(0.5)
-
-        # Detect new earnings before updating
-        new_earnings = find_new_earnings(new_db, _previous_earnings_db)
-        
-        # Update earnings database
-        _earnings_db = new_db
-        _last_update_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        save_db_to_disk()
-        
-        # Broadcast new earnings to SSE clients
-        if new_earnings:
-            print(f"[SSE] [Manual Refresh] Found {len(new_earnings)} new earnings, broadcasting to SSE clients")
-            await broadcast_to_sse_clients({
-                "type": "new_earnings",
-                "earnings": new_earnings,
-                "count": len(new_earnings),
-                "updated_at": _last_update_str
-            })
-        
-        # Update previous earnings state for next comparison
-        _previous_earnings_db = new_db.copy()
+        con.close()
         
         return {
-            "success": True,
-            "message": "Earnings data refreshed successfully",
-            "updated_at": _last_update_str,
-            "markets": list(new_db.keys()),
-            "total_earnings": sum(m.get("totalCount", 0) for m in new_db.values()),
-            "new_earnings_count": len(new_earnings)
+            "unique_visitors": unique_visitors,
+            "total_visits": total_visits,
+            "active_users": active_users,
+            "top_pages": top_pages
         }
     except Exception as e:
-        print(f"[ERROR] [Manual Refresh] Error: {e}")
-        return {"success": False, "error": str(e)}
+        print(f"Analytics Summary Error: {e}")
+        return {"unique_visitors": 0, "total_visits": 0, "active_users": 0, "top_pages": []}
 
-@app.get("/api/test")
-async def get_earnings(country: str = Query("US")):
-    return {'d': 1234}
+@app.get("/api/analytics/weekly-trend")
+async def get_weekly_trend():
+    """
+    Get page view data for weekly trend chart using REAL data from user_tracking.
+    Shows 2 week ranges (Last week vs This week).
+    """
+    try:
+        con = sqlite3.connect(DB_FILE)
+        cur = con.cursor()
+        
+        # Define ranges
+        today = datetime.now()
+        
+        # Week 1: Last full week (Mon-Sun)
+        # Find defining dates
+        current_weekday = today.weekday() # Mon=0, Sun=6
+        
+        # This week start (Monday)
+        this_week_start = today - timedelta(days=current_weekday)
+        this_week_start = this_week_start.replace(hour=0, minute=0, second=0, microsecond=0)
+        
+        # Last week start (Monday) and end (Sun)
+        last_week_start = this_week_start - timedelta(days=7)
+        last_week_end = this_week_start - timedelta(seconds=1) # Sunday 23:59:59
+        
+        ranges = [
+            {"label": "Last Week", "start": last_week_start, "end": last_week_end},
+            {"label": "This Week", "start": this_week_start, "end": today}
+        ]
+        
+        page_map = {
+            'home': 'Home',
+            'news': 'News',
+            'drlist': 'DR List',
+            'caldr': 'CalDR',
+            'suggestion': 'Suggestion',
+            'calendar': 'Calendar',
+            'stats': 'Stats'
+        }
+        
+        result = []
+        
+        for r in ranges:
+            start_dt = r["start"]
+            end_dt = r["end"]
+            
+            # Format label: "DD Mon - DD Mon YY"
+            year_suffix = start_dt.strftime("%y")
+            date_str = f"{start_dt.strftime('%d %b')} - {end_dt.strftime('%d %b')} {year_suffix}"
+            
+            # Query user_tracking for this range
+            start_iso = start_dt.isoformat()
+            end_iso = end_dt.isoformat()
+            if not isinstance(end_iso, str):
+                 end_iso = str(end_iso)
+                 
+            # Query pages. Note: timestamps stored from frontend are usually ISO UTC or local.
+            # Comparison with string usually works for ISO format.
+            cur.execute("""
+                SELECT page_path, COUNT(*) as count
+                FROM user_tracking
+                WHERE timestamp >= ? AND timestamp <= ?
+                AND event_type = 'page_view'
+                GROUP BY page_path
+            """, (start_iso, end_iso))
+            
+            rows = cur.fetchall()
+            
+            data_point = {"date": date_str}
+            
+            # Initialize all pages to 0
+            for p_name in page_map.values():
+                if p_name != 'Stats':
+                    data_point[p_name] = 0
+            
+            for row in rows:
+                raw_path = row[0].strip().lower()
+                parts = [p for p in raw_path.split('/') if p]
+                page_path = parts[-1] if parts else 'home'
+                
+                page_name = page_map.get(page_path, page_path.title())
+                
+                if page_name == 'Stats':
+                    continue
+                    
+                if page_name in data_point:
+                    data_point[page_name] += row[1]
+                else:
+                    data_point[page_name] = row[1]
+            
+            result.append(data_point)
+            
+        con.close()
+        return result
+
+    except Exception as e:
+        print(f"Weekly Trend Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return []
+
+@app.get("/api/analytics/monthly-trend")
+async def get_monthly_trend():
+    """
+    Get page view data for monthly trend chart.
+    Shows current month with page distribution (e.g., "Jan 2026").
+    """
+    try:
+        con = sqlite3.connect(DB_FILE)
+        cur = con.cursor()
+        
+        # Get all page views aggregated
+        cur.execute("""
+            SELECT page_path, SUM(view_count) as views
+            FROM user_page_analytics 
+            GROUP BY page_path
+        """)
+        
+        rows = cur.fetchall()
+        con.close()
+        
+        # Map page paths to names and aggregate totals
+        page_map = {
+            'home': 'Home',
+            'news': 'News',
+            'drlist': 'DR List',
+            'caldr': 'CalDR',
+            'suggestion': 'Suggestion',
+            'calendar': 'Calendar',
+            'stats': 'Stats'
+        }
+        
+        # Calculate totals per page
+        page_totals = {}
+        for row in rows:
+            raw_path = row[0].strip().lower()
+            parts = [p for p in raw_path.split('/') if p]
+            page_path = parts[-1] if parts else 'home'
+            if not page_path:
+                page_path = 'home'
+            views = row[1]
+            
+            page_name = page_map.get(page_path, page_path.title())
+            # Skip stats page from trend
+            if page_name == 'Stats':
+                continue
+                
+            if page_name not in page_totals:
+                page_totals[page_name] = 0
+            page_totals[page_name] += views
+        
+        # Generate single month data point
+        today = datetime.now()
+        month_str = today.strftime("%b %Y")  # e.g., "Jan 2026"
+        
+        data_point = {"date": month_str}
+        for page_name, total in page_totals.items():
+            data_point[page_name] = total
+        
+        return [data_point]
+    except Exception as e:
+        print(f"Monthly Trend Error: {e}")
+        return []
+
+# Simple health check endpoint
+@app.get("/")
+def root():
+    return {"status": "ok", "message": "Ratings API is running"}
+
+
+# Intraday history endpoint (served from rating_main)
+@app.get("/api/intraday-history/{ticker}")
+def get_intraday_history(ticker: str, timeframe: str = Query("1D", description="Timeframe: 1D or 1W")):
+    """
+    Return intraday history for a ticker from rating_main.
+    Fields: timestamp, daily_rating, daily_val, price, change_pct, change_abs, currency, at_price
+    """
+    try:
+        con = sqlite3.connect(DB_FILE)
+        cur = con.cursor()
+        if timeframe == "1W":
+            cur.execute(
+                """
+                SELECT timestamp, weekly_rating, weekly_val, price, change_pct, change_abs, currency, at_price
+                FROM rating_main
+                WHERE ticker = ?
+                ORDER BY timestamp ASC
+                """,
+                (ticker,)
+            )
+        else:
+            cur.execute(
+                """
+                SELECT timestamp, daily_rating, daily_val, price, change_pct, change_abs, currency, at_price
+                FROM rating_main
+                WHERE ticker = ?
+                ORDER BY timestamp ASC
+                """,
+                (ticker,)
+            )
+        rows = cur.fetchall()
+    finally:
+        try:
+            con.close()
+        except:
+            pass
+
+    if not rows:
+        raise HTTPException(status_code=404, detail="No intraday history found for this ticker")
+
+    # Map selected columns to a consistent schema expected by the frontend.
+    result = []
+    for row in rows:
+        result.append({
+            "timestamp": row[0],
+            # Use the same keys (`daily_rating`, `daily_val`) so frontend logic is unchanged;
+            # when timeframe=="1W" these fields contain weekly values.
+            "daily_rating": row[1],
+            "daily_val": row[2],
+            "price": row[3],
+            "change_pct": row[4],
+            "change_abs": row[5],
+            "currency": row[6],
+            "at_price": row[7],
+        })
+    return {"ticker": ticker, "intraday_history": result}
+
+def calculate_accuracy_from_rating_change(history_rows, window_days=90):
+
+    if not history_rows:
+        return {
+            "daily": {"rating": None, "prev": None, "sample_size": 0, "correct": 0, "incorrect": 0, "accuracy": 0.0},
+            "weekly": {"rating": None, "prev": None, "sample_size": 0, "correct": 0, "incorrect": 0, "accuracy": 0.0}
+        }
+    
+    # คำนวณ daily accuracy
+    daily_correct = 0
+    daily_incorrect = 0
+    daily_rating = None
+    daily_prev = None
+    # require change magnitude to exceed this percent to consider as correct
+    CHANGE_THRESHOLD = 2.0  # percent
+
+    # strength mapping (strong sell < sell < neutral < buy < strong buy)
+    strength_map = {
+        "strong sell": -2,
+        "sell": -1,
+        "neutral": 0,
+        "buy": 1,
+        "strong buy": 2
+    }
+
+    def rating_strength(rtext):
+        if not rtext:
+            return None
+        rl = rtext.lower().strip()
+        # exact matches first
+        if rl in strength_map:
+            return strength_map[rl]
+        # fallback: contains
+        if "strong" in rl and "sell" in rl:
+            return strength_map["strong sell"]
+        if "strong" in rl and "buy" in rl:
+            return strength_map["strong buy"]
+        if "sell" in rl:
+            return strength_map["sell"]
+        if "buy" in rl:
+            return strength_map["buy"]
+        if "neutral" in rl:
+            return strength_map["neutral"]
+        return None
+
+    for row in history_rows:
+        if "daily_rating" not in row.keys() or "daily_prev" not in row.keys() or "change_pct" not in row.keys():
+            continue
+
+        rating = row["daily_rating"]
+        prev_rating = row["daily_prev"]
+        change_pct = row["change_pct"] if row["change_pct"] is not None else None
+
+        # Skip if missing data
+        if not rating or not prev_rating or change_pct is None:
+            continue
+
+        str_now = rating_strength(rating)
+        str_prev = rating_strength(prev_rating)
+
+        # Skip Neutral/Unknown or if strength cannot be determined
+        if str_now is None or str_prev is None:
+            continue
+
+        # เก็บ rating และ prev_rating ล่าสุด (สำหรับแสดงผล)
+        if daily_rating is None:
+            daily_rating = rating
+            daily_prev = prev_rating
+
+        # Determine movement: positive -> towards buy, negative -> towards sell
+        delta = str_now - str_prev
+        is_correct = False
+
+        if delta > 0:
+            # moved towards buy
+            is_correct = (change_pct >= CHANGE_THRESHOLD)
+        elif delta < 0:
+            # moved towards sell
+            is_correct = (change_pct <= -CHANGE_THRESHOLD)
+        else:
+            # same strength
+            if str_now > 0:
+                is_correct = (change_pct >= CHANGE_THRESHOLD)
+            elif str_now < 0:
+                is_correct = (change_pct <= -CHANGE_THRESHOLD)
+            else:
+                continue
+
+        if is_correct:
+            daily_correct += 1
+        else:
+            daily_incorrect += 1
+    
+    daily_total = daily_correct + daily_incorrect
+    daily_accuracy = (daily_correct / daily_total * 100) if daily_total > 0 else 0.0
+    
+    # คำนวณ weekly accuracy (logic เดียวกัน)
+    weekly_correct = 0
+    weekly_incorrect = 0
+    weekly_rating = None
+    weekly_prev = None
+    for row in history_rows:
+        if "weekly_rating" not in row.keys() or "weekly_prev" not in row.keys() or "change_pct" not in row.keys():
+            continue
+            
+        rating = row["weekly_rating"]
+        prev_rating = row["weekly_prev"]
+        change_pct = row["change_pct"] if row["change_pct"] is not None else None
+        
+        # Skip if missing data
+        if not rating or not prev_rating or change_pct is None:
+            continue
+        
+        # reuse rating_strength mapping
+        str_now = rating_strength(rating)
+        str_prev = rating_strength(prev_rating)
+
+        if str_now is None or str_prev is None:
+            continue
+
+        if weekly_rating is None:
+            weekly_rating = rating
+            weekly_prev = prev_rating
+
+        delta = str_now - str_prev
+        is_correct = False
+
+        if delta > 0:
+            is_correct = (change_pct >= CHANGE_THRESHOLD)
+        elif delta < 0:
+            is_correct = (change_pct <= -CHANGE_THRESHOLD)
+        else:
+            if str_now > 0:
+                is_correct = (change_pct >= CHANGE_THRESHOLD)
+            elif str_now < 0:
+                is_correct = (change_pct <= -CHANGE_THRESHOLD)
+            else:
+                continue
+
+        if is_correct:
+            weekly_correct += 1
+        else:
+            weekly_incorrect += 1
+    
+    weekly_total = weekly_correct + weekly_incorrect
+    weekly_accuracy = (weekly_correct / weekly_total * 100) if weekly_total > 0 else 0.0
+    
+    return {
+        "daily": {
+            "rating": daily_rating,
+            "prev": daily_prev,
+            "sample_size": daily_total,
+            "correct": daily_correct,
+            "incorrect": daily_incorrect,
+            "accuracy": round(daily_accuracy, 2)
+        },
+        "weekly": {
+            "rating": weekly_rating,
+            "prev": weekly_prev,
+            "sample_size": weekly_total,
+            "correct": weekly_correct,
+            "incorrect": weekly_incorrect,
+            "accuracy": round(weekly_accuracy, 2)
+        }
+    }
+
+def save_accuracy_to_db_new(cur, ticker, timestamp, price, price_prev, open_prev, change_pct, currency, high, low, window_days, accuracy_result, current_daily_rating=None, current_daily_prev=None, open_price=None):
+    """
+    บันทึก accuracy ลงในตาราง rating_accuracy (โครงสร้างใหม่)
+    
+    Args:
+        cur: Database cursor
+        ticker: Stock ticker
+        timestamp: Timestamp (ISO format string)
+        price: Current price (from rating_history at this timestamp)
+        price_prev: Previous price (from rating_history at previous timestamp)
+        change_pct: Price change percentage
+        currency: Currency code
+        high: High price
+        low: Low price
+        window_days: Number of days for the window
+        accuracy_result: dict from calculate_accuracy_from_rating_change
+    """
+    cur.execute("""
+        INSERT OR REPLACE INTO rating_accuracy 
+        (ticker, timestamp, price, price_prev, open_prev, open, change_pct, currency, high, low, window_day,
+         daily_rating, daily_prev, samplesize_daily, correct_daily, incorrect_daily, accuracy_daily,
+         weekly_rating, weekly_prev, samplesize_weekly, correct_weekly, incorrect_weekly, accuracy_weekly)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        ticker.upper(),
+        timestamp,
+        price,
+        price_prev,
+        (open_prev if open_prev is not None else None),
+        (open_price if open_price is not None else None),
+        change_pct,
+        currency or "",
+        high,
+        low,
+        window_days,
+        # Use the exact rating values from rating_history for this timestamp when available
+        (current_daily_rating if current_daily_rating is not None else accuracy_result["daily"]["rating"]),
+        (current_daily_prev if current_daily_prev is not None else accuracy_result["daily"]["prev"]),
+        accuracy_result["daily"]["sample_size"],
+        accuracy_result["daily"]["correct"],
+        accuracy_result["daily"]["incorrect"],
+        accuracy_result["daily"]["accuracy"],
+        accuracy_result["weekly"]["rating"],
+        accuracy_result["weekly"]["prev"],
+        accuracy_result["weekly"]["sample_size"],
+        accuracy_result["weekly"]["correct"],
+        accuracy_result["weekly"]["incorrect"],
+        accuracy_result["weekly"]["accuracy"]
+    ))
+    # After inserting, recompute accuracy using the rows stored in rating_accuracy
+    try:
+        # Re-fetch rating_accuracy rows within the same window for this ticker up to this timestamp
+        cur.execute(f"""
+            SELECT daily_rating AS rating, daily_prev AS prev, change_pct, open_prev, open
+            FROM rating_accuracy
+            WHERE ticker=? AND timestamp >= datetime(?, '-{window_days} days') AND timestamp <= ?
+            ORDER BY timestamp DESC
+        """, (ticker.upper(), timestamp, timestamp))
+        rows = cur.fetchall()
+        # Map rows to dicts expected by the calculator
+        rows_mapped = []
+        for r in rows:
+            try:
+                rd = {"daily_rating": r[0], "daily_prev": r[1], "change_pct": r[2], "open_prev": r[3], "open": r[4]}
+            except Exception:
+                rd = {"daily_rating": r["rating"] if "rating" in r.keys() else None,
+                      "daily_prev": r["prev"] if "prev" in r.keys() else None,
+                      "change_pct": r["change_pct"] if "change_pct" in r.keys() else 0,
+                      "open_prev": r["open_prev"] if "open_prev" in r.keys() else None,
+                      "open": r["open"] if "open" in r.keys() else None}
+            rows_mapped.append(rd)
+
+        daily_acc = calculate_accuracy_matching_frontend(rows_mapped, None, change_threshold=2.0)
+
+        # Update the just-inserted row with the recomputed accurate aggregates
+        cur.execute("""
+            UPDATE rating_accuracy
+            SET samplesize_daily=?, correct_daily=?, incorrect_daily=?, accuracy_daily=?
+            WHERE ticker=? AND timestamp=?
+        """, (daily_acc["total"], daily_acc["correct"], daily_acc["incorrect"], daily_acc["accuracy"], ticker.upper(), timestamp))
+    except Exception:
+        # If this fails, don't block overall flow — leave previously saved values
+        pass
+    # Also recompute weekly aggregates in the same way as daily
+    try:
+        cur.execute(f"""
+            SELECT weekly_rating AS rating, weekly_prev AS prev, change_pct, open_prev, open
+            FROM rating_accuracy
+            WHERE ticker=? AND timestamp >= datetime(?, '-{window_days} days') AND timestamp <= ?
+            ORDER BY timestamp DESC
+        """, (ticker.upper(), timestamp, timestamp))
+        rows = cur.fetchall()
+        rows_mapped = []
+        for r in rows:
+            try:
+                rd = {"weekly_rating": r[0], "weekly_prev": r[1], "change_pct": r[2], "open_prev": r[3], "open": r[4]}
+            except Exception:
+                rd = {"rating": r["rating"] if "rating" in r.keys() else None,
+                      "prev": r["prev"] if "prev" in r.keys() else None,
+                      "change_pct": r["change_pct"] if "change_pct" in r.keys() else 0,
+                      "open_prev": r["open_prev"] if "open_prev" in r.keys() else None,
+                      "open": r["open"] if "open" in r.keys() else None}
+            rows_mapped.append(rd)
+
+        # Normalize to keys expected by calculator (it accepts 'rating'/'prev' or 'daily_rating'/'daily_prev')
+        weekly_rows_for_calc = []
+        for rr in rows_mapped:
+            if "weekly_rating" in rr or "weekly_prev" in rr:
+                weekly_rows_for_calc.append({"rating": rr.get("weekly_rating"), "prev": rr.get("weekly_prev"), "change_pct": rr.get("change_pct"), "open_prev": rr.get("open_prev"), "open": rr.get("open")})
+            else:
+                weekly_rows_for_calc.append(rr)
+
+        weekly_acc = calculate_accuracy_matching_frontend(weekly_rows_for_calc, None, change_threshold=2.0)
+
+        cur.execute("""
+            UPDATE rating_accuracy
+            SET samplesize_weekly=?, correct_weekly=?, incorrect_weekly=?, accuracy_weekly=?
+            WHERE ticker=? AND timestamp=?
+        """, (weekly_acc["total"], weekly_acc["correct"], weekly_acc["incorrect"], weekly_acc["accuracy"], ticker.upper(), timestamp))
+    except Exception:
+        # Non-fatal: keep previously saved weekly values
+        pass
+
+def calculate_and_save_accuracy_for_ticker(cur, ticker, timestamp_str, price, change_pct, currency=None, high=None, low=None, window_days=90):
+
+    try:
+        # ดึงข้อมูล rating/prev และ price_prev ที่ timestamp ปัจจุบัน
+        cur.execute("""
+            SELECT daily_rating, daily_prev, weekly_rating, weekly_prev
+            FROM rating_history
+            WHERE ticker=? AND timestamp=?
+        """, (ticker.upper(), timestamp_str))
+        current_record = cur.fetchone()
+        
+        if not current_record:
+            return
+        
+        current_daily_rating = current_record[0]
+        current_daily_prev = current_record[1]
+        current_weekly_rating = current_record[2]
+        current_weekly_prev = current_record[3]
+        
+        # ดึง price_prev จาก rating_history (timestamp ก่อนล่าสุด)
+        price_prev = None
+        cur.execute("""
+            SELECT price
+            FROM rating_history
+            WHERE ticker=? AND timestamp < ?
+            ORDER BY timestamp DESC
+            LIMIT 1
+        """, (ticker.upper(), timestamp_str))
+        prev_row = cur.fetchone()
+        if prev_row:
+            # Support both sqlite3.Row (mapping) and tuple results
+            try:
+                price_prev = prev_row["price"]
+            except Exception:
+                try:
+                    price_prev = prev_row[0]
+                except Exception:
+                    price_prev = None
+        
+        # ข้ามถ้าไม่มี price_prev (เป็นสัญญาณแรกของ ticker นี้)
+        if price_prev is None:
+            # ไม่บันทึกลง rating_accuracy เพราะไม่สามารถคำนวณ change_pct ได้
+            return
+
+        # If current price is missing or previous price is zero, skip (avoid TypeError/div-zero)
+        if price is None:
+            return
+        try:
+            if price_prev == 0:
+                return
+        except Exception:
+            return
+        
+        # ดึงข้อมูล history จาก rating_history (ย้อนหลัง window_days วัน)
+        # ใช้ datetime() function ใน SQLite กับ parameter
+        cur.execute("""
+            SELECT 
+                daily_rating, daily_prev, daily_changed_at, change_pct, open,
+                weekly_rating, weekly_prev, weekly_changed_at
+            FROM rating_history
+            WHERE ticker=? AND timestamp >= datetime(?, '-{} days') AND timestamp <= ?
+            ORDER BY timestamp DESC
+        """.format(window_days), (ticker.upper(), timestamp_str, timestamp_str))
+        
+        rows = cur.fetchall()
+
+        if not rows:
+            return
+
+        # Map SQL rows (tuples) to dicts using cursor description so the
+        # calculate_accuracy_from_rating_change function can access named keys
+        cols = [d[0] for d in cur.description]
+        history_rows = [dict(zip(cols, r)) for r in rows]
+
+        # คำนวณ accuracy (use unified frontend-matching function)
+        acc_simple = calculate_accuracy_matching_frontend(history_rows, None, change_threshold=2.0)
+        # Wrap into the legacy nested structure expected by save_accuracy_to_db_new
+        accuracy_result = {
+            "daily": {
+                "rating": current_daily_rating if current_daily_rating is not None else (history_rows[0].get("daily_rating") if history_rows and isinstance(history_rows[0], dict) else "Unknown"),
+                "prev": current_daily_prev if current_daily_prev is not None else (history_rows[0].get("daily_prev") if history_rows and isinstance(history_rows[0], dict) else "Unknown"),
+                "sample_size": acc_simple["total"],
+                "correct": acc_simple["correct"],
+                "incorrect": acc_simple["incorrect"],
+                "accuracy": acc_simple["accuracy"]
+            },
+            "weekly": {
+                "rating": current_weekly_rating if 'current_weekly_rating' in locals() and current_weekly_rating is not None else "Unknown",
+                "prev": current_weekly_prev if 'current_weekly_prev' in locals() and current_weekly_prev is not None else "Unknown",
+                "sample_size": 0,
+                "correct": 0,
+                "incorrect": 0,
+                "accuracy": 0
+            }
+        }
+        
+        # คำนวณ change_pct จาก price และ price_prev (ไม่ใช้จาก TradingView)
+        calculated_change_pct = 0.0
+        # Safe calculation: price and price_prev are valid and price_prev != 0
+        try:
+            if price_prev is not None and price_prev != 0:
+                calculated_change_pct = ((price - price_prev) / price_prev) * 100
+        except Exception:
+            calculated_change_pct = 0.0
+        
+        # บันทึกลงใน rating_accuracy
+        # pass open price from market_data if available, and also pass previous open (open_prev)
+        open_price = None
+        open_prev = None
+        try:
+            # when called from recalc, history_rows[0] may contain daily 'price' but not 'open'
+            # prefer to read the most recent history row's open if available
+            if history_rows and isinstance(history_rows, list) and len(history_rows) > 0:
+                open_price = history_rows[0].get("open") if isinstance(history_rows[0], dict) else None
+                if len(history_rows) > 1 and isinstance(history_rows[1], dict):
+                    open_prev = history_rows[1].get("open")
+        except Exception:
+            open_price = None
+            open_prev = None
+
+        save_accuracy_to_db_new(cur, ticker, timestamp_str, price, price_prev, open_prev, calculated_change_pct, currency, high, low, window_days, accuracy_result, current_daily_rating, current_daily_prev, open_price)
+        
+    except Exception as e:
+        print(f"⚠️ [Accuracy] Error calculating accuracy for {ticker}: {e}")
+        import traceback
+        traceback.print_exc()
+
+def populate_accuracy_on_startup():
+    """
+    Populate accuracy data สำหรับทุก ticker ที่มีข้อมูลใน rating_history
+    เรียกใช้ตอน startup เพื่อคำนวณ accuracy สำหรับข้อมูลที่มีอยู่แล้ว
+    """
+    try:
+        con = sqlite3.connect(DB_FILE)
+        con.row_factory = sqlite3.Row
+        cur = con.cursor()
+        
+        # Enable WAL mode for better concurrency
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA busy_timeout=30000")
+
+        cur.execute("""
+            SELECT DISTINCT ticker, timestamp
+            FROM rating_history
+            ORDER BY ticker, timestamp DESC
+        """)
+        ticker_timestamps = cur.fetchall()
+        
+        if not ticker_timestamps:
+            print("[Accuracy Startup] No ticker-timestamp pairs found in rating_history")
+            con.close()
+            return
+        
+        print(f"[Accuracy Startup] Found {len(ticker_timestamps)} ticker-timestamp pairs in rating_history, calculating accuracy...")
+        
+        populated_count = 0
+        error_count = 0
+        window_days = 90
+        
+        for row in ticker_timestamps:
+            ticker = row["ticker"] if "ticker" in row.keys() else None
+            timestamp_str = row["timestamp"] if "timestamp" in row.keys() else None
+            
+            if not ticker or not timestamp_str:
+                continue
+            
+            try:
+                # ดึงข้อมูลของ ticker นี้ที่ timestamp นี้จาก rating_history
+                cur.execute("""
+                    SELECT price, change_pct, currency, high, low
+                    FROM rating_history
+                    WHERE ticker=? AND timestamp=?
+                    LIMIT 1
+                """, (ticker, timestamp_str))
+                
+                row_data = cur.fetchone()
+                if not row_data:
+                    continue
+                
+                price = row_data["price"] if "price" in row_data.keys() else None
+                change_pct = row_data["change_pct"] if "change_pct" in row_data.keys() else None
+                currency = row_data["currency"] if "currency" in row_data.keys() else None
+                high = row_data["high"] if "high" in row_data.keys() else None
+                low = row_data["low"] if "low" in row_data.keys() else None
+                
+                # คำนวณและบันทึก accuracy
+                calculate_and_save_accuracy_for_ticker(
+                    cur, 
+                    ticker, 
+                    timestamp_str, 
+                    price, 
+                    change_pct,
+                    currency,
+                    high,
+                    low,
+                    window_days
+                )
+                
+                populated_count += 1
+                
+                # Commit ทุก 100 records เพื่อไม่ให้ transaction ใหญ่เกินไป
+                if populated_count % 100 == 0:
+                    con.commit()
+                    print(f"[Accuracy Startup] Progress: {populated_count} records processed...")
+                    
+            except Exception as e:
+                error_count += 1
+                print(f"[Accuracy Startup] Error processing {ticker} at {timestamp_str}: {e}")
+                continue
+        
+        # Commit สุดท้าย
+        con.commit()
+        con.close()
+        
+        print(f"[Accuracy Startup] [INFO] Completed: {populated_count} records populated, {error_count} errors")
+        
+    except Exception as e:
+        print(f"[Accuracy Startup] [ERROR] Fatal error: {e}")
+        import traceback
+        traceback.print_exc()
+        if 'con' in locals() and con:
+            con.close()
+
+def load_mock_aapl_data():
+    try:
+        mock_file = os.path.join(os.path.dirname(__file__), "mock_rating_history_aapl.json")
+        if not os.path.exists(mock_file):
+            return {"error": "Mock file not found", "path": mock_file}
+        
+        with open(mock_file, "r", encoding="utf-8") as f:
+            mock_data = json.load(f)
+        
+        # Convert mock data to API format
+        history = mock_data.get("history", [])
+        
+        # Get latest record (first one in history array - most recent)
+        latest = history[0] if history else {}
+        
+        # Build daily history (เรียงจากใหม่ไปเก่า - descending)
+        daily_history = []
+        for h in reversed(history):  # Reverse เพื่อให้ใหม่สุดอยู่ก่อน
+            if h.get("daily_rating") and h.get("daily_changed_at"):
+                daily_history.append({
+                    "rating": h["daily_rating"],
+                    "timestamp": h["daily_changed_at"]
+                })
+        
+        # Build weekly history (เรียงจากใหม่ไปเก่า - descending)
+        weekly_history = []
+        for h in reversed(history):  # Reverse เพื่อให้ใหม่สุดอยู่ก่อน
+            if h.get("weekly_rating") and h.get("weekly_changed_at"):
+                weekly_history.append({
+                    "rating": h["weekly_rating"],
+                    "timestamp": h["weekly_changed_at"]
+                })
+        
+        # Return in same format as /ratings/from-dr-api
+        return {
+            "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "count": 1,
+            "rows": [{
+                "ticker": mock_data.get("ticker", "AAPL"),
+                "currency": mock_data.get("currency", "USD"),
+                "price": latest.get("price"),
+                "changePercent": latest.get("change_pct"),
+                "change": latest.get("change_abs"),
+                "high": latest.get("high"),
+                "low": latest.get("low"),
+                "daily": {
+                    "recommend_all": latest.get("daily_val"),
+                    "rating": latest.get("daily_rating", "Unknown"),
+                    "prev": latest.get("daily_prev", "Unknown"),
+                    "changed_at": latest.get("daily_changed_at"),
+                    "history": daily_history
+                },
+                "weekly": {
+                    "recommend_all": latest.get("weekly_val"),
+                    "rating": latest.get("weekly_rating", "Unknown"),
+                    "prev": latest.get("weekly_prev", "Unknown"),
+                    "changed_at": latest.get("weekly_changed_at"),
+                    "history": weekly_history
+                }
+            }]
+        }
+    except Exception as e:
+        print(f"❌ Mock API Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"error": str(e)}
+
+def get_rating_score(rating):
+
+    if not rating:
+        return 0
+    rating_lower = rating.lower()
+    if rating_lower == "strong buy":
+        return 5
+    elif rating_lower == "buy":
+        return 4
+    elif rating_lower == "neutral":
+        return 3
+    elif rating_lower == "sell":
+        return 2
+    elif rating_lower == "strong sell":
+        return 1
+    return 0
+
+def calculate_accuracy_from_frontend_logic(history, filter_rating=None):
+    """
+    คำนวณ accuracy แบบ frontend logic
+    - รับ history data (ไม่ว่าจะจาก mock หรือ database)
+    - ถ้า filter_rating ระบุมา จะคำนวณเฉพาะสัญญาณที่ตรงกับ filter_rating
+    - เปรียบเทียบ rating sentiment กับ price change
+    
+    Logic:
+    1. เรียง history จากเก่าไปใหม่
+    2. สำหรับแต่ละบรรทัด:
+       - ถ้า rating ไม่เปลี่ยน (Buy→Buy, Sell→Sell):
+         - Buy/Strong Buy rating + Price ↑ = Correct
+         - Buy/Strong Buy rating + Price ↓ = Incorrect
+         - Sell/Strong Sell rating + Price ↓ = Correct
+         - Sell/Strong Sell rating + Price ↑ = Incorrect
+       - ถ้า rating เปลี่ยน:
+         - Rating ↑ + Price ↑ = Correct
+         - Rating ↓ + Price ↓ = Correct
+         - Rating ↑ + Price ↓ = Incorrect
+         - Rating ↓ + Price ↑ = Incorrect
+    """
+    if not history or len(history) < 1:
+        return {
+            "accuracy": 0.0,
+            "correct": 0,
+            "incorrect": 0,
+            "total": 0
+        }
+    
+    # เรียงข้อมูลจากเก่าไปใหม่ (ปกติ history เป็นจากใหม่ไปเก่า)
+    sorted_history = list(reversed(history))
+    
+    correct = 0
+    incorrect = 0
+    comparisons = []
+    
+    # ประมวลผลแต่ละรายการ
+    for i in range(len(sorted_history)):
+        curr_item = sorted_history[i]
+        
+        # ดึง rating ปัจจุบันและ rating ก่อนหน้า
+        curr_rating = curr_item.get("rating", curr_item.get("daily_rating", "")).lower()
+        prev_rating = curr_item.get("prev", curr_item.get("prev_rating", "")).lower()
+        
+        # ดึง change_pct
+        change_pct = curr_item.get("change_pct", 0)
+        
+        # ข้ามถ้าไม่มี rating ปัจจุบันหรือ prev rating
+        if not curr_rating or not prev_rating or change_pct is None:
+            continue
+        
+        # ถ้ามี filter_rating ให้กรองเฉพาะ current rating ที่ตรงกับ filter_rating
+        if filter_rating and curr_rating != filter_rating.lower():
+            continue
+        
+        # ดึง rating scores
+        curr_score = get_rating_score(curr_rating)
+        prev_score = get_rating_score(prev_rating)
+        rating_direction = curr_score - prev_score
+        
+        # กำหนด sentiment ของ rating (positive or negative)
+        is_curr_positive = curr_score >= 4  # Buy, Strong Buy
+        
+        # ตรวจสอบว่าทำนายถูกหรือไม่
+        is_correct = False
+        
+        if rating_direction == 0:
+            # Rating ไม่เปลี่ยน (Buy→Buy, Sell→Sell)
+            if is_curr_positive:
+                # Buy/Strong Buy rating: ราคาควรขึ้น
+                is_correct = change_pct > 0
+            else:
+                # Sell/Strong Sell rating: ราคาควรลง
+                is_correct = change_pct < 0
+        else:
+            # Rating เปลี่ยน
+            if rating_direction > 0 and change_pct > 0:
+                # Rating ↑ และ ราคา ↑
+                is_correct = True
+            elif rating_direction < 0 and change_pct < 0:
+                # Rating ↓ และ ราคา ↓
+                is_correct = True
+        
+        # บันทึกการเปรียบเทียบเพื่อ debug
+        comparisons.append({
+            "prev_rating": prev_rating,
+            "curr_rating": curr_rating,
+            "rating_change": "→" if rating_direction == 0 else ("↑" if rating_direction > 0 else "↓"),
+            "price_change": change_pct,
+            "price_direction": "↑" if change_pct > 0 else "↓" if change_pct < 0 else "→",
+            "result": "✓" if is_correct else "✗",
+            "filter": filter_rating or "All"
+        })
+        
+        if is_correct:
+            correct += 1
+        else:
+            incorrect += 1
+    
+    total = correct + incorrect
+    accuracy = (correct / total * 100) if total > 0 else 0.0
+    
+    print(f"[Accuracy Debug] Filter: {filter_rating or 'All'}, Comparisons: {len(comparisons)}, Details: {comparisons}")
+    print(f"[Accuracy] Filter: {filter_rating or 'All'}, Correct: {correct}, Incorrect: {incorrect}, Total: {total}, Accuracy: {accuracy:.2f}%")
+    
+    return {
+        "accuracy": round(accuracy, 2),
+        "correct": correct,
+        "incorrect": incorrect,
+        "total": total
+    }
+
+
+def calculate_accuracy_matching_frontend(history_rows, filter_rating=None, change_threshold=2.0):
+    """
+    Unified accuracy calculation that matches the frontend `calculateAccuracy` in `suggestion.jsx`.
+    Accepts history rows in various shapes (daily_rating/daily_prev/change_pct or rating/prev/change_pct).
+    Uses strength mapping, skips rows where rating not changed and abs(change_pct) < 0.01,
+    and requires change threshold (default 2.0%).
+    Returns dict { accuracy, correct, incorrect, total }
+    """
+    if not history_rows or len(history_rows) == 0:
+        return {"accuracy": 0, "correct": 0, "incorrect": 0, "total": 0}
+
+    correct = 0
+    incorrect = 0
+
+    strength_map = {
+        "strong sell": -2,
+        "sell": -1,
+        "neutral": 0,
+        "buy": 1,
+        "strong buy": 2
+    }
+
+    def rating_strength(rtext):
+        if not rtext:
+            return None
+        rl = str(rtext).lower().strip()
+        if rl in strength_map:
+            return strength_map[rl]
+        if "strong" in rl and "sell" in rl:
+            return strength_map["strong sell"]
+        if "strong" in rl and "buy" in rl:
+            return strength_map["strong buy"]
+        if "sell" in rl:
+            return strength_map["sell"]
+        if "buy" in rl:
+            return strength_map["buy"]
+        if "neutral" in rl:
+            return strength_map["neutral"]
+        return None
+
+    # Iterate by index so we can reference the next (older) row to compute open-based change
+    for i in range(len(history_rows)):
+        row = history_rows[i]
+        # support multiple key names
+        rating_raw = None
+        prev_raw = None
+
+        # prefer explicit fields
+        if isinstance(row, dict):
+            rating_raw = row.get("daily_rating") or row.get("rating") or row.get("dailyRating") or row.get("rating_day")
+            prev_raw = row.get("daily_prev") or row.get("prev") or row.get("dailyPrev") or row.get("prev_rating")
+        else:
+            continue
+
+        # Determine change value preferring open-based computation
+        change_val = None
+        try:
+            # If row already contains explicit open_prev and open, use them
+            if isinstance(row, dict) and (row.get("open") is not None or row.get("open_prev") is not None):
+                open_curr = None
+                open_prev = None
+                if "open" in row and row.get("open") is not None:
+                    open_curr = row.get("open")
+                # prefer explicit open_prev field
+                if "open_prev" in row and row.get("open_prev") is not None:
+                    open_prev = row.get("open_prev")
+
+                # if open_prev not given, try next row's open (next is older row)
+                if open_prev is None and i + 1 < len(history_rows) and isinstance(history_rows[i + 1], dict):
+                    open_prev = history_rows[i + 1].get("open")
+
+                # if open_curr not present, try result_price/price
+                if open_curr is None:
+                    open_curr = row.get("result_price") if row.get("result_price") is not None else row.get("price")
+
+                if open_prev is not None and open_curr is not None and float(open_prev) != 0:
+                    change_val = (float(open_curr) - float(open_prev)) / float(open_prev) * 100
+
+            # Fallback to any explicit change_pct/change fields
+            if change_val is None:
+                if isinstance(row, dict):
+                    if row.get("change_pct") is not None:
+                        change_val = float(row.get("change_pct"))
+                    elif row.get("changePct") is not None:
+                        change_val = float(row.get("changePct"))
+                    elif row.get("change") is not None:
+                        change_val = float(row.get("change"))
+        except Exception:
+            change_val = None
+
+        if change_val is None:
+            continue
+
+        if rating_raw is None or prev_raw is None:
+            continue
+
+        str_now = rating_strength(rating_raw)
+        str_prev = rating_strength(prev_raw)
+
+        if str_now is None or str_prev is None:
+            continue
+
+        # skip if rating not changed and price not changed (threshold 0.01)
+        rating_not_changed = str(rating_raw).lower().strip() == str(prev_raw).lower().strip()
+        price_not_changed = abs(change_val) < 0.01
+        if rating_not_changed and price_not_changed:
+            continue
+
+        delta = str_now - str_prev
+        is_correct = False
+
+        if delta > 0:
+            is_correct = (change_val >= change_threshold)
+        elif delta < 0:
+            is_correct = (change_val <= -change_threshold)
+        else:
+            if str_now > 0:
+                is_correct = (change_val >= change_threshold)
+            elif str_now < 0:
+                is_correct = (change_val <= -change_threshold)
+            else:
+                continue
+
+        if is_correct:
+            correct += 1
+        else:
+            incorrect += 1
+
+    total = correct + incorrect
+    accuracy = (correct / total * 100) if total > 0 else 0
+    return {"accuracy": round(accuracy), "correct": correct, "incorrect": incorrect, "total": total}
+
+def calculate_accuracy_from_mock_old(history):
+    """
+    คำนวณ accuracy โดยเปรียบเทียบการเปลี่ยนแปลงของ rating กับการเปลี่ยนแปลงของราคา
+    
+    วิธี:
+    1. เอาวันที่ N (index i) เทียบกับวันที่ N+1 (index i+1)
+    2. ดู rating ของวันที่ N และวันที่ N+1 -> ดูว่าเพิ่มขึ้น (+) หรือลดลง (-)
+    3. ดู change_pct ของวันที่ N+1 -> ดูว่าราคาเพิ่มขึ้น (+) หรือลดลง (-)
+    4. ถ้าทั้งสองเปลี่ยนไปในทางเดียวกัน = Correct, ถ้าไม่ = Incorrect
+    """
+    if not history or len(history) < 2:
+        return {
+            "accuracy": 0.0,
+            "correct": 0,
+            "incorrect": 0,
+            "total": 0
+        }
+    
+    correct = 0
+    incorrect = 0
+    comparisons = []
+    
+    sorted_history = list(reversed(history))
+    
+    # เทียบแต่ละวันกับวันถัดไป
+    for i in range(len(sorted_history) - 1):
+        curr_day = sorted_history[i]
+        next_day = sorted_history[i + 1]
+
+        curr_rating = curr_day.get("daily_rating", "")
+        next_rating = next_day.get("daily_rating", "")
+
+        next_change_pct = next_day.get("change_pct", 0)
+
+        curr_price = curr_day.get("price", 0)
+        next_price = next_day.get("price", 0)     
+
+        if not curr_rating or not next_rating:
+            continue
+        
+        # คำนวณการเปลี่ยนแปลงของ rating
+        curr_score = get_rating_score(curr_rating)
+        next_score = get_rating_score(next_rating)
+        rating_direction = next_score - curr_score  # + = ขึ้น, - = ลง, 0 = ไม่เปลี่ยน
+        
+        # ข้ามถ้า rating ไม่เปลี่ยน
+        if rating_direction == 0:
+            continue
+        
+        # ตรวจสอบว่า rating และราคาเปลี่ยนไปในทางเดียวกันไหม
+        # rating ขึ้น (+) และราคาขึ้น (+) = Correct
+        # rating ลง (-) และราคาลง (-) = Correct
+        # อื่นๆ = Incorrect
+        
+        is_correct = False
+        if rating_direction > 0 and next_change_pct > 0:
+            # Rating ขึ้น และราคาขึ้น
+            is_correct = True
+        elif rating_direction < 0 and next_change_pct < 0:
+            # Rating ลง และราคาลง
+            is_correct = True
+        
+        # บันทึกการเปรียบเทียบเพื่อ debug
+        comparisons.append({
+            "day1_rating": curr_rating,
+            "day2_rating": next_rating,
+            "rating_change": "↑" if rating_direction > 0 else "↓",
+            "price_change": next_change_pct,
+            "price_direction": "↑" if next_change_pct > 0 else "↓" if next_change_pct < 0 else "→",
+            "result": "✓" if is_correct else "✗"
+        })
+        
+        if is_correct:
+            correct += 1
+        else:
+            incorrect += 1
+    
+    total = correct + incorrect
+    accuracy = (correct / total * 100) if total > 0 else 0.0
+    
+    print(f"[Accuracy Debug] Comparisons: {comparisons}")
+    print(f"[Accuracy] Correct: {correct}, Incorrect: {incorrect}, Total: {total}, Accuracy: {accuracy:.2f}%")
+    
+    return {
+        "accuracy": round(accuracy, 2),
+        "correct": correct,
+        "incorrect": incorrect,
+        "total": total
+    }
+
+def get_mock_aapl_history_formatted(timeframe="1D", filter_rating=None):
+    """
+    Helper function to format mock AAPL data for /ratings/history-with-accuracy endpoint
+    
+    Args:
+        timeframe: "1D" or "1W"
+        filter_rating: Optional rating filter ("Strong Buy", "Buy", "Sell", "Strong Sell")
+    
+    Note: วันแรก (29 DEC) ไม่มี prev rating เพราะเป็นข้อมูลแรกสุด 
+    ดังนั้นจึงเริ่มแสดงจากวันที่ 2 (30 DEC) เป็นต้นไป
+    """
+    try:
+        mock_file = os.path.join(os.path.dirname(__file__), "mock_rating_history_aapl.json")
+        if not os.path.exists(mock_file):
+            return {"error": "Mock file not found"}
+        
+        with open(mock_file, "r", encoding="utf-8") as f:
+            mock_data = json.load(f)
+        
+        history = mock_data.get("history", [])
+        
+        if not history:
+            return {
+                "ticker": "AAPL",
+                "currency": "USD",
+                "price": 0,
+                "changePercent": 0,
+                "change": 0,
+                "high": 0,
+                "low": 0,
+                "current_rating": "Unknown",
+                "prev_rating": "Unknown",
+                "history": [],
+                "accuracy": {"accuracy": 0.0, "correct": 0, "incorrect": 0, "total": 0}
+            }
+        
+        latest = history[0]
+        
+        # Determine rating key based on timeframe
+        if timeframe == "1W":
+            rating_key = "weekly_rating"
+            prev_key = "weekly_prev"
+            changed_at_key = "weekly_changed_at"
+            val_key = "weekly_val"
+        else:  # default to 1D
+            rating_key = "daily_rating"
+            prev_key = "daily_prev"
+            changed_at_key = "daily_changed_at"
+            val_key = "daily_val"
+
+        history_items = []
+        for idx in range(len(history) - 1):  # ข้ามวันสุดท้าย (เก่าสุด)
+            h = history[idx]
+            
+            if h.get(rating_key) and h.get(changed_at_key):
+                rating = h.get(rating_key)
+                prev_rating = h.get(prev_key) if prev_key in h.keys() else None
+                
+                if not prev_rating or prev_rating.upper() == "NULL":
+                    continue
+                
+                if rating and rating.lower() not in ["neutral", "unknown"]:
+                    # Get previous open (fallback to previous price if open not available)
+                    prev_price = history[idx + 1].get("price", 0) if idx + 1 < len(history) else 0
+                    prev_open = history[idx + 1].get("open", prev_price) if idx + 1 < len(history) else prev_price
+                    
+                    history_items.append({
+                        "rating": rating,
+                        "prev": prev_rating or "Unknown",
+                        "timestamp": h.get(changed_at_key),
+                        "date": h.get(changed_at_key),
+                        "prev_open": prev_open,
+                        "result_price": h.get("price", 0),
+                        "change_pct": h.get("change_pct", 0),
+                        "change_abs": h.get("change_abs", 0)
+                    })
+
+        accuracy_result = calculate_accuracy_matching_frontend(history, filter_rating)
+        
+        return {
+            "ticker": "AAPL",
+            "currency": mock_data.get("currency", "USD"),
+            "price": latest.get("price", 0),
+            "changePercent": latest.get("change_pct", 0),
+            "change": latest.get("change_abs", 0),
+            "high": latest.get("high", 0),
+            "low": latest.get("low", 0),
+            "current_rating": latest.get(rating_key, "Unknown"),
+            "prev_rating": latest.get(prev_key, "Unknown"),
+            "history": history_items,
+            "accuracy": accuracy_result
+        }
+    except Exception as e:
+        print(f"❌ Mock History Format Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"error": str(e)}
+
+def recalc_and_save_accuracy_for_ticker(ticker, timeframe="1D", window_days=90):
+    """
+    Recalculate and save accuracy for a specific ticker.
+    This function can be called periodically to update accuracy metrics.
+    
+    Args:
+        ticker: Stock ticker
+        timeframe: "1D" or "1W"
+        window_days: Number of days to look back (default 90)
+    """
+    try:
+        con = sqlite3.connect(DB_FILE)
+        con.row_factory = sqlite3.Row
+        cur = con.cursor()
+        
+        # Enable WAL mode for better concurrency
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA busy_timeout=30000")
+        
+        rating_key = "daily_rating" if timeframe == "1D" else "weekly_rating"
+        prev_key = "daily_prev" if timeframe == "1D" else "weekly_prev"
+        changed_at_key = "daily_changed_at" if timeframe == "1D" else "weekly_changed_at"
+        
+        # Get history for the specified window
+        cur.execute(f"""
+            SELECT 
+                daily_rating, daily_prev, daily_changed_at, change_pct,
+                weekly_rating, weekly_prev, weekly_changed_at
+            FROM rating_history
+            WHERE ticker=? AND timestamp >= datetime('now', '-{window_days} days')
+            ORDER BY timestamp DESC
+        """, (ticker.upper(),))
+        
+        history_rows = cur.fetchall()
+        
+        if not history_rows:
+            con.close()
+            return
+        
+        # Build history items (same logic as in endpoint)
+        history_items = []
+        for h in history_rows:
+            if rating_key not in h.keys() or changed_at_key not in h.keys() or "change_pct" not in h.keys():
+                continue
+                
+            rating = h[rating_key]
+            prev_rating = h[prev_key] if prev_key in h.keys() else None
+            changed_at = h[changed_at_key]
+            change_pct = h["change_pct"]
+            
+            if not rating or not changed_at or change_pct is None:
+                continue
+            
+            rating_lower = rating.lower()
+            if rating_lower == "neutral" or rating_lower == "unknown":
+                continue
+            
+            if prev_rating and prev_rating.lower() == "unknown":
+                continue
+            
+            history_items.append({
+                "rating": rating,
+                "prev": prev_rating or "Unknown",
+                "change_pct": change_pct
+            })
+        
+        # Calculate accuracy for all ratings and each filter
+        rating_filters = [None, "Strong Buy", "Buy", "Sell", "Strong Sell"]
+        
+        for rf in rating_filters:
+            accuracy_result = calculate_accuracy_matching_frontend(history_items, rf, change_threshold=2.0)
+            if accuracy_result["total"] > 0: 
+                # Prepare nested accuracy_result expected by save_accuracy_to_db_new
+                try:
+                    # Get latest history row to use as timestamp/price/open
+                    cur.execute("""
+                        SELECT timestamp, price, open, change_pct, currency, high, low
+                        FROM rating_history
+                        WHERE ticker=?
+                        ORDER BY timestamp DESC
+                        LIMIT 1
+                    """, (ticker.upper(),))
+                    latest = cur.fetchone()
+                    if latest:
+                        ts_latest = latest[0]
+                        latest_price = latest[1]
+                        latest_open = latest[2] if (len(latest) > 2) else None
+                        latest_change_pct = latest[3] if (len(latest) > 3) else None
+                        latest_currency = latest[4] if (len(latest) > 4) else None
+                        latest_high = latest[5] if (len(latest) > 5) else None
+                        latest_low = latest[6] if (len(latest) > 6) else None
+                    else:
+                        ts_latest = datetime.now().isoformat()
+                        latest_price = None
+                        latest_open = None
+                        latest_change_pct = None
+                        latest_currency = None
+                        latest_high = None
+                        latest_low = None
+                except Exception:
+                    ts_latest = datetime.now().isoformat()
+                    latest_price = None
+                    latest_open = None
+                    latest_change_pct = None
+                    latest_currency = None
+                    latest_high = None
+                    latest_low = None
+
+                wrapped = {
+                    "daily": {
+                        "rating": rf,
+                        "prev": None,
+                        "sample_size": accuracy_result["total"],
+                        "correct": accuracy_result["correct"],
+                        "incorrect": accuracy_result["incorrect"],
+                        "accuracy": accuracy_result["accuracy"]
+                    },
+                    "weekly": {
+                        "rating": None,
+                        "prev": None,
+                        "sample_size": 0,
+                        "correct": 0,
+                        "incorrect": 0,
+                        "accuracy": 0
+                    }
+                }
+
+                save_accuracy_to_db_new(cur, ticker, ts_latest, latest_price, None, None, latest_change_pct, latest_currency, latest_high, latest_low, window_days, wrapped, None, None, latest_open)
+        
+        con.commit()
+        con.close()
+        
+        print(f"✅ [Accuracy] Recalculated and saved accuracy for {ticker} ({timeframe}, {window_days}d)")
+        
+    except Exception as e:
+        print(f"❌ [Accuracy] Error recalculating accuracy for {ticker}: {e}")
+        import traceback
+        traceback.print_exc()
+        if 'con' in locals() and con:
+            con.close()
+
+@app.get("/history-with-accuracy/{ticker}")
+def get_history_with_accuracy(
+    ticker: str, 
+    timeframe: str = Query("1D", description="Timeframe: 1D or 1W"), 
+    filter_rating: str = Query(None, description="Filter by rating: Strong Buy, Buy, Sell, Strong Sell")
+):
+    """
+    Get rating history with accuracy calculation.
+    
+    Args:
+        ticker: Stock ticker symbol
+        timeframe: "1D" or "1W"
+        filter_rating: Optional rating filter ("Strong Buy", "Buy", "Sell", "Strong Sell")
+    
+    Returns:
+        dict with history items (including price data) and accuracy metrics
+    """
+    # If mock data is enabled and ticker is AAPL, return mock data
+    if USE_MOCK_DATA and ticker.upper() == "AAPL":
+        print(f"✅ Returning mock data for {ticker} with filter: {filter_rating}")
+        return get_mock_aapl_history_formatted(timeframe, filter_rating)
+    
+    # Use database for all tickers (mock data disabled)
+    import time
+    start_time = time.time()
+    try:
+        connect_start = time.time()
+        con = sqlite3.connect(DB_FILE, timeout=0.1)  
+        connect_time = time.time() - connect_start
+        
+        con.row_factory = sqlite3.Row
+        cur = con.cursor()
+        
+        pragma_start = time.time()
+        cur.execute("PRAGMA busy_timeout=100")
+        pragma_time = time.time() - pragma_start
+
+        query2_start = time.time()
+        cur.execute("""
+            SELECT 
+                timestamp, open, price, price_prev, open_prev, change_pct, currency, high, low, window_day,
+                daily_rating, daily_prev, samplesize_daily, correct_daily, incorrect_daily, accuracy_daily,
+                weekly_rating, weekly_prev, samplesize_weekly, correct_weekly, incorrect_weekly, accuracy_weekly
+            FROM rating_accuracy
+            WHERE ticker=?
+            ORDER BY timestamp DESC
+        """, (ticker.upper(),))
+        
+        acc_rows = cur.fetchall()
+        query2_time = time.time() - query2_start
+
+        con.close()
+        
+        if not acc_rows:
+            return {
+                "ticker": ticker.upper(),
+                "currency": "",
+                "price": 0,
+                "changePercent": 0,
+                "change": 0,
+                "high": 0,
+                "low": 0,
+                "current_rating": "Unknown",
+                "prev_rating": "Unknown",
+                "history": [],
+                "accuracy": {"accuracy": 0.0, "correct": 0, "incorrect": 0, "total": 0}
+            }
+        
+        acc_row_latest = acc_rows[0]
+        
+        if timeframe == "1D":
+            rating_key = "daily_rating"
+            prev_key = "daily_prev"
+        else:  # timeframe == "1W"
+            rating_key = "weekly_rating"
+            prev_key = "weekly_prev"
+        
+        history_items = []
+
+        # Process rows in one pass (include rows but mark skipped reasons so frontend can debug)
+        for acc_row in acc_rows:
+            # sqlite3.Row does not implement .get(); convert to dict for safe access
+            row = dict(acc_row)
+            timestamp = row.get("timestamp")
+            rating = row.get(rating_key)
+            prev_rating = row.get(prev_key)
+            open_price = row.get("open") or 0
+            price = row.get("price") or 0
+            price_prev = row.get("price_prev") or 0
+            change_pct = row.get("change_pct") or 0
+
+            # Prefer `open_prev` stored in `rating_accuracy` (faster and canonical).
+            # Fall back to querying `rating_history` only if `open_prev` is None.
+            prev_open = row.get("open_prev")
+            if prev_open is None:
+                prev_open = 0
+                try:
+                    cur.execute(
+                        "SELECT open FROM rating_history WHERE ticker=? AND timestamp < ? ORDER BY timestamp DESC LIMIT 1",
+                        (ticker.upper(), timestamp)
+                    )
+                    prev_row = cur.fetchone()
+                    if prev_row:
+                        try:
+                            prev_open = prev_row["open"] if prev_row["open"] is not None else 0
+                        except Exception:
+                            prev_open = prev_row[0] if prev_row[0] is not None else 0
+                except Exception:
+                    prev_open = 0
+
+            change_abs = price - prev_open if price and prev_open else 0
+
+            item = {
+                "rating": rating,
+                "prev": prev_rating or "Unknown",
+                "timestamp": timestamp,
+                "date": timestamp,
+                "open": open_price,
+                "prev_open": prev_open,
+                "result_price": price,
+                "change_pct": change_pct,
+                "change_abs": change_abs,
+                # debug fields
+                "skipped": False,
+                "skip_reason": None,
+                "counted": True,
+                "is_correct": None
+            }
+
+            # Determine skip reasons (but still include the row)
+            if not timestamp or not rating:
+                item["skipped"] = True
+                item["skip_reason"] = "missing timestamp or rating"
+                item["counted"] = False
+            else:
+                rating_lower = rating.lower() if rating else ""
+                if rating_lower in ("neutral", "unknown", ""):
+                    item["skipped"] = True
+                    item["skip_reason"] = "rating neutral/unknown"
+                    item["counted"] = False
+                elif not prev_rating or str(prev_rating).lower() == "unknown":
+                    item["skipped"] = True
+                    item["skip_reason"] = "prev_rating unknown or missing"
+                    item["counted"] = False
+
+            history_items.append(item)
+
+        # คำนวณ accuracy โดยรองรับ filter_rating
+        # ใช้ฟังก์ชันกลางที่มีอยู่แล้ว (เหมือนกับที่ใช้ใน endpoint อื่น)
+        accuracy_result = calculate_accuracy_matching_frontend(history_items, filter_rating)
+        
+        # Get current rating from latest accuracy record (direct access - faster)
+        current_rating = acc_row_latest[rating_key] or "Unknown"
+        prev_rating = acc_row_latest[prev_key] or "Unknown"
+        
+        # Get data from latest accuracy record
+        latest_price = acc_row_latest["price"] or 0
+        latest_change_pct = acc_row_latest["change_pct"] or 0
+        latest_currency = acc_row_latest["currency"] or ""
+        latest_high = acc_row_latest["high"] or 0
+        latest_low = acc_row_latest["low"] or 0
+        
+        # Calculate change_abs from price and change_pct
+        latest_change_abs = 0
+        if latest_price and latest_change_pct:
+            # Estimate change_abs from change_pct
+            prev_price_est = latest_price / (1 + latest_change_pct / 100) if latest_change_pct != 0 else latest_price
+            latest_change_abs = latest_price - prev_price_est
+        
+        # Print timing logs
+        total_time = time.time() - start_time
+        print(f"[History Accuracy] {ticker.upper()}: connect={connect_time:.3f}s, pragma={pragma_time:.3f}s, query2={query2_time:.3f}s, total={total_time:.3f}s")
+        
+        return {
+            "ticker": ticker.upper(),
+            "currency": latest_currency,
+            "price": latest_price,
+            "changePercent": latest_change_pct,
+            "change": latest_change_abs,
+            "high": latest_high,
+            "low": latest_low,
+            "current_rating": current_rating,
+            "prev_rating": prev_rating,
+            "history": history_items,
+            "accuracy": accuracy_result
+        }
+        
+    except sqlite3.OperationalError as e:
+        error_msg = str(e)
+        if "locked" in error_msg.lower():
+            print(f"[History Accuracy] Database locked for {ticker.upper()}: {e}")
+            if 'con' in locals() and con:
+                con.close()
+            return {
+                "ticker": ticker.upper(),
+                "error": "Database is temporarily locked. Please try again in a moment.",
+                "history": [],
+                "accuracy": {"accuracy": 0.0, "correct": 0, "incorrect": 0, "total": 0}
+            }
+        else:
+            print(f"[History with Accuracy] OperationalError: {e}")
+            import traceback
+            traceback.print_exc()
+            if 'con' in locals() and con:
+                con.close()
+            return {
+                "ticker": ticker.upper(),
+                "error": str(e),
+                "history": [],
+                "accuracy": {"accuracy": 0.0, "correct": 0, "incorrect": 0, "total": 0}
+            }
+    except Exception as e:
+        print(f"[History with Accuracy] Error: {e}")
+        import traceback
+        traceback.print_exc()
+        if 'con' in locals() and con:
+            con.close()
+        return {
+            "ticker": ticker.upper(),
+            "error": str(e),
+            "history": [],
+            "accuracy": {"accuracy": 0.0, "correct": 0, "incorrect": 0, "total": 0}
+        }
+
+@app.get("/api/mock-rating-history/aapl")
+def get_mock_aapl_history():
+    """
+    Mock API endpoint สำหรับทดสอบ winrate feature
+    Return ข้อมูล rating history ของ AAPL จาก mock JSON file
+    Format ตรงกับ /ratings/from-dr-api เพื่อให้ frontend ใช้ได้ทันที
+    """
+    return load_mock_aapl_data()
+
+@app.post("/recalculate-accuracy/{ticker}")
+def recalculate_accuracy_endpoint(
+    ticker: str,
+    timeframe: str = Query("1D", description="Timeframe: 1D or 1W"),
+    window_days: int = Query(90, description="Number of days to look back")
+):
+    """
+    Recalculate and save accuracy for a specific ticker.
+    This endpoint can be called to update accuracy metrics manually.
+    """
+    try:
+        recalc_and_save_accuracy_for_ticker(ticker.upper(), timeframe, window_days)
+        return {
+            "status": "success",
+            "message": f"Accuracy recalculated for {ticker.upper()}",
+            "ticker": ticker.upper(),
+            "timeframe": timeframe,
+            "window_days": window_days
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e),
+            "ticker": ticker.upper()
+        }, 500
+
+@app.get("/dr-list")
+def get_local_dr_list():
+    """Return DR list by fetching from external DR_LIST_URL (no local fallback).
+
+    This endpoint will always attempt to GET the URL configured in the
+    `DR_LIST_URL` environment variable. If that variable is not set, it
+    defaults to `https://api.ideatrade1.com/caldr`.
+    """
+    try:
+        url = DR_LIST_URL or "https://api.ideatrade1.com/caldr"
+        # Use requests (synchronous handler) to fetch external DR list
+        import requests
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        # Return an error response so the caller knows external fetch failed
+        try:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=502, content={"error": "Failed to fetch DR list from external source", "detail": str(e)})
+        except Exception:
+            return {"error": str(e)}
+
+@app.get("/from-dr-api")
+def ratings_from_dr_api():
+    """
+    Fetches latest ratings, stats, and history from the SQLite DB 
+    and reconstructs the JSON response to match the original format.
+    Now reads from rating_main instead of ratings table.
+    
+    If USE_MOCK_DATA is True, returns mock AAPL data from mock_rating_history_aapl.json
+    """
+    # If mock data is enabled, return mock AAPL data
+    if USE_MOCK_DATA:
+        result = load_mock_aapl_data()
+        print(f"✅ Mock data loaded, returning: {result}")
+        return result
+    
+    rows = []
+    updated_at_str = "-"
+    try:
+        con = sqlite3.connect(DB_FILE)
+        con.row_factory = sqlite3.Row
+        cur = con.cursor()
+        
+        # Enable WAL mode for better concurrency
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA busy_timeout=30000")
+
+        if os.path.exists(DB_FILE):
+            mtime = os.path.getmtime(DB_FILE)
+            updated_at_str = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
+
+        # Get all unique tickers from rating_main
+        cur.execute("SELECT DISTINCT ticker FROM rating_main")
+        all_tickers = [row[0] for row in cur.fetchall()]
+
+        for ticker in all_tickers:
+            # Get latest record from rating_main (contains both daily and weekly)
+            cur.execute("""
+                SELECT * FROM rating_main 
+                WHERE ticker=? 
+                ORDER BY timestamp DESC 
+                LIMIT 1
+            """, (ticker,))
+            main_row = cur.fetchone()
+            
+            if not main_row:
+                continue 
+            
+            # Get filtered history
+            cur.execute("""
+                SELECT daily_rating, daily_changed_at, weekly_rating, weekly_changed_at, timestamp
+                FROM rating_history 
+                WHERE ticker=? 
+                ORDER BY timestamp ASC
+            """, (ticker,))
+            history_rows = cur.fetchall()
+            
+            # Build daily history (use daily_changed_at as timestamp)
+            daily_history = []
+            for h in history_rows:
+                if h["daily_rating"] and h["daily_changed_at"]:
+                    daily_history.append({
+                        "rating": h["daily_rating"],
+                        "timestamp": h["daily_changed_at"]
+                    })
+            
+            # Build weekly history (use weekly_changed_at as timestamp)
+            weekly_history = []
+            for h in history_rows:
+                if h["weekly_rating"] and h["weekly_changed_at"]:
+                    weekly_history.append({
+                        "rating": h["weekly_rating"],
+                        "timestamp": h["weekly_changed_at"]
+                    })
+            
+            rows.append({
+                "ticker": ticker,
+                "currency": main_row["currency"] or "",
+                "price": main_row["price"],
+                "changePercent": main_row["change_pct"],
+                "change": main_row["change_abs"], 
+                "high": main_row["high"],
+                "low": main_row["low"],
+                "daily": {
+                    "recommend_all": main_row["daily_val"],
+                    "rating": main_row["daily_rating"] or "Unknown",
+                    "prev": main_row["daily_prev"] or "Unknown",
+                    "changed_at": main_row["daily_changed_at"],
+                    "history": daily_history
+                },
+                "weekly": {
+                    "recommend_all": main_row["weekly_val"],
+                    "rating": main_row["weekly_rating"] or "Unknown",
+                    "prev": main_row["weekly_prev"] or "Unknown",
+                    "changed_at": main_row["weekly_changed_at"],
+                    "history": weekly_history
+                }
+            })
+        
+        con.close()
+        return {"updated_at": updated_at_str, "count": len(rows), "rows": rows}
+    
+    except Exception as e:
+        print(f"❌ API Error fetching from DB: {e}")
+        import traceback
+        traceback.print_exc()
+        if 'con' in locals() and con:
+            con.close()
+        return {"updated_at": updated_at_str, "count": 0, "rows": []}
+
+@app.get("/api/intraday-history/{ticker}")
+def get_intraday_history(
+    ticker: str,
+    timeframe: str = Query("1D", description="Timeframe: 1D or 1W")
+):
+    """
+    Simulated Intraday History for compatibility.
+    Since we don't have real intraday data in this local setup,
+    we fallback to returning the daily history but formatted to look like intraday/time-based log.
+    
+    In a real scenario, this would query a high-frequency database table.
+    """
+    try:
+        # Fallback to daily history-with-accuracy logic, but just return the list 
+        # structure expected by the frontend for intraday mode
+        # Frontend expects: { "intraday_history": [ ... ] }
+        
+        # Reuse get_history_with_accuracy to fetch data
+        data = get_history_with_accuracy(ticker, timeframe=timeframe)
+        if "error" in data:
+            return {"intraday_history": []}
+            
+        history = data.get("history", [])
+        
+        # Transform strictly to what frontend might expect if it differs,
+        # but based on reading suggestion.jsx, it uses the same fields mostly.
+        # Just ensure top-level key matches.
+        
+        return {
+            "intraday_history": history
+        }
+    except Exception as e:
+        print(f"Error in mock intraday history: {e}")
+        return {"intraday_history": []}
 
 if __name__ == "__main__":
-    uvicorn.run("earnings_api:app", host="0.0.0.0", port=3001, reload=True)
+    uvicorn.run(app, host="0.0.0.0", port=8335)
