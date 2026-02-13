@@ -12,5 +12,5 @@ RUN npm run build -- --mode production
 # Stage 2: serve with nginx
 FROM nginx:alpine
 COPY --from=build /app/dist /usr/share/nginx/html/caldr
-EXPOSE 5173
+EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]
