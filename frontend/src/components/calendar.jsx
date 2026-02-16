@@ -284,7 +284,22 @@ export default function Calendar() {
   const [search, setSearch] = useState("");
   const [selectedDay, setSelectedDay] = useState("All");
 
-  const [seenEarningsIds, setSeenEarningsIds] = useState(new Set());
+  // Load seen earnings from localStorage once on initialization
+  const [seenEarningsIds, setSeenEarningsIds] = useState(() => {
+    try {
+      const saved = localStorage.getItem('calendar_seen_earnings');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return new Set(parsed);
+        }
+      }
+    } catch (e) {
+      console.error('Error loading seen earnings:', e);
+    }
+    return new Set();
+  });
+  
   const [newEarningsCount, setNewEarningsCount] = useState(0);
   const [isFirstLoad, setIsFirstLoad] = useState(true);
   const [logoErrors, setLogoErrors] = useState({});
@@ -294,19 +309,6 @@ export default function Calendar() {
 
   const selectedCountryOption = useMemo(() => countryOptions.find((c) => c.code === country) || countryOptions[0], [country]);
   const selectedLabel = selectedCountryOption.label || "All Markets";
-
-  // Load seen earnings from localStorage
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem('calendar_seen_earnings');
-      if (saved) {
-        setSeenEarningsIds(new Set(JSON.parse(saved)));
-        setIsFirstLoad(false);
-      }
-    } catch (e) {
-      console.error('Error loading seen earnings:', e);
-    }
-  }, []);
 
   // Save seen earnings to localStorage and update navbar
   useEffect(() => {
@@ -641,76 +643,70 @@ export default function Calendar() {
             if (BLACKLIST_COMPANY_KEYWORDS.some(k => companyUp.includes(k))) return false;
             return (item.mostPopularDR || item.highSensitivityDR);
           });
-          setEarnings(finalFiltered);
+          
+          // Deduplicate earnings with same ticker and date but different currencies
+          // Priority: VND > USD > JPY > CNY > TWD > SGD > HKD > EUR > THB > others
+          const currencyPriority = {
+            'VND': 10, 'USD': 9, 'JPY': 8, 'CNY': 7, 'CNH': 7, 
+            'TWD': 6, 'SGD': 5, 'HKD': 4, 'EUR': 3, 'THB': 1
+          };
+          
+          const dedupMap = new Map();
+          finalFiltered.forEach(item => {
+            const key = `${item.ticker}-${item.date}`;
+            const existing = dedupMap.get(key);
+            
+            if (!existing) {
+              dedupMap.set(key, item);
+            } else {
+              // Compare currencies and keep the higher priority one
+              const itemPriority = currencyPriority[item.currency] || 0;
+              const existingPriority = currencyPriority[existing.currency] || 0;
+              
+              if (itemPriority > existingPriority) {
+                dedupMap.set(key, item);
+              } else if (itemPriority === existingPriority) {
+                // If same priority, keep the one with larger market cap
+                const itemMktCap = Number(item.marketCap) || 0;
+                const existingMktCap = Number(existing.marketCap) || 0;
+                if (itemMktCap > existingMktCap) {
+                  dedupMap.set(key, item);
+                }
+              }
+            }
+          });
+          
+          const deduplicated = Array.from(dedupMap.values());
+          setEarnings(deduplicated);
           setLastUpdateTime(apiUpdateTime || new Date());
           // Save all earnings for navbar badge persistence
           try {
-            localStorage.setItem('calendar_all_earnings', JSON.stringify(finalFiltered));
+            localStorage.setItem('calendar_all_earnings', JSON.stringify(deduplicated));
           } catch (e) {}
-          const currentIds = new Set(finalFiltered.map(e => `${e.ticker}-${e.date}`));
+          const currentIds = new Set(deduplicated.map(e => `${e.ticker}-${e.date}`));
 
-          // If the user previously pressed "Mark all as read" we saved a
-          // snapshot of the list at that time. If the saved snapshot exactly
-          // matches the current list and it was created by the user, honor it
-          // and keep notifications cleared. Otherwise fall back to per-ID
-          // persisted seen IDs.
+          // Load and use seen IDs from localStorage to count unseen items
+          // This ensures "Mark all as read" persists after refresh
           try {
-            const savedSnapshot = localStorage.getItem('calendar_seen_snapshot');
-            const savedByUser = localStorage.getItem('calendar_seen_by_user');
-            if (savedSnapshot && savedByUser === '1') {
-              const parsedSnap = JSON.parse(savedSnapshot);
-              if (Array.isArray(parsedSnap)) {
-                const snapSet = new Set(parsedSnap);
-                // Compare sets: if they match exactly, treat all as seen
-                if (parsedSnap.length === currentIds.size && parsedSnap.every(id => currentIds.has(id))) {
-                  setNewEarningsCount(0);
-                  setSeenEarningsIds(new Set(parsedSnap));
-                } else {
-                  // fallback to per-ID seen set calculation
-                  let seenSetForCalc = seenEarningsIds;
-                  try {
-                    const saved = localStorage.getItem('calendar_seen_earnings');
-                    if (saved) {
-                      const parsed = JSON.parse(saved);
-                      if (Array.isArray(parsed)) seenSetForCalc = new Set(parsed);
-                    }
-                  } catch (e) {}
-                  const unseenIds = [...currentIds].filter(id => !seenSetForCalc.has(id));
-                  setNewEarningsCount(unseenIds.length);
-                }
-              } else {
-                // invalid snapshot format, fallback
-                let seenSetForCalc = seenEarningsIds;
-                try {
-                  const saved = localStorage.getItem('calendar_seen_earnings');
-                  if (saved) {
-                    const parsed = JSON.parse(saved);
-                    if (Array.isArray(parsed)) seenSetForCalc = new Set(parsed);
-                  }
-                } catch (e) {}
-                const unseenIds = [...currentIds].filter(id => !seenSetForCalc.has(id));
-                setNewEarningsCount(unseenIds.length);
+            const savedSeenIds = localStorage.getItem('calendar_seen_earnings');
+            let seenSet = new Set();
+            if (savedSeenIds) {
+              const parsed = JSON.parse(savedSeenIds);
+              if (Array.isArray(parsed)) {
+                seenSet = new Set(parsed);
               }
-            } else {
-              // No user snapshot -> normal per-ID behavior
-              let seenSetForCalc = seenEarningsIds;
-              try {
-                const saved = localStorage.getItem('calendar_seen_earnings');
-                if (saved) {
-                  const parsed = JSON.parse(saved);
-                  if (Array.isArray(parsed)) seenSetForCalc = new Set(parsed);
-                }
-              } catch (e) {}
-              const unseenIds = [...currentIds].filter(id => !seenSetForCalc.has(id));
-              setNewEarningsCount(unseenIds.length);
             }
-          } catch (e) {
-            // on any error, fall back to per-ID calculation
-            let seenSetForCalc = seenEarningsIds;
-            try { const saved = localStorage.getItem('calendar_seen_earnings'); if (saved) { const parsed = JSON.parse(saved); if (Array.isArray(parsed)) seenSetForCalc = new Set(parsed); } } catch (ex) {}
-            const unseenIds = [...currentIds].filter(id => !seenSetForCalc.has(id));
+            
+            // Update state to match localStorage
+            setSeenEarningsIds(seenSet);
+            
+            const unseenIds = [...currentIds].filter(id => !seenSet.has(id));
             setNewEarningsCount(unseenIds.length);
+          } catch (e) {
+            // on error, count all as new
+            setNewEarningsCount(currentIds.size);
           }
+          
           // Do NOT mark as seen automatically on load. Only mark as seen when user clicks or marks all as read.
           setIsFirstLoad(false);
         }
@@ -957,15 +953,28 @@ export default function Calendar() {
       setNewEarningsCount(0);
       // Persist immediately so refresh retains the "read" state
       localStorage.setItem('calendar_seen_earnings', JSON.stringify(allIds));
-      // Also store a user-created snapshot so reload can recognize the same list
-      try {
-        const sorted = [...allIds].sort();
-        localStorage.setItem('calendar_seen_version', JSON.stringify(sorted));
-        localStorage.setItem('calendar_seen_snapshot', JSON.stringify(sorted));
-        localStorage.setItem('calendar_seen_by_user', '1');
-      } catch (e) {}
     } catch (e) {
       // ignore storage errors
+    }
+  };
+
+  // Force refresh earnings data
+  const forceRefresh = async () => {
+    try {
+      setLoading(true);
+      const response = await axios.post(API_CONFIG.endpoints.earnings.refresh || 'http://localhost:8000/earnings/api/earnings/refresh');
+      if (response.data.success) {
+        // Reload data after successful refresh
+        window.location.reload();
+      } else {
+        console.error('Refresh failed:', response.data.error);
+        alert('Failed to refresh data: ' + (response.data.error || 'Unknown error'));
+      }
+    } catch (error) {
+      console.error('Refresh error:', error);
+      alert('Failed to refresh data. Please try again.');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -1085,7 +1094,18 @@ export default function Calendar() {
               </div>
             </div>
 
-            <div className="flex flex-col items-end gap-0.5 text-[10px] sm:text-xs text-gray-500 pr-1 mb-5">
+            <div className="flex flex-col sm:flex-row items-end gap-2 text-[10px] sm:text-xs text-gray-500 pr-1 mb-5">
+              <button
+                onClick={forceRefresh}
+                disabled={loading}
+                className="text-green-600 hover:text-green-700 font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                title="Refresh earnings data"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                Refresh Data
+              </button>
               {sortedEarnings.filter(e => e.isNew).length > 0 && (
                 <button
                   onClick={markAllAsSeen}
