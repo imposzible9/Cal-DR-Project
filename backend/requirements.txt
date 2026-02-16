@@ -16,3 +16,4 @@ anyio>=4.0.0
 
 # Optional: ถ้ามี SQLite operations
 # sqlite3 มาพร้อม Python แล้ว ไม่ต้องติดตั้ง
+requests==2.32.5
