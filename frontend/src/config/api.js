@@ -45,6 +45,8 @@ export const API_CONFIG = {
             quote: (symbol) => `${import.meta.env.VITE_NEWS_API}/api/finnhub/quote/${symbol}`,
             companyNews: (symbol) => `${import.meta.env.VITE_NEWS_API}/api/finnhub/company-news/${symbol}`,
             stockOverview: (symbol) => `${import.meta.env.VITE_NEWS_API}/api/stock/overview/${symbol}`,
+            globalNews: `${import.meta.env.VITE_NEWS_API}/api/global-news`,
+            batchTickerData: `${import.meta.env.VITE_NEWS_API}/api/batch-ticker-data`,
         },
 
         // Calculation endpoints

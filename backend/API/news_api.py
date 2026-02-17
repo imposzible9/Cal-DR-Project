@@ -35,13 +35,12 @@ app = FastAPI(title="News API")
 
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
-# DEV ONLY: Using wildcard CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
 )
 
 _client: httpx.AsyncClient | None = None
@@ -1251,7 +1250,7 @@ async def _require_client():
         raise HTTPException(500, "HTTP client not initialized")
 
 # TV Fields for simple quote
-TV_QUOTE_FIELDS = "close,change,change_abs,high,low,volume,currency,Recommend.All,description"
+TV_QUOTE_FIELDS = "close,change,change_abs,high,low,volume,currency,Recommend.All,description,logoid"
 
 def construct_tv_symbol_from_match(match: dict) -> str:
     """
@@ -1340,6 +1339,11 @@ async def fetch_tv_quote(symbol: str):
                 d = data.get("data") if "data" in data else data
                 
                 if d and "close" in d:
+                    # Construct Logo URL from TV
+                    tv_logo = None
+                    if d.get("logoid"):
+                        tv_logo = f"https://s3-symbol-logo.tradingview.com/{d['logoid']}.svg"
+
                     # Map fields: close, change, change_abs, high, low, volume, currency, Recommend.All
                     return {
                         "symbol": symbol,
@@ -1350,7 +1354,7 @@ async def fetch_tv_quote(symbol: str):
                         "low": d.get("low"),
                         "open": d.get("close"), # Approx
                         "prev_close": d.get("close") - (d.get("change_abs") or 0) if d.get("change_abs") else 0,
-                        "logo_url": match.get("logo") if match else None,
+                        "logo_url": tv_logo or (match.get("logo") if match else None),
                         "name": d.get("description"), # Add description for news search fallback
                         "source": "tradingview"
                     }

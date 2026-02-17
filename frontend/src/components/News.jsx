@@ -1,10 +1,8 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import axios from 'axios';
+import { API_CONFIG } from '../config/api';
 
-// Read API base from Vite environment variables. Support multiple names
-// (some projects use VITE_NEWS_API, others VITE_NEWS_API_URL or VITE_API_BASE)
-const API_BASE = import.meta.env.VITE_NEWS_API || import.meta.env.VITE_NEWS_API_URL || import.meta.env.VITE_API_BASE || '';
 const TH_QUERY = "ตลาดหุ้น OR ภาวะตลาดหุ้น OR หุ้นไทย";
 const EN_QUERY = "US Stock Market OR S&P 500";
 
@@ -67,9 +65,14 @@ const COUNTRY_CONFIG = {
     symbols: ["2330.TW", "2317.TW", "2454.TW", "2308.TW", "2881.TW", "2303.TW"]
   },
   "CN": {
-    query: "中国股市 OR A股 OR 上證指數 OR 深證成指 OR 滬深300 OR 貴州茅台 OR 騰訊控股 OR 阿里巴巴 OR 工商銀行",
+    query: "中国股市 OR A股 OR 上證指數 OR 深證成指 OR 滬深300 OR 中概股 OR 恒生科技指數 OR 貴州茅台 OR 騰訊控股 OR 阿里巴巴 OR 工商銀行 OR China Stock Market",
     lang: "zh",
-    symbols: ["600519.SS", "601398.SS", "300750.SZ", "600036.SS", "601288.SS", "000858.SZ"]
+    symbols: [
+      "600519.SS", "601398.SS", "300750.SZ", "600036.SS", "601288.SS", "000858.SZ",
+      "601857.SS", "601939.SS", "601988.SS", "601318.SS", "002594.SZ", "000333.SZ",
+      "601628.SS", "600900.SS", "601088.SS", "601166.SS", "600028.SS", "000651.SZ",
+      "002415.SZ", "600276.SS"
+    ]
   },
   "VN": {
     query: "Thị trường chứng khoán Việt Nam OR VN-Index OR HNX-Index OR VN30 OR Vingroup OR Vietcombank OR Hoa Phat Group OR Masan Group",
@@ -100,9 +103,9 @@ const getFlagUrl = (code) => {
   return `https://flagcdn.com/w40/${code.toLowerCase()}.png`;
 };
 
-const CACHE_KEY_HOME = "caldr_news_home_v7";
-const CACHE_KEY_SEARCH_PREFIX = "caldr_news_search_v3_";
-const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const CACHE_KEY_HOME = "caldr_news_home_v9";
+const CACHE_KEY_SEARCH_PREFIX = "caldr_news_search_v4_";
+const CACHE_TTL = 45 * 1000; // 45 seconds (ensure stale for 60s auto-refresh)
 
 // Helper for LocalStorage Caching
 const getCache = (key, ignoreTTL = false) => {
@@ -244,6 +247,15 @@ const News = () => {
   const [quote, setQuote] = useState(null);
   const [loadingSearch, setLoadingSearch] = useState(false);
   const [errorSearch, setErrorSearch] = useState("");
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  // Auto-refresh news every 60 seconds
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setRefreshKey(prev => prev + 1);
+    }, 60000); // 60 seconds
+    return () => clearInterval(interval);
+  }, []);
 
   // Sync search input with URL selected symbol
   useEffect(() => {
@@ -254,7 +266,7 @@ const News = () => {
   useEffect(() => {
     async function loadSymbols() {
       try {
-        const res = await axios.get(`${API_BASE}/api/symbols`);
+        const res = await axios.get(API_CONFIG.endpoints.news.symbols);
         if (res.data && Array.isArray(res.data)) {
           setAllSymbols(res.data);
         }
@@ -296,7 +308,7 @@ const News = () => {
         
         if (country === "all") {
             // Fetch from optimized backend endpoint
-            const res = await axios.get(`${API_BASE}/api/global-news`, { 
+            const res = await axios.get(API_CONFIG.endpoints.news.globalNews, { 
         params: { limit: 10, trusted_only: true } 
       });
             merged = res.data?.news || [];
@@ -305,14 +317,14 @@ const News = () => {
             const config = COUNTRY_CONFIG[country];
             if (config) {
                 symbolsToFetch = config.symbols;
-                const res = await axios.get(`${API_BASE}/api/news/${encodeURIComponent(config.query)}`, { 
+                const res = await axios.get(API_CONFIG.endpoints.news.getNews(encodeURIComponent(config.query)), { 
                     params: { limit: 40, language: config.lang, hours: 72, country: country.toLowerCase(), trusted_only: true } 
                 });
                 if (!mounted) return;
                 merged = res.data?.news || [];
             } else {
                 // Fallback
-                const res = await axios.get(`${API_BASE}/api/news/${encodeURIComponent(EN_QUERY)}`, { 
+                const res = await axios.get(API_CONFIG.endpoints.news.getNews(encodeURIComponent(EN_QUERY)), { 
                     params: { limit: 40, language: "en", hours: 72, country: country.toLowerCase(), trusted_only: true } 
                 });
                 if (!mounted) return;
@@ -343,13 +355,34 @@ const News = () => {
                 }
             }
 
-            const batchRes = await axios.post(`${API_BASE}/api/batch-ticker-data`, batchParams);
+            const batchRes = await axios.post(API_CONFIG.endpoints.news.batchTickerData, batchParams);
             
             if (mounted) {
                 const updates = batchRes.data?.data || [];
-                setDefaultUpdates(updates);
-
                 const toMs = (v) => typeof v === "number" ? v * 1000 : (new Date(v).getTime() || 0);
+                
+                const getPriority = (t) => {
+                     if (!t) return 99;
+                     const u = t.toUpperCase();
+                     if (u.endsWith(".BK")) return 2;
+                     if (u.endsWith(".HK")) return 3;
+                     if (u.endsWith(".SS") || u.endsWith(".SZ")) return 4;
+                     if (u.endsWith(".VN")) return 5;
+                     if (u.endsWith(".SI")) return 6;
+                     if (u.endsWith(".T")) return 7;
+                     if (u.includes(".")) return 8; // Other suffixes
+                     return 1; // US (No suffix)
+                 };
+
+                 // Sort updates by date descending (Newest first), then by market priority
+                 updates.sort((a, b) => {
+                     const timeA = toMs(a.news.published_at);
+                     const timeB = toMs(b.news.published_at);
+                     if (timeA !== timeB) return timeB - timeA;
+                     return getPriority(a.ticker) - getPriority(b.ticker);
+                 });
+                
+                setDefaultUpdates(updates);
 
                 // Merge general news and company updates for "Top Stories"
                 const combinedNews = [
@@ -357,7 +390,13 @@ const News = () => {
                   ...updates // Company news already has { news, ticker, quote }
                 ];
 
-                combinedNews.sort((a, b) => toMs(b.news.published_at) - toMs(a.news.published_at));
+                // Sort combined news using the same logic (Date > Priority)
+                combinedNews.sort((a, b) => {
+                     const timeA = toMs(a.news.published_at);
+                     const timeB = toMs(b.news.published_at);
+                     if (timeA !== timeB) return timeB - timeA;
+                     return getPriority(a.ticker) - getPriority(b.ticker);
+                });
                 
                 const newCacheData = {
                   marketNews: combinedNews,
@@ -399,7 +438,7 @@ const News = () => {
     }
 
     return () => { mounted = false; };
-  }, [selected, country]);
+  }, [selected, country, refreshKey]);
 
   // Fetch Search Data
   useEffect(() => {
@@ -445,8 +484,8 @@ const News = () => {
 
       try {
         const [qRes, nRes] = await Promise.all([
-          axios.get(`${API_BASE}/api/finnhub/quote/${encodeURIComponent(querySymbol)}`),
-          axios.get(`${API_BASE}/api/finnhub/company-news/${encodeURIComponent(querySymbol)}`, { params: { hours: 168, limit: 30 } }),
+          axios.get(API_CONFIG.endpoints.news.quote(encodeURIComponent(querySymbol))),
+          axios.get(API_CONFIG.endpoints.news.companyNews(encodeURIComponent(querySymbol)), { params: { hours: 168, limit: 30 } }),
         ]);
         if (!mounted) return;
         
@@ -489,7 +528,27 @@ const News = () => {
     }
     loadSymbol();
     return () => { mounted = false; };
-  }, [selected, allSymbols]); // Added allSymbols dependency for safe match check
+  }, [selected, allSymbols, refreshKey]); // Added allSymbols dependency for safe match check
+
+  useEffect(() => {
+    if (!selected) return;
+    
+    let mounted = true;
+    async function loadOverview() {
+      // Add logic to load overview if needed or separate component
+      // Assuming there is an endpoint for it or we reuse quote
+      try {
+        const res = await axios.get(API_CONFIG.endpoints.news.stockOverview(encodeURIComponent(selected)));
+        if (mounted && res.data) {
+           // ... handle overview data if we had state for it
+           // currently not used in state?
+        }
+      } catch (e) {
+         // ignore
+      }
+    }
+    // loadOverview(); // Disabled for now as we focus on news
+  }, [selected]);
 
   const topStory = useMemo(() => marketNews.find(item => item.ticker), [marketNews]);
   const onSearchKey = (e) => {
