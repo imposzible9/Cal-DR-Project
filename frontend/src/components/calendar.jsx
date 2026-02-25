@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import axios from "axios";
 import { trackPageView, trackFilter, trackSearch } from "../utils/tracker";
 import { API_CONFIG } from "../config/api";
+import { CalendarTableSkeleton, CalendarCardSkeleton } from "./SkeletonLoader";
 
 // ================= CONSTANTS =================
 const countryOptions = [
@@ -54,6 +55,13 @@ const getLogoSlug = (name) => {
   try {
     const nameStr = String(name || '').trim();
     const upper = nameStr.toUpperCase();
+    // Overrides based on keyword match
+    if (/LAOPU\s*GOLD/i.test(upper)) return 'laopu-gold-co-ltd';
+    if (/MOBILE\s*WORLD/i.test(upper)) return 'mobile-world-investment-corporation';
+    if (/TRIP\.COM|CTRIP/i.test(upper)) return 'ctrip-com-international';
+    if (/HONG\s*KONG\s*EXCHANGES|HKEX/i.test(upper)) return 'hkex';
+    if (/MONSTER\s*BEVERAGE/i.test(upper)) return 'monster-beverage';
+
     // special-case: Semiconductor Manufacturing International Corp. -> tradingview slug
     if (/SEMICONDUCTOR\s+MANUFACTURING\s+INTERNATIONAL/i.test(upper)) return 'semiconductor-manufacturing-international';
     if (/SPOTIFY/.test(upper)) return 'spotify-technology';
@@ -62,6 +70,11 @@ const getLogoSlug = (name) => {
     if (/\bDNOW\b/.test(upper)) return 'now';
     // If company name starts with NOW or contains 'NOW INC' etc., prefer 'now'
     if (/\bNOW(\b|\s|,)/.test(upper)) return 'now';
+    
+    // Additional logo mappings for calendar page
+    if (/^ON(\s|\.|$)|ON\s+HOLDING/i.test(upper)) return 'on-holding';
+    if (/^COSTCO/i.test(upper)) return 'costar-group';
+    if (/^MARVELL/i.test(upper)) return 'marvell-tech';
   } catch (e) {
     // fallback to normal logic below
   }
@@ -128,6 +141,32 @@ const getLogoSlug = (name) => {
   return slug;
 };
 
+// Calendar-specific logo function that handles ticker-specific mappings
+const getCalendarLogoSlug = (companyName, ticker) => {
+  if (!companyName) return '';
+  
+  const upper = String(companyName).toUpperCase();
+  
+  // Handle ON mapping - this should be checked first
+  if (/^ON(\s|\.|$)|ON\s+HOLDING/i.test(upper)) {
+    return 'on-holding';
+  }
+  
+  // Handle JD mappings based on ticker
+  if (/^JD(\s|\.|$)|JD\.COM/i.test(upper)) {
+    if (ticker === '9618') return 'jd-com';
+    if (ticker === '6618') return 'jd-health-international-inc';
+    // Default JD mapping if no specific ticker
+    return 'jd-com';
+  }
+  if (upper === 'JD HEALTH INTERNATIONAL' || upper === 'JD HEALTH INTERNATIONAL INC') {
+    return 'jd-health-international-inc';
+  }
+  
+  // For all other cases, use the standard getLogoSlug function
+  return getLogoSlug(companyName);
+};
+
 const extractSymbol = (str) => {
   if (!str) return "";
   const strUpper = String(str).toUpperCase().trim();
@@ -149,7 +188,7 @@ const extractSymbol = (str) => {
 };
 
 const formatMarketCapValue = (val, currency = "", isLargeNumber = false) => {
-  if (val === null || val === undefined || val === "" || val === "-") return <span className="text-gray-600 text-xs sm:text-sm">-</span>;
+  if (val === null || val === undefined || val === "" || val === "-") return <span className="text-gray-600 dark:text-white text-xs sm:text-sm">-</span>;
 
   const num = Number(val);
   if (isNaN(num)) return <span className="text-gray-600 text-xs sm:text-sm">-</span>;
@@ -220,7 +259,7 @@ const formatMarketCapValue = (val, currency = "", isLargeNumber = false) => {
 };
 
 const formatValue = (val, currency = "", isLargeNumber = false) => {
-  if (val === null || val === undefined || val === "" || val === "-") return <span className="text-gray-600 text-xs sm:text-sm">-</span>;
+  if (val === null || val === undefined || val === "" || val === "-") return <span className="text-gray-600 dark:text-white text-xs sm:text-sm">-</span>;
 
   const num = Number(val);
   if (isNaN(num)) return <span className="text-gray-600 text-xs sm:text-sm">-</span>;
@@ -248,19 +287,19 @@ const formatValue = (val, currency = "", isLargeNumber = false) => {
 
   return (
     <div className="flex items-baseline justify-end gap-0.5">
-      <span className="font-medium tracking-tight text-xs sm:text-[14.4px] font-mono">
+      <span className="font-medium tracking-tight text-xs sm:text-[14.4px] dark:text-white font-mono">
         {formattedNum}
         {suffix && <span className="ml-0.5">{suffix}</span>}
       </span>
-      {currency && <span className="text-xs sm:text-[14.4px] text-gray-600 font-normal uppercase">{currency}</span>}
+      {currency && <span className="text-xs sm:text-[14.4px] text-gray-600 dark:text-white/80 font-normal uppercase">{currency}</span>}
     </div>
   );
 };
 
 const formatColoredValue = (val, suffix = "", currency = "") => {
-  if (val === null || val === undefined || val === "" || val === "-") return <span className="text-gray-600 text-xs sm:text-sm">-</span>;
+  if (val === null || val === undefined || val === "" || val === "-") return <span className="text-gray-600 dark:text-white text-xs sm:text-sm">-</span>;
   const num = Number(val);
-  const colorClass = num > 0 ? "text-[#27AE60]" : num < 0 ? "text-[#EB5757]" : "text-gray-500";
+  const colorClass = num > 0 ? "text-[#27AE60] dark:text-[#4CE60F]" : num < 0 ? "text-[#EB5757] dark:text-[#EB5757]" : "text-gray-500 dark:text-white/60";
 
   return (
     <div className="flex items-baseline justify-end gap-0.5">
@@ -268,7 +307,7 @@ const formatColoredValue = (val, suffix = "", currency = "") => {
         {num > 0 ? "+" : ""}{num.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
         {suffix && <span className="ml-0.5 text-xs sm:text-[14.4px] font-normal opacity-80">{suffix}</span>}
       </span>
-      {currency && <span className={`text-xs sm:text-[14.4px] font-normal uppercase ${colorClass} opacity-70`}>{currency}</span>}
+      {currency && <span className={`text-xs sm:text-[14.4px] font-normal uppercase ${colorClass} dark:text-white/80 opacity-70`}>{currency}</span>}
     </div>
   );
 };
@@ -299,7 +338,7 @@ export default function Calendar() {
     }
     return new Set();
   });
-  
+
   const [newEarningsCount, setNewEarningsCount] = useState(0);
   const [isFirstLoad, setIsFirstLoad] = useState(true);
   const [logoErrors, setLogoErrors] = useState({});
@@ -360,14 +399,19 @@ export default function Calendar() {
   useEffect(() => {
     const controller = new AbortController();
 
-
     const loadData = async (showLoading = true) => {
       if (showLoading) setLoading(true);
       try {
         let finalData = [];
         let apiUpdateTime = null;
         // ดึงข้อมูลจาก backend ตาม country ที่เลือก (หรือ All)
-        const res = await axios.get(API_CONFIG.endpoints.earnings.get(country), { signal: controller.signal });
+        // Note: Using a standard fetch/axios call. If StrictMode triggers twice, 
+        // the second call will be blocked by the timestamp guard above if data already exists,
+        // or they will both run but the guard ensures we don't spam.
+        const res = await axios.get(API_CONFIG.endpoints.earnings.get(country), {
+          signal: controller.signal,
+          headers: { 'Cache-Control': 'no-cache' }
+        });
         const responseData = res.data;
         finalData = flattenData(responseData);
         if (responseData.updated_at) {
@@ -386,33 +430,33 @@ export default function Calendar() {
           }
 
           // Enrich earnings with DR-level info (mostPopularDR, highSensitivityDR)
-            try {
+          try {
             const drRes = await axios.get(import.meta.env.VITE_DR_LIST_API);
             const drRows = (drRes.data && drRes.data.rows) ? drRes.data.rows : (drRes.data || []);
             // normalize exchange strings to short codes to allow matching between DR feed and earnings feed
-              const normalizeExchange = (s) => {
+            const normalizeExchange = (s) => {
               if (!s) return "";
               const ss = s.toString().toUpperCase();
               const map = [
-                ["NASDAQ GLOBAL SELECT","NASDAQ"],
-                ["NASDAQ GLOBAL","NASDAQ"],
-                ["NASDAQ","NASDAQ"],
-                ["NEW YORK STOCK EXCHANGE","NYSE"],
-                ["NYSE","NYSE"],
-                ["TOKYO","TSE"],
-                ["TSE","TSE"],
-                ["EURONEXT","EURONEXT"],
-                ["MIL","EURONEXT"],
-                ["HKEX","HKEX"],
-                ["HONG KONG","HKEX"],
-                ["STOCK EXCHANGE OF HONG KONG","HKEX"],
-                ["SHANGHAI","SSE"],
-                ["SSE","SSE"],
-                ["SZSE","SZSE"],
-                ["SET","SET"],
-                ["TWSE","TWSE"],
-                ["LSE","LSE"],
-                ["ASX","ASX"]
+                ["NASDAQ GLOBAL SELECT", "NASDAQ"],
+                ["NASDAQ GLOBAL", "NASDAQ"],
+                ["NASDAQ", "NASDAQ"],
+                ["NEW YORK STOCK EXCHANGE", "NYSE"],
+                ["NYSE", "NYSE"],
+                ["TOKYO", "TSE"],
+                ["TSE", "TSE"],
+                ["EURONEXT", "EURONEXT"],
+                ["MIL", "EURONEXT"],
+                ["HKEX", "HKEX"],
+                ["HONG KONG", "HKEX"],
+                ["STOCK EXCHANGE OF HONG KONG", "HKEX"],
+                ["SHANGHAI", "SSE"],
+                ["SSE", "SSE"],
+                ["SZSE", "SZSE"],
+                ["SET", "SET"],
+                ["TWSE", "TWSE"],
+                ["LSE", "LSE"],
+                ["ASX", "ASX"]
               ];
               for (let i = 0; i < map.length; i++) {
                 if (ss.includes(map[i][0])) return map[i][1];
@@ -494,7 +538,7 @@ export default function Calendar() {
                 const repRaw = (list[0].underlyingExchange || list[0].u_exch || list[0].exchange || "");
                 repExchange = normalizeExchange(repRaw);
               }
-              drSummary[u] = { mostPopularDR, highSensitivityDR, underlyingName: repUnderlyingName, underlyingExchange: (repExchange||"") };
+              drSummary[u] = { mostPopularDR, highSensitivityDR, underlyingName: repUnderlyingName, underlyingExchange: (repExchange || "") };
             });
 
             // Safer enrichment: prefer exact ticker match; otherwise use token-overlap on company name
@@ -522,7 +566,7 @@ export default function Calendar() {
                     for (const k of Object.keys(drSummary)) {
                       const drEntry = drSummary[k];
                       if (drEntry && drEntry.underlyingName && drEntry.underlyingExchange) {
-                        const uNorm = normalizeName((drEntry.underlyingName||'').toUpperCase());
+                        const uNorm = normalizeName((drEntry.underlyingName || '').toUpperCase());
                         if (uNorm === normCompany && drEntry.underlyingExchange === itemExchange) {
                           return { ...item, mostPopularDR: drEntry.mostPopularDR, highSensitivityDR: drEntry.highSensitivityDR };
                         }
@@ -539,8 +583,8 @@ export default function Calendar() {
                     // numeric-only ticker guard: if ticker is numeric, ensure underlyingName overlaps with company
                     if (keyTicker.match(/^\d+$/)) {
                       const normalizeToken = s => s.replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
-                      const compTokens = normalizeToken(companyRaw).split(' ').filter(t=>t.length>=2);
-                      const underTokens = normalizeToken((drEntry.underlyingName||'').toUpperCase()).split(' ').filter(t=>t.length>=2);
+                      const compTokens = normalizeToken(companyRaw).split(' ').filter(t => t.length >= 2);
+                      const underTokens = normalizeToken((drEntry.underlyingName || '').toUpperCase()).split(' ').filter(t => t.length >= 2);
                       const overlap = compTokens.filter(ct => underTokens.includes(ct)).length;
                       if (overlap === 0) {
                         // reject numeric-only match without underlying name overlap
@@ -555,8 +599,8 @@ export default function Calendar() {
                     const drEntry = drSummary[keyTicker];
                     if (keyTicker.match(/^\d+$/)) {
                       const normalizeToken = s => s.replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
-                      const compTokens = normalizeToken(companyRaw).split(' ').filter(t=>t.length>=2);
-                      const underTokens = normalizeToken((drEntry.underlyingName||'').toUpperCase()).split(' ').filter(t=>t.length>=2);
+                      const compTokens = normalizeToken(companyRaw).split(' ').filter(t => t.length >= 2);
+                      const underTokens = normalizeToken((drEntry.underlyingName || '').toUpperCase()).split(' ').filter(t => t.length >= 2);
                       const overlap = compTokens.filter(ct => underTokens.includes(ct)).length;
                       if (overlap === 0) {
                         // reject
@@ -643,26 +687,26 @@ export default function Calendar() {
             if (BLACKLIST_COMPANY_KEYWORDS.some(k => companyUp.includes(k))) return false;
             return (item.mostPopularDR || item.highSensitivityDR);
           });
-          
+
           // Deduplicate earnings with same ticker and date but different currencies
           // Priority: VND > USD > JPY > CNY > TWD > SGD > HKD > EUR > THB > others
           const currencyPriority = {
-            'VND': 10, 'USD': 9, 'JPY': 8, 'CNY': 7, 'CNH': 7, 
+            'VND': 10, 'USD': 9, 'JPY': 8, 'CNY': 7, 'CNH': 7,
             'TWD': 6, 'SGD': 5, 'HKD': 4, 'EUR': 3, 'THB': 1
           };
-          
+
           const dedupMap = new Map();
           finalFiltered.forEach(item => {
             const key = `${item.ticker}-${item.date}`;
             const existing = dedupMap.get(key);
-            
+
             if (!existing) {
               dedupMap.set(key, item);
             } else {
               // Compare currencies and keep the higher priority one
               const itemPriority = currencyPriority[item.currency] || 0;
               const existingPriority = currencyPriority[existing.currency] || 0;
-              
+
               if (itemPriority > existingPriority) {
                 dedupMap.set(key, item);
               } else if (itemPriority === existingPriority) {
@@ -675,14 +719,14 @@ export default function Calendar() {
               }
             }
           });
-          
+
           const deduplicated = Array.from(dedupMap.values());
           setEarnings(deduplicated);
           setLastUpdateTime(apiUpdateTime || new Date());
           // Save all earnings for navbar badge persistence
           try {
             localStorage.setItem('calendar_all_earnings', JSON.stringify(deduplicated));
-          } catch (e) {}
+          } catch (e) { }
           const currentIds = new Set(deduplicated.map(e => `${e.ticker}-${e.date}`));
 
           // Load and use seen IDs from localStorage to count unseen items
@@ -696,17 +740,17 @@ export default function Calendar() {
                 seenSet = new Set(parsed);
               }
             }
-            
+
             // Update state to match localStorage
             setSeenEarningsIds(seenSet);
-            
+
             const unseenIds = [...currentIds].filter(id => !seenSet.has(id));
             setNewEarningsCount(unseenIds.length);
           } catch (e) {
             // on error, count all as new
             setNewEarningsCount(currentIds.size);
           }
-          
+
           // Do NOT mark as seen automatically on load. Only mark as seen when user clicks or marks all as read.
           setIsFirstLoad(false);
         }
@@ -720,7 +764,9 @@ export default function Calendar() {
       }
     };
 
-    loadData(true);
+    let fetchTimeoutId = setTimeout(() => {
+      loadData(true);
+    }, 100);
 
     // SSE Connection for real-time updates
     let eventSource = null;
@@ -761,7 +807,7 @@ export default function Calendar() {
                         const parsed = JSON.parse(saved);
                         if (Array.isArray(parsed)) persistedSeen = new Set(parsed);
                       }
-                    } catch (e) {}
+                    } catch (e) { }
 
                     const newlyUnseen = trulyNew.filter(e => !persistedSeen.has(`${e.ticker}-${e.date}`)).length;
                     return prevCount + newlyUnseen;
@@ -817,6 +863,7 @@ export default function Calendar() {
 
     return () => {
       controller.abort();
+      if (fetchTimeoutId) clearTimeout(fetchTimeoutId);
       if (eventSource) {
         eventSource.close();
       }
@@ -996,19 +1043,19 @@ export default function Calendar() {
   };
 
   return (
-    <div className="h-screen w-full bg-[#f5f5f5] overflow-hidden flex justify-center">
+    <div className="h-screen w-full bg-[#F5F5F5 dark:bg-[#151D33]] overflow-hidden flex justify-center">
       <div className="w-full max-w-[1248px] flex flex-col h-full">
         <div className="pt-6 sm:pt-10 pb-0 px-4 sm:px-0 flex-shrink-0" style={{ overflow: 'visible', zIndex: 100 }}>
           <div className="w-full lg:w-[1040px] max-w-full mx-auto lg:scale-[1.2] lg:origin-top" style={{ overflow: 'visible' }}>
-            <h1 className="text-xl sm:text-2xl md:text-3xl font-bold mb-2 sm:mb-3 text-black">Earnings Calendar</h1>
-            <p className="text-[#6B6B6B] mb-8 sm:mb-6 md:mb-8 text-xs sm:text-sm md:text-base">Earnings Schedule for Companies with DRs Traded in Thailand.</p>
+            <h1 className="text-xl sm:text-2xl md:text-3xl font-bold mb-2 sm:mb-3 text-black dark:text-white">Earnings Calendar</h1>
+            <p className="text-[#6B6B6B] dark:text-white/70 mb-8 sm:mb-6 md:mb-8 text-xs sm:text-sm md:text-base">Earnings Schedule for Companies with DRs Traded in Thailand.</p>
 
             <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-3 md:gap-4 mb-2">
               <div className="relative z-[200] w-full md:w-auto" ref={countryDropdownRef} style={{ isolation: 'isolate', overflow: 'visible' }}>
                 <button
                   type="button"
                   onClick={() => setShowCountryMenu((prev) => !prev)}
-                  className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 bg-white px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 w-full lg:w-[202.5px]"
+                  className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 dark:border-none bg-white dark:bg-[#595959] dark:text-white px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 dark:hover:bg-[#4A4A4A] focus:outline-none focus:ring-2 focus:ring-[#0B102A] dark:focus:ring-0 w-full lg:w-[202.5px]"
                   style={{ height: '37.33px', width: undefined }}
                 >
                   <span className="truncate flex items-center gap-2">
@@ -1021,34 +1068,34 @@ export default function Calendar() {
                         onError={(e) => { if (!e.target.dataset.fallback) { e.target.dataset.fallback = '1'; e.target.src = `https://flagcdn.com/w40/${selectedCountryOption.flag}.png`; } }}
                       />
                     ) : (selectedCountryOption.code === 'All' || selectedCountryOption.code === 'all') ? (
-                      <i className="bi bi-globe text-gray-400" style={{ fontSize: '16px', lineHeight: '16px' }}></i>
+                      <i className="bi bi-globe text-gray-400 dark:text-white" style={{ fontSize: '16px', lineHeight: '16px' }}></i>
                     ) : null}
                     <span>{selectedLabel}</span>
                   </span>
-                  <svg className={`h-4 w-4 flex-shrink-0 transition-transform text-gray-500 ${showCountryMenu ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                  <svg className={`h-4 w-4 flex-shrink-0 transition-transform text-gray-500 dark:text-white ${showCountryMenu ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
                 </button>
                 {showCountryMenu && (
-                  <div className="absolute left-0 top-full z-[9999] mt-2 w-full sm:w-56 max-h-72 overflow-auto rounded-2xl border border-gray-200 bg-white shadow-[0_10px_30px_rgba(15,23,42,0.15)] py-1" style={{ transform: 'translateZ(0)' }}>
+                  <div className="absolute left-0 top-full z-[9999] mt-2 w-full sm:w-56 max-h-72 overflow-auto hide-scrollbar rounded-2xl border border-gray-200 dark:border-none bg-white dark:bg-[#595959] dark:text-white shadow-[0_10px_30px_rgba(15,23,42,0.15)] py-1" style={{ transform: 'translateZ(0)' }}>
                     {countryOptions.map((opt) => (
                       <button
                         key={opt.code}
-                        onClick={() => { setCountry(opt.code); setShowCountryMenu(false); }}
-                        className={`flex w-full items-center justify-between px-4 py-1.5 text-left text-xs sm:text-sm transition-colors ${country === opt.code ? "bg-[#EEF2FF] text-[#0B102A] font-semibold" : "text-gray-700 hover:bg-gray-50"}`}
+                        onClick={() => { setCountry(opt.code); setShowCountryMenu(false); trackFilter('country', opt.label); }}
+                        className={`flex w-full items-center justify-between px-4 py-1.5 text-left text-xs sm:text-sm transition-colors ${country === opt.code ? "bg-[#EEF2FF] text-[#0B102A] font-semibold dark:bg-[#4A4A4A] dark:text-white" : "text-gray-700 dark:text-white hover:bg-gray-50 dark:hover:bg-[#4A4A4A]"}`}
                       >
                         <span className="flex items-center gap-2">
-                            {opt.flag ? (
-                              <img
-                                src={`https://flagcdn.com/${opt.flag}.svg`}
-                                srcSet={`https://flagcdn.com/w40/${opt.flag}.png 2x, https://flagcdn.com/w20/${opt.flag}.png 1x`}
-                                alt="flag"
-                                className="w-5 h-5 object-contain rounded-sm"
-                                onError={(e) => { if (!e.target.dataset.fallback) { e.target.dataset.fallback = '1'; e.target.src = `https://flagcdn.com/w40/${opt.flag}.png`; } }}
-                              />
-                            ) : (opt.code === 'all' || opt.code === 'All') ? (
-                              <i className="bi bi-globe text-gray-400" style={{ fontSize: '16px', lineHeight: '16px' }}></i>
-                            ) : null}
-                            <span>{opt.label}</span>
-                          </span>
+                          {opt.flag ? (
+                            <img
+                              src={`https://flagcdn.com/${opt.flag}.svg`}
+                              srcSet={`https://flagcdn.com/w40/${opt.flag}.png 2x, https://flagcdn.com/w20/${opt.flag}.png 1x`}
+                              alt="flag"
+                              className="w-5 h-5 object-contain rounded-sm"
+                              onError={(e) => { if (!e.target.dataset.fallback) { e.target.dataset.fallback = '1'; e.target.src = `https://flagcdn.com/w40/${opt.flag}.png`; } }}
+                            />
+                          ) : (opt.code === 'all' || opt.code === 'All') ? (
+                            <i className="bi bi-globe text-gray-400 dark:text-white" style={{ fontSize: '16px', lineHeight: '16px' }}></i>
+                          ) : null}
+                          <span>{opt.label}</span>
+                        </span>
                         {/* Removed check icon per request */}
                       </button>
                     ))}
@@ -1056,26 +1103,30 @@ export default function Calendar() {
                 )}
               </div>
               <div className="relative w-full md:w-auto">
-                <input type="text" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search..." className="bg-white pl-3 sm:pl-4 pr-10 py-2 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#0B102A] focus:border-transparent w-full md:w-64 text-xs sm:text-sm shadow-sm h-[37.33px]" />
-                <i className="bi bi-search absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400" style={{ fontSize: 14 }} />
+                <input type="text" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search..." className="bg-white dark:bg-[#595959] dark:border-none text-gray-900 dark:text-white placeholder:text-gray-400 placeholder:dark:text-white/70 pl-3 sm:pl-4 pr-10 py-2 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#0B102A] dark:focus:ring-0 w-full md:w-64 text-xs sm:text-sm shadow-sm h-[37.33px]" />
+                <i className="bi bi-search absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 dark:text-white" style={{ fontSize: 14 }} />
               </div>
             </div>
 
             <div className="flex flex-col md:flex-row md:items-end md:justify-between mb-2 gap-2">
               <div className="overflow-x-auto pb-1">
-                <div className="inline-flex items-center gap-2 sm:gap-3 bg-white rounded-xl px-2 py-1.5 shadow-sm border border-gray-100 min-w-full sm:min-w-0">
-                  <span className="text-xs sm:text-sm font-semibold text-gray-700 whitespace-nowrap">Days</span>
+                <div className="inline-flex items-center gap-2 sm:gap-3 bg-white dark:bg-[#595959] dark:border-none dark:text-white rounded-xl px-2 py-1.5 shadow-sm border border-gray-100 min-w-full sm:min-w-0">
+                  <span className="text-xs sm:text-sm font-semibold text-gray-700 dark:text-white whitespace-nowrap">Days</span>
                   <div className="flex justify-between flex-1 sm:gap-2">
-                    {["All", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].map((day) => {
+                    {["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].map((day) => {
                       const isSelected = selectedDay === day;
-                      const shortDay = day === "All" ? "All" : day.substring(0, 3);
+                      const shortDay = day.substring(0, 3);
                       return (
                         <button
                           key={day}
-                          onClick={() => { setSelectedDay(day); trackFilter('day', day); }}
+                          onClick={() => {
+                            const nextDay = isSelected ? "All" : day;
+                            setSelectedDay(nextDay);
+                            trackFilter('day', nextDay);
+                          }}
                           className={`px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-lg text-[10px] sm:text-xs font-bold transition-all whitespace-nowrap ${isSelected
-                            ? "bg-[#0B102A] text-white ring-2 ring-offset-1 ring-black/10 shadow-md scale-105"
-                            : "text-gray-600 opacity-60 hover:opacity-100"
+                            ? "bg-[#0B102A] text-white ring-2 ring-offset-1 ring-black/10 shadow-md scale-105 dark:bg-[#4A4A4A] dark:ring-white/20"
+                            : "text-gray-600 opacity-60 hover:opacity-100 dark:text-white dark:opacity-60 dark:hover:opacity-100"
                             }`}
                         >
                           <span className="hidden sm:inline">{day}</span>
@@ -1098,7 +1149,7 @@ export default function Calendar() {
               <button
                 onClick={forceRefresh}
                 disabled={loading}
-                className="text-green-600 hover:text-green-700 font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                className="text-green-600 dark:text-[#4CE60F] hover:text-green-700 dark:hover:text-[#4CE60F]/80 font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
                 title="Refresh earnings data"
               >
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -1121,17 +1172,15 @@ export default function Calendar() {
 
         {/* Main Content - Scrollable */}
         <div className="flex-1 overflow-hidden pb-6 sm:pb-10 -mt-2 md:mt-9 px-4 sm:px-0">
-          <div className="h-full bg-white rounded-xl shadow-[0_2px_10px_rgba(0,0,0,0.03)] border border-gray-100 overflow-auto hide-scrollbar">
+          <div className="h-full bg-white dark:bg-[#0B0E14] dark:border-white/10 dark:text-white rounded-xl shadow-[0_2px_10px_rgba(0,0,0,0.03)] overflow-auto hide-scrollbar">
 
             {/* Mobile Card View */}
-            <div className="block lg:hidden p-3">
+            <div className="block lg:hidden">
               <div className="space-y-3">
                 {loading ? (
-                  <div className="py-12 flex flex-col items-center justify-center gap-3 text-center text-gray-500 text-sm">
-                    <div className="text-lg font-semibold">Loading data...</div>
-                  </div>
+                  <CalendarCardSkeleton count={8} />
                 ) : sortedEarnings.length === 0 ? (
-                  <div className="py-12 flex flex-col items-center justify-center gap-3 text-center text-gray-700">
+                  <div className="py-12 flex flex-col items-center justify-center gap-3 text-center text-gray-700 dark:text-gray-200">
                     <div className="empty-icon-wrapper">
                       <svg className="empty-icon empty-pulse w-28 h-28 ml-4" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden>
                         <rect x="6" y="10" width="52" height="44" rx="6" fill="#F0F7FF" stroke="#D4E8FF" strokeWidth="1.5" />
@@ -1157,14 +1206,14 @@ export default function Calendar() {
                     const displayRevAct = isFuture ? "-" : e.revenueActual;
 
                     const bgColor = e.isNew
-                      ? "bg-blue-50 border-l-4 border-l-blue-600"
-                      : "bg-white";
+                      ? "bg-blue-50 dark:bg-blue-900/30 border-l-4 border-l-blue-600 dark:border-l-blue-500"
+                      : "bg-white dark:bg-[#23262A] dark:border-white/10 dark:text-white";
 
                     return (
                       <div
                         key={i}
                         onClick={() => e.isNew && markAsSeen(e.earningId)}
-                        className={`rounded-xl shadow-sm border border-gray-200 p-3 cursor-pointer hover:shadow-md transition-shadow ${bgColor}`}
+                        className={`rounded-xl shadow-sm border border-gray-200 dark:border-white/10 p-3 cursor-pointer hover:shadow-md transition-shadow ${bgColor}`}
                       >
                         {/* Header */}
                         <div className="flex items-start justify-between mb-2">
@@ -1174,7 +1223,7 @@ export default function Calendar() {
                                 <img
                                   src={(() => {
                                     const companyName = e.company || '';
-                                    const slug = getLogoSlug(companyName);
+                                    const slug = getCalendarLogoSlug(companyName, e.ticker);
                                     return `https://s3-symbol-logo.tradingview.com/${slug}.svg`;
                                   })()}
                                   alt={e.ticker}
@@ -1189,7 +1238,7 @@ export default function Calendar() {
                             </div>
                             <div className="flex-1 min-w-0">
                               <div className="font-bold text-[#2F80ED] text-sm truncate">{e.ticker}</div>
-                              <div className="text-xs text-gray-600 truncate">{e.company}</div>
+                              <div className="text-xs text-gray-600 truncate dark:text-gray-300">{e.company}</div>
                             </div>
                           </div>
                           <div className="flex-shrink-0">
@@ -1198,36 +1247,32 @@ export default function Calendar() {
                         </div>
 
                         {/* Dates */}
-                        <div className="grid grid-cols-2 gap-2 mb-2 pb-2 border-b border-gray-100">
+                        <div className="grid grid-cols-2 gap-2 mb-2 pb-2 border-b border-gray-400">
                           <div className="text-left">
-                            <div className="text-[10px] text-gray-500">Earnings Date</div>
-                            <div className="text-xs text-gray-800 font-medium">{formatDate(e.date)}</div>
+                            <div className="text-[10px] text-gray-500 dark:text-gray-400">Earnings Date</div>
+                            <div className="text-xs text-gray-900 dark:text-white font-medium">{formatDate(e.date)}</div>
                           </div>
                           <div className="text-right">
-                            <div className="text-[10px] text-gray-500">Period End</div>
-                            <div className="text-xs text-gray-800 font-medium">{formatDate(e.period)}</div>
+                            <div className="text-[10px] text-gray-500 dark:text-gray-400">Period End</div>
+                            <div className="text-xs text-gray-900 dark:text-white font-medium">{formatDate(e.period)}</div>
                           </div>
                         </div>
 
                         {/* DR Info */}
                         {(e.mostPopularDR || e.highSensitivityDR) && (
-                          <div className="grid grid-cols-2 gap-2 mb-2 pb-2 border-b border-gray-100">
+                          <div className="grid grid-cols-2 gap-2 mb-2 pb-2 border-b border-gray-400">
                             {e.mostPopularDR && (
                               <div className="text-left">
-                                <div className="text-[10px] text-gray-500">Popular DR</div>
-                                <div className="font-bold text-[#50B728] text-xs truncate">{e.mostPopularDR.symbol}</div>
-                                {e.mostPopularDR.volume > 0 && (
-                                  <div className="text-[10px] text-gray-600">Vol: {formatInt(e.mostPopularDR.volume)}</div>
-                                )}
+                                <div className="text-[10px] text-gray-500 dark:text-white/60">Popular DR</div>
+                                <div className="font-bold text-[#50B728] dark:text-[#4CE60F] text-xs truncate">{e.mostPopularDR.symbol}</div>
+                                <div className="text-[10px] text-gray-600 dark:text-white/80">Vol: {e.mostPopularDR.volume > 0 ? formatInt(e.mostPopularDR.volume) : "-"}</div>
                               </div>
                             )}
                             {e.highSensitivityDR && (
                               <div className="text-right">
-                                <div className="text-[10px] text-gray-500">Sensitivity DR</div>
+                                <div className="text-[10px] text-gray-500 dark:text-white/60">Sensitivity DR</div>
                                 <div className="font-bold text-[#0007DE] text-xs truncate">{e.highSensitivityDR.symbol}</div>
-                                {e.highSensitivityDR.bid > 0 && (
-                                  <div className="text-[10px] text-gray-600">Bid: {formatPrice(e.highSensitivityDR.bid)}</div>
-                                )}
+                                <div className="text-[10px] text-gray-600 dark:text-white/80">Bid: {e.highSensitivityDR.bid > 0 ? formatPrice(e.highSensitivityDR.bid) : "-"}</div>
                               </div>
                             )}
                           </div>
@@ -1236,27 +1281,27 @@ export default function Calendar() {
                         {/* EPS & Revenue */}
                         <div className="grid grid-cols-2 gap-2 text-xs">
                           <div className="text-left">
-                            <div className="text-[10px] text-gray-500">EPS Est.</div>
+                            <div className="text-[10px] text-gray-500 dark:text-gray-400">EPS Est.</div>
                             <div className="flex justify-start">{formatColoredValue(e.epsEstimate, e.currency)}</div>
                           </div>
                           <div className="text-right">
-                            <div className="text-[10px] text-gray-500">EPS Rep.</div>
+                            <div className="text-[10px] text-gray-500 dark:text-gray-400">EPS Rep.</div>
                             <div>{formatColoredValue(displayEpsRep, e.currency)}</div>
                           </div>
                           <div className="text-left">
-                            <div className="text-[10px] text-gray-500">Surprise</div>
+                            <div className="text-[10px] text-gray-500 dark:text-gray-400">Surprise</div>
                             <div className="flex justify-start">{formatColoredValue(displaySurprise, "", e.currency)}</div>
                           </div>
                           <div className="text-right">
-                            <div className="text-[10px] text-gray-500">%Surprise</div>
+                            <div className="text-[10px] text-gray-500 dark:text-gray-400">%Surprise</div>
                             <div>{formatColoredValue(displayPctSurprise, "%")}</div>
                           </div>
                           <div className="text-left">
-                            <div className="text-[10px] text-gray-500">Rev Forecast</div>
+                            <div className="text-[10px] text-gray-500 dark:text-gray-400">Rev Forecast</div>
                             <div className="flex justify-start">{formatValue(e.revenueForecast, e.currency, true)}</div>
                           </div>
                           <div className="text-right">
-                            <div className="text-[10px] text-gray-500">Rev Actual</div>
+                            <div className="text-[10px] text-gray-500 dark:text-gray-400">Rev Actual</div>
                             <div>{formatValue(displayRevAct, e.currency, true)}</div>
                           </div>
                         </div>
@@ -1308,23 +1353,15 @@ export default function Calendar() {
                   ))}
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-100">
+              <tbody className="">
                 {loading ? (
-                  <tr>
-                    <td colSpan={10} className="p-0">
-                      <div className="w-full h-[50vh] flex items-center justify-start pl-140">
-                        <div className="text-center text-gray-500">
-                          <div className="text-xl font-semibold">Loading data...</div>
-                        </div>
-                      </div>
-                    </td>
-                  </tr>
+                  <CalendarTableSkeleton rows={12} />
                 ) : sortedEarnings.length === 0 ? (
                   <tr>
                     <td colSpan={10} className="p-0">
                       <div className="w-full h-[50vh] flex items-center justify-start pl-117">
                         <div className="text-center">
-                            <div className="empty-icon-wrapper mb-4">
+                          <div className="empty-icon-wrapper mb-4">
                             <svg className="empty-icon empty-pulse w-36 h-36 ml-20" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden>
                               <rect x="6" y="10" width="52" height="44" rx="6" fill="#F0F7FF" stroke="#D4E8FF" strokeWidth="1.5" />
                               <rect x="10" y="6" width="12" height="8" rx="2" fill="#2F80ED" />
@@ -1337,9 +1374,9 @@ export default function Calendar() {
                               </g>
                             </svg>
                           </div>
-                          <div className="text-2xl font-semibold text-gray-700">No upcoming earnings</div>
+                          <div className="text-2xl font-semibold text-gray-700 dark:text-gray-200">No upcoming earnings</div>
                           <div className="text-sm text-gray-500">You're all caught up — no scheduled earnings.</div>
-                          </div>
+                        </div>
                       </div>
                     </td>
                   </tr>
@@ -1351,15 +1388,14 @@ export default function Calendar() {
                     const displayPctSurprise = isFuture ? "-" : e.pctSurprise;
                     const displayRevAct = isFuture ? "-" : e.revenueActual;
 
-                    const bgColor = e.isNew
-                      ? "bg-blue-100 border-l-4 border-l-blue-600"
-                      : i % 2 === 0 ? "bg-white" : "bg-[#F7F8FA]";
+                    const rowBg = i % 2 === 0 ? "bg-[#FFFFFF] dark:bg-[#2D3136]" : "bg-[#F3F4F6] dark:bg-[#24272B]";
+                    const highlightClass = e.isNew ? "bg-blue-50 dark:bg-blue-900/30 border-l-4 border-l-blue-600 dark:border-l-blue-500" : rowBg;
 
                     return (
                       <tr
                         key={i}
-                        className={`transition-colors ${bgColor} hover:bg-gray-50 cursor-pointer`}
-                        style={{ height: "52px" }}
+                        className={`transition-colors duration-200 ${highlightClass} hover:bg-gray-50 dark:hover:bg-white/5 dark:text-white cursor-pointer`}
+                        style={{ height: "53.6px" }}
                         onClick={() => e.isNew && markAsSeen(e.earningId)}
                       >
                         <td className="px-4 align-middle overflow-hidden" style={{ width: '250px', maxWidth: '250px' }}>
@@ -1369,7 +1405,7 @@ export default function Calendar() {
                                 <img
                                   src={(() => {
                                     const companyName = e.company || '';
-                                    const slug = getLogoSlug(companyName);
+                                    const slug = getCalendarLogoSlug(companyName, e.ticker);
                                     return `https://s3-symbol-logo.tradingview.com/${slug}.svg`;
                                   })()}
                                   alt={e.ticker}
@@ -1384,42 +1420,38 @@ export default function Calendar() {
                             </div>
                             <div className="flex flex-col overflow-hidden w-full min-w-0">
                               <span className="font-bold text-[#2F80ED] text-[14.4px] leading-tight truncate" title={e.ticker}>{e.ticker}</span>
-                              <span className="text-[12.4px] text-gray-600 truncate w-full mt-0.5" title={e.company}>{e.company}</span>
+                              <span className="text-[12.4px] text-gray-500 dark:text-white/80 truncate" title={e.company}>{e.company}</span>
                             </div>
                           </div>
                         </td>
-                        <td className="px-4 align-middle text-right text-gray-800 font-medium whitespace-nowrap">
+                        <td className="px-4 align-middle text-right text-gray-800 dark:text-white font-medium whitespace-nowrap">
                           {formatDate(e.date)}
                         </td>
-                        <td className="px-4 align-middle text-right text-gray-800 font-medium whitespace-nowrap">
+                        <td className="px-4 align-middle text-right text-gray-800 dark:text-white font-medium whitespace-nowrap">
                           {formatDate(e.period)}
                         </td>
                         <td className="px-4 align-middle text-center">
                           {e.mostPopularDR ? (
                             <div className="flex flex-col items-center gap-0.5">
-                              <span className="font-bold text-[#50B728]">{e.mostPopularDR.symbol}</span>
-                              {e.mostPopularDR.volume > 0 ? (
-                                <span className="text-gray-600 text-[13.4px]">Vol: {formatInt(e.mostPopularDR.volume)}</span>
-                              ) : null}
+                              <span className="font-bold text-[#50B728] dark:text-[#4CE60F]">{e.mostPopularDR.symbol}</span>
+                              <span className="text-gray-600 dark:text-white/80 text-[13.4px]">Vol: {e.mostPopularDR.volume > 0 ? formatInt(e.mostPopularDR.volume) : "-"}</span>
                             </div>
-                          ) : <span className="text-gray-600">-</span>}
+                          ) : <span className="text-gray-600 dark:text-white/60">-</span>}
                         </td>
                         <td className="px-4 align-middle text-center">
                           {e.highSensitivityDR ? (
                             <div className="flex flex-col items-center gap-0.5">
-                              <span className="font-bold text-[#0007DE]">{e.highSensitivityDR.symbol}</span>
-                              {e.highSensitivityDR.bid > 0 ? (
-                                <span className="text-gray-600 text-[13.4px]">Bid: <span className="font-mono">{formatPrice(e.highSensitivityDR.bid)}</span></span>
-                              ) : null}
+                              <span className="font-bold text-[#0007DE] dark:text-[#4A90FF]">{e.highSensitivityDR.symbol}</span>
+                              <span className="text-gray-600 dark:text-white/80 text-[13.4px]">Bid: {e.highSensitivityDR.bid > 0 ? <span className="font-mono">{formatPrice(e.highSensitivityDR.bid)}</span> : "-"}</span>
                             </div>
-                          ) : <span className="text-gray-600">-</span>}
+                          ) : <span className="text-gray-600 dark:text-white/60">-</span>}
                         </td>
-                        <td className="px-4 align-middle text-right text-gray-800 font-medium">{formatColoredValue(e.epsEstimate, e.currency)}</td>
-                        <td className="px-4 align-middle text-right text-gray-800 font-semibold">{formatColoredValue(displayEpsRep, e.currency)}</td>
+                        <td className="px-4 align-middle text-right text-gray-800 dark:text-white font-medium">{formatColoredValue(e.epsEstimate, e.currency)}</td>
+                        <td className="px-4 align-middle text-right text-gray-800 dark:text-white font-semibold">{formatColoredValue(displayEpsRep, e.currency)}</td>
                         {/* Surprise and %Surprise columns removed */}
-                        <td className="px-4 align-middle text-right text-gray-800 font-medium">{formatValue(e.revenueForecast, e.currency, true)}</td>
-                        <td className="px-4 align-middle text-right text-gray-800 font-semibold">{formatValue(displayRevAct, e.currency, true)}</td>
-                        <td className="px-4 align-middle text-center text-gray-800 font-medium">{formatMarketCapValue(e.marketCap, e.currency, true)}</td>
+                        <td className="px-4 align-middle text-right text-gray-800 dark:text-white font-medium">{formatValue(e.revenueForecast, e.currency, true)}</td>
+                        <td className="px-4 align-middle text-right text-gray-800 dark:text-white font-semibold">{formatValue(displayRevAct, e.currency, true)}</td>
+                        <td className="px-4 align-middle text-center text-gray-800 dark:text-white font-medium">{formatMarketCapValue(e.marketCap, e.currency, true)}</td>
                       </tr>
                     );
                   })

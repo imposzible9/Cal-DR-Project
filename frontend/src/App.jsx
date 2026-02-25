@@ -1,5 +1,5 @@
 import { Routes, Route, useLocation } from "react-router-dom";
-import { useEffect, lazy, Suspense } from "react";
+import { useEffect, useRef, lazy, Suspense } from "react";
 import { Navbar, SuggestionPage, DRCal, DRList, CalendarPage, News } from "./components";
 import { initTracker, trackPageView, trackHeartbeat } from "./utils/tracker";
 
@@ -17,6 +17,9 @@ const PAGE_NAMES = {
   "/stats": "Stats",
   "/caldr/stats": "Stats"
 };
+
+// Module-level guard to prevent double tracking on initial mount (React 18 StrictMode)
+let globalHasTrackedInitial = false;
 
 function App() {
   const location = useLocation();
@@ -42,7 +45,7 @@ function App() {
   const shouldShowNavbar = !location.pathname.includes("/stats");
 
   return (
-    <>
+    <div className="min-h-screen bg-gray-50 dark:bg-dark-main text-gray-900 dark:text-white transition-colors duration-300">
       {shouldShowNavbar && <Navbar />}
 
       <Routes>
@@ -70,7 +73,7 @@ function App() {
         />
         <Route path="*" element={<DRList />} />
       </Routes>
-    </>
+    </div>
   );
 }
 
