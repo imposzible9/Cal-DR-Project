@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import axios from 'axios';
 import { API_CONFIG } from '../config/api';
+import { NewsSkeleton } from './SkeletonLoader';
 
 const TH_QUERY = "ตลาดหุ้น OR ภาวะตลาดหุ้น OR หุ้นไทย";
 const EN_QUERY = "US Stock Market OR S&P 500";
@@ -156,22 +157,22 @@ const NewsCard = ({ ticker, quote, news }) => {
   const isPositive = quote && quote.change_pct >= 0;
 
   // Define classes based on sentiment
-  const containerClasses = "bg-white rounded-xl border border-gray-200 p-6 hover:shadow-md transition-shadow flex flex-col md:flex-row gap-6 items-start";
+  const containerClasses = "bg-white dark:bg-[#23262A] dark:border-white/10 dark:text-white rounded-xl border border-gray-200 dark:border-white/10 p-6 hover:shadow-md transition-shadow flex flex-col md:flex-row gap-6 items-start";
 
   return (
     <a href={news.url} target="_blank" rel="noreferrer" className="block group">
       <div className={containerClasses}>
         {ticker && quote && (
-          <div className="flex-shrink-0 w-full md:w-[120px] bg-[#F9FAFB] rounded-lg border border-gray-100 p-3 flex flex-col items-center justify-center text-center gap-2">
+          <div className="flex-shrink-0 w-full md:w-[120px] bg-black/5 dark:bg-white/10 rounded-lg border border-gray-100 dark:border-white/10 p-3 flex flex-col items-center justify-center text-center gap-2">
             <div className="w-10 h-10 rounded-full bg-white/80 flex items-center justify-center overflow-hidden">
               {quote.logo_url ? (
                 <img src={quote.logo_url} alt={ticker} className="w-full h-full object-contain" />
               ) : (
-                <span className="text-sm font-bold text-gray-900">{ticker[0]}</span>
+                <span className="text-sm font-bold text-gray-900 dark:text-white">{ticker[0]}</span>
               )}
             </div>
-            <div className="text-sm font-bold text-gray-900">{ticker}</div>
-            <div className={`text-xs font-bold ${isPositive ? 'text-[#137333]' : 'text-[#C5221F]'}`}>
+            <div className="text-sm font-bold text-gray-900 dark:text-white">{ticker}</div>
+            <div className={`text-xs font-bold ${isPositive ? 'text-[#137333] dark:text-[#4CE60F]' : 'text-[#C5221F] dark:text-[#F87171]'}`}>
               {isPositive ? '+' : ''}{quote.change_pct?.toFixed(2)}%
             </div>
           </div>
@@ -179,10 +180,10 @@ const NewsCard = ({ ticker, quote, news }) => {
 
         {/* Content */}
         <div className="flex-1 min-w-0">
-          <h3 className="text-base font-bold text-gray-900 mb-2 group-hover:text-blue-600 transition-colors">
+          <h3 className="text-base font-bold text-gray-900 dark:text-white mb-2 group-hover:text-blue-600 transition-colors">
             {news.title}
           </h3>
-          <p className="text-sm text-gray-600 mb-3 line-clamp-2">
+          <p className="text-sm text-gray-600 dark:text-white/70 mb-3 line-clamp-2">
             {news.summary}
           </p>
           <div className="flex items-center gap-2 text-xs text-gray-500">
@@ -305,31 +306,31 @@ const News = () => {
       try {
         let merged = [];
         let symbolsToFetch = DEFAULT_SYMBOLS;
-        
+
         if (country === "all") {
-            // Fetch from optimized backend endpoint
-            const res = await axios.get(API_CONFIG.endpoints.news.globalNews, { 
-        params: { limit: 10, trusted_only: true } 
-      });
-            merged = res.data?.news || [];
+          // Fetch from optimized backend endpoint
+          const res = await axios.get(API_CONFIG.endpoints.news.globalNews, {
+            params: { limit: 10, trusted_only: true }
+          });
+          merged = res.data?.news || [];
         } else {
-            // Specific country
-            const config = COUNTRY_CONFIG[country];
-            if (config) {
-                symbolsToFetch = config.symbols;
-                const res = await axios.get(API_CONFIG.endpoints.news.getNews(encodeURIComponent(config.query)), { 
-                    params: { limit: 40, language: config.lang, hours: 72, country: country.toLowerCase(), trusted_only: true } 
-                });
-                if (!mounted) return;
-                merged = res.data?.news || [];
-            } else {
-                // Fallback
-                const res = await axios.get(API_CONFIG.endpoints.news.getNews(encodeURIComponent(EN_QUERY)), { 
-                    params: { limit: 40, language: "en", hours: 72, country: country.toLowerCase(), trusted_only: true } 
-                });
-                if (!mounted) return;
-                merged = res.data?.news || [];
-            }
+          // Specific country
+          const config = COUNTRY_CONFIG[country];
+          if (config) {
+            symbolsToFetch = config.symbols;
+            const res = await axios.get(API_CONFIG.endpoints.news.getNews(encodeURIComponent(config.query)), {
+              params: { limit: 40, language: config.lang, hours: 72, country: country.toLowerCase(), trusted_only: true }
+            });
+            if (!mounted) return;
+            merged = res.data?.news || [];
+          } else {
+            // Fallback
+            const res = await axios.get(API_CONFIG.endpoints.news.getNews(encodeURIComponent(EN_QUERY)), {
+              params: { limit: 40, language: "en", hours: 72, country: country.toLowerCase(), trusted_only: true }
+            });
+            if (!mounted) return;
+            merged = res.data?.news || [];
+          }
         }
 
         merged.sort((a, b) => {
@@ -340,90 +341,90 @@ const News = () => {
 
         // Load Default Updates (Optimized Batch Fetch)
         try {
-            const batchParams = {
-                symbols: symbolsToFetch,
-                hours: 72,
-                limit: 2
+          const batchParams = {
+            symbols: symbolsToFetch,
+            hours: 72,
+            limit: 2
+          };
+
+          // Pass country context if specific country is selected
+          if (country !== "all") {
+            const config = COUNTRY_CONFIG[country];
+            if (config) {
+              batchParams.country = country.toLowerCase();
+              batchParams.language = config.lang;
+            }
+          }
+
+          const batchRes = await axios.post(API_CONFIG.endpoints.news.batchTickerData, batchParams);
+
+          if (mounted) {
+            const updates = batchRes.data?.data || [];
+            const toMs = (v) => typeof v === "number" ? v * 1000 : (new Date(v).getTime() || 0);
+
+            const getPriority = (t) => {
+              if (!t) return 99;
+              const u = t.toUpperCase();
+              if (u.endsWith(".BK")) return 2;
+              if (u.endsWith(".HK")) return 3;
+              if (u.endsWith(".SS") || u.endsWith(".SZ")) return 4;
+              if (u.endsWith(".VN")) return 5;
+              if (u.endsWith(".SI")) return 6;
+              if (u.endsWith(".T")) return 7;
+              if (u.includes(".")) return 8; // Other suffixes
+              return 1; // US (No suffix)
             };
-            
-            // Pass country context if specific country is selected
-            if (country !== "all") {
-                const config = COUNTRY_CONFIG[country];
-                if (config) {
-                    batchParams.country = country.toLowerCase();
-                    batchParams.language = config.lang;
-                }
+
+            // Sort updates by date descending (Newest first), then by market priority
+            updates.sort((a, b) => {
+              const timeA = toMs(a.news.published_at);
+              const timeB = toMs(b.news.published_at);
+              if (timeA !== timeB) return timeB - timeA;
+              return getPriority(a.ticker) - getPriority(b.ticker);
+            });
+
+            setDefaultUpdates(updates);
+
+            // Merge general news and company updates for "Top Stories"
+            const combinedNews = [
+              ...merged.map(item => ({ news: item })), // Wrap general news
+              ...updates // Company news already has { news, ticker, quote }
+            ];
+
+            // Sort combined news using the same logic (Date > Priority)
+            combinedNews.sort((a, b) => {
+              const timeA = toMs(a.news.published_at);
+              const timeB = toMs(b.news.published_at);
+              if (timeA !== timeB) return timeB - timeA;
+              return getPriority(a.ticker) - getPriority(b.ticker);
+            });
+
+            const newCacheData = {
+              marketNews: combinedNews,
+              defaultUpdates: updates
+            };
+
+            // Check if data actually changed to avoid unnecessary re-renders
+            let hasChanged = true;
+            if (cached) {
+              // Simple string comparison for deep equality
+              // Note: This assumes deterministic ordering, which JSON.stringify usually provides for simple objects
+              const cachedStr = JSON.stringify({ marketNews: cached.marketNews, defaultUpdates: cached.defaultUpdates });
+              const newStr = JSON.stringify(newCacheData);
+              if (cachedStr === newStr) {
+                hasChanged = false;
+              }
             }
 
-            const batchRes = await axios.post(API_CONFIG.endpoints.news.batchTickerData, batchParams);
-            
-            if (mounted) {
-                const updates = batchRes.data?.data || [];
-                const toMs = (v) => typeof v === "number" ? v * 1000 : (new Date(v).getTime() || 0);
-                
-                const getPriority = (t) => {
-                     if (!t) return 99;
-                     const u = t.toUpperCase();
-                     if (u.endsWith(".BK")) return 2;
-                     if (u.endsWith(".HK")) return 3;
-                     if (u.endsWith(".SS") || u.endsWith(".SZ")) return 4;
-                     if (u.endsWith(".VN")) return 5;
-                     if (u.endsWith(".SI")) return 6;
-                     if (u.endsWith(".T")) return 7;
-                     if (u.includes(".")) return 8; // Other suffixes
-                     return 1; // US (No suffix)
-                 };
-
-                 // Sort updates by date descending (Newest first), then by market priority
-                 updates.sort((a, b) => {
-                     const timeA = toMs(a.news.published_at);
-                     const timeB = toMs(b.news.published_at);
-                     if (timeA !== timeB) return timeB - timeA;
-                     return getPriority(a.ticker) - getPriority(b.ticker);
-                 });
-                
-                setDefaultUpdates(updates);
-
-                // Merge general news and company updates for "Top Stories"
-                const combinedNews = [
-                  ...merged.map(item => ({ news: item })), // Wrap general news
-                  ...updates // Company news already has { news, ticker, quote }
-                ];
-
-                // Sort combined news using the same logic (Date > Priority)
-                combinedNews.sort((a, b) => {
-                     const timeA = toMs(a.news.published_at);
-                     const timeB = toMs(b.news.published_at);
-                     if (timeA !== timeB) return timeB - timeA;
-                     return getPriority(a.ticker) - getPriority(b.ticker);
-                });
-                
-                const newCacheData = {
-                  marketNews: combinedNews,
-                  defaultUpdates: updates
-                };
-
-                // Check if data actually changed to avoid unnecessary re-renders
-                let hasChanged = true;
-                if (cached) {
-                    // Simple string comparison for deep equality
-                    // Note: This assumes deterministic ordering, which JSON.stringify usually provides for simple objects
-                    const cachedStr = JSON.stringify({ marketNews: cached.marketNews, defaultUpdates: cached.defaultUpdates });
-                    const newStr = JSON.stringify(newCacheData);
-                    if (cachedStr === newStr) {
-                        hasChanged = false;
-                    }
-                }
-                
-                if (hasChanged) {
-                    setMarketNews(combinedNews);
-                    setDefaultUpdates(updates);
-                    // Save to Cache
-                    setCache(currentCacheKey, newCacheData);
-                }
+            if (hasChanged) {
+              setMarketNews(combinedNews);
+              setDefaultUpdates(updates);
+              // Save to Cache
+              setCache(currentCacheKey, newCacheData);
             }
+          }
         } catch (e) {
-            console.error("Failed to load batch updates", e);
+          console.error("Failed to load batch updates", e);
         }
 
       } catch (e) {
@@ -467,13 +468,13 @@ const News = () => {
       } else {
         setLoadingSearch(true);
       }
-      
+
       setErrorSearch("");
 
       // Determine query symbol (append .BK for Thai stocks if missing)
       let querySymbol = selected;
       const match = allSymbols.find(s => s.symbol === selected);
-      
+
       // If backend already provides .BK (which it does now), we don't need to add it again.
       // But if the user manually typed "DELTA" and it matched a SET stock that hasn't been suffixed yet (unlikely with new backend),
       // we might need logic. 
@@ -488,7 +489,7 @@ const News = () => {
           axios.get(API_CONFIG.endpoints.news.companyNews(encodeURIComponent(querySymbol)), { params: { hours: 168, limit: 30 } }),
         ]);
         if (!mounted) return;
-        
+
         const newQuote = qRes.data || null;
         const newNews = nRes.data?.news || [];
 
@@ -499,28 +500,28 @@ const News = () => {
 
         let hasChanged = true;
         if (cached) {
-             const cachedStr = JSON.stringify({ quote: cached.quote, symbolNews: cached.symbolNews });
-             const newStr = JSON.stringify(newCacheData);
-             if (cachedStr === newStr) {
-                 hasChanged = false;
-             }
+          const cachedStr = JSON.stringify({ quote: cached.quote, symbolNews: cached.symbolNews });
+          const newStr = JSON.stringify(newCacheData);
+          if (cachedStr === newStr) {
+            hasChanged = false;
+          }
         }
 
         if (hasChanged) {
-            setQuote(newQuote);
-            setSymbolNews(newNews);
-            setCache(cacheKey, newCacheData);
+          setQuote(newQuote);
+          setSymbolNews(newNews);
+          setCache(cacheKey, newCacheData);
         }
 
       } catch (e) {
         console.error("Search error:", e);
         if (!mounted) return;
-        
+
         // Only show error if we don't have cached data displayed
         if (!cached) {
-            setErrorSearch("ไม่สามารถดึงข้อมูลได้ หรือ Symbol ไม่ถูกต้อง");
-            setQuote(null);
-            setSymbolNews([]);
+          setErrorSearch("ไม่สามารถดึงข้อมูลได้ หรือ Symbol ไม่ถูกต้อง");
+          setQuote(null);
+          setSymbolNews([]);
         }
       } finally {
         if (mounted) setLoadingSearch(false);
@@ -532,7 +533,7 @@ const News = () => {
 
   useEffect(() => {
     if (!selected) return;
-    
+
     let mounted = true;
     async function loadOverview() {
       // Add logic to load overview if needed or separate component
@@ -540,11 +541,11 @@ const News = () => {
       try {
         const res = await axios.get(API_CONFIG.endpoints.news.stockOverview(encodeURIComponent(selected)));
         if (mounted && res.data) {
-           // ... handle overview data if we had state for it
-           // currently not used in state?
+          // ... handle overview data if we had state for it
+          // currently not used in state?
         }
       } catch (e) {
-         // ignore
+        // ignore
       }
     }
     // loadOverview(); // Disabled for now as we focus on news
@@ -578,46 +579,46 @@ const News = () => {
 
   const updateSuggestions = (value) => {
     let filtered = allSymbols;
-    
+
     // Filter by Country if not "All"
     if (country !== "all") {
       filtered = filtered.filter(s => s.country === country);
-      
+
       // Strict filter for Thailand: Show ONLY Thai Stock Market symbols (ending with .BK)
       // This excludes DRs (which might be tagged as TH but lack .BK suffix)
       if (country === "TH") {
         filtered = filtered.filter(s => s.symbol.endsWith(".BK"));
       }
     }
-    
+
     if (value.length > 0) {
       filtered = filtered.filter(s => s.symbol.startsWith(value));
     }
 
     // Prioritize configured symbols (e.g. for Thailand)
     if (country !== "all" && COUNTRY_CONFIG[country] && COUNTRY_CONFIG[country].symbols) {
-        const preferredTickers = COUNTRY_CONFIG[country].symbols; // Ordered list
-        const preferredSet = new Set(preferredTickers);
-        
-        const preferred = [];
-        const others = [];
-        
-        filtered.forEach(s => {
-            if (preferredSet.has(s.symbol)) {
-                preferred.push(s);
-            } else {
-                others.push(s);
-            }
-        });
+      const preferredTickers = COUNTRY_CONFIG[country].symbols; // Ordered list
+      const preferredSet = new Set(preferredTickers);
 
-        // Sort preferred by index in preferredTickers to maintain specific order
-        preferred.sort((a, b) => {
-            return preferredTickers.indexOf(a.symbol) - preferredTickers.indexOf(b.symbol);
-        });
+      const preferred = [];
+      const others = [];
 
-        filtered = [...preferred, ...others];
+      filtered.forEach(s => {
+        if (preferredSet.has(s.symbol)) {
+          preferred.push(s);
+        } else {
+          others.push(s);
+        }
+      });
+
+      // Sort preferred by index in preferredTickers to maintain specific order
+      preferred.sort((a, b) => {
+        return preferredTickers.indexOf(a.symbol) - preferredTickers.indexOf(b.symbol);
+      });
+
+      filtered = [...preferred, ...others];
     }
-    
+
     setSuggestions(filtered.slice(0, 100));
     setShowSuggestions(true);
   };
@@ -654,15 +655,15 @@ const News = () => {
   let suggestionsContent = null;
   if (showSuggestions && suggestions.length > 0) {
     suggestionsContent = (
-      <div className="absolute top-full left-0 right-0 bg-white border border-gray-200 rounded-xl mt-1 shadow-lg z-50 max-h-60 overflow-y-auto">
+      <div className="absolute top-full left-0 right-0 bg-white dark:bg-[#595959] dark:border-none dark:text-white border border-gray-200 rounded-xl mt-1 shadow-lg z-50 max-h-60 overflow-y-auto hide-scrollbar">
         {suggestions.map((s, i) => (
           <div
             key={i}
-            className="px-4 py-2 hover:bg-gray-50 cursor-pointer flex justify-between items-center border-b border-gray-50 last:border-0"
+            className="px-4 py-2 hover:bg-gray-50 dark:hover:bg-[#4A4A4A] cursor-pointer flex justify-between items-center border-b border-gray-50 dark:border-none last:border-0"
             onClick={() => selectSuggestion(s)}
           >
             <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center overflow-hidden flex-shrink-0">
+              <div className="w-8 h-8 rounded-full bg-gray-100 dark:bg-[#4A4A4A] flex items-center justify-center overflow-hidden flex-shrink-0">
                 {s.logo ? (
                   <img
                     src={s.logo}
@@ -675,20 +676,20 @@ const News = () => {
                   />
                 ) : null}
                 <span
-                  className="text-xs font-bold text-gray-500"
+                  className="text-xs font-bold text-gray-500 dark:text-white/70"
                   style={{ display: s.logo ? 'none' : 'block' }}
                 >
                   {s.symbol[0]}
                 </span>
               </div>
-              <span className="font-bold text-[#0B102A]">{s.symbol}</span>
+              <span className="font-bold text-[#0B102A] dark:text-white">{s.symbol}</span>
               {s.exchange && (
-                <span className="text-xs font-medium text-gray-400 border border-gray-200 rounded px-1.5 py-0.5 bg-gray-50">
+                <span className="text-xs font-medium text-gray-400 border border-gray-200 dark:border-none rounded px-1.5 py-0.5 bg-gray-50 dark:bg-[#4A4A4A] dark:text-white/80">
                   {s.exchange}
                 </span>
               )}
             </div>
-            <span className="text-xs text-gray-500 truncate max-w-[150px]">{s.name}</span>
+            <span className="text-xs text-gray-500 dark:text-white/70 truncate max-w-[150px]">{s.name}</span>
           </div>
         ))}
       </div>
@@ -696,14 +697,14 @@ const News = () => {
   }
 
   return (
-    <div className="min-h-screen w-full bg-[#F5F5F5] flex justify-center">
+    <div className="min-h-screen w-full bg-[#F5F5F5] dark:bg-[#0B0E14] flex justify-center">
       <div className="w-full max-w-[1248px] px-4 md:px-0 flex flex-col h-full py-6">
 
         {/* Header Section */}
         <div className="flex flex-col gap-3 sm:gap-6 mb-4 sm:mb-8 sm:pt-3">
           <div>
-            <h1 className="text-[20px] sm:text-[36px] font-bold mb-1 sm:mb-2 text-[#0B102A]">News</h1>
-            <p className="text-[#6B6B6B] text-xs sm:text-[19.2px] mb-2 sm:mb-4 ">Latest market updates, earnings reports, and insights for Underlying Assets</p>
+            <h1 className="text-[20px] sm:text-[36px] font-bold mb-1 sm:mb-2 text-[#0B102A] dark:text-white">News</h1>
+            <p className="text-[#6B6B6B] dark:text-white/70 text-xs sm:text-[19.2px] mb-2 sm:mb-4 ">Latest market updates, earnings reports, and insights for Underlying Assets</p>
           </div>
 
           <div className="w-full flex">
@@ -713,7 +714,7 @@ const News = () => {
                 <button
                   type="button"
                   onClick={() => setShowCountryMenu(!showCountryMenu)}
-                  className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 bg-white px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 w-full lg:w-[202.5px]"
+                  className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 dark:border-none bg-white dark:bg-[#595959] dark:text-white px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 dark:hover:bg-[#4A4A4A] focus:outline-none focus:ring-2 focus:ring-[#0B102A] dark:focus:ring-0 w-full lg:w-[202.5px]"
                   style={{ height: '37.33px', width: undefined }}
                 >
                   <span className="truncate flex items-center gap-2">
@@ -726,20 +727,20 @@ const News = () => {
                         onError={(e) => { if (!e.target.dataset.fallback) { e.target.dataset.fallback = '1'; e.target.src = `https://flagcdn.com/w40/${selectedCountryOption.flag}.png`; } }}
                       />
                     ) : (selectedCountryOption.code === 'all' || selectedCountryOption.code === 'All') ? (
-                      <i className="bi bi-globe text-gray-400" style={{ fontSize: '16px', lineHeight: '16px' }}></i>
+                      <i className="bi bi-globe text-gray-400 dark:text-white" style={{ fontSize: '16px', lineHeight: '16px' }}></i>
                     ) : null}
                     <span>{selectedCountryOption.label}</span>
                   </span>
-                  <svg className={`h-4 w-4 flex-shrink-0 transition-transform text-gray-500 ${showCountryMenu ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                  <svg className={`h-4 w-4 flex-shrink-0 transition-transform text-gray-500 dark:text-white ${showCountryMenu ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
                 </button>
 
                 {showCountryMenu && (
-                  <div className="absolute left-0 top-full z-[20000] mt-2 w-full sm:w-56 max-h-72 overflow-auto rounded-2xl border border-gray-200 bg-white shadow-[0_10px_30px_rgba(15,23,42,0.15)] py-1" style={{ transform: 'translateZ(0)' }}>
+                  <div className="absolute left-0 top-full z-[20000] mt-2 w-full sm:w-56 max-h-72 overflow-auto hide-scrollbar rounded-2xl border border-gray-200 dark:border-none bg-white dark:bg-[#595959] dark:text-white shadow-[0_10px_30px_rgba(15,23,42,0.15)] py-1" style={{ transform: 'translateZ(0)' }}>
                     {COUNTRY_OPTIONS.map((opt) => (
                       <button
                         key={opt.code}
                         onClick={() => { setCountry(opt.code); setShowCountryMenu(false); }}
-                        className={`flex w-full items-center justify-between px-4 py-1.5 text-left text-xs sm:text-sm transition-colors ${country === opt.code ? "bg-[#EEF2FF] text-[#0B102A] font-semibold" : "text-gray-700 hover:bg-gray-50"}`}
+                        className={`flex w-full items-center justify-between px-4 py-1.5 text-left text-xs sm:text-sm transition-colors ${country === opt.code ? "bg-[#EEF2FF] text-[#0B102A] font-semibold dark:bg-[#4A4A4A] dark:text-white" : "text-gray-700 dark:text-white hover:bg-gray-50 dark:hover:bg-[#4A4A4A]"}`}
                       >
                         <span className="flex items-center gap-2">
                           {opt.flag ? (
@@ -751,7 +752,7 @@ const News = () => {
                               onError={(e) => { if (!e.target.dataset.fallback) { e.target.dataset.fallback = '1'; e.target.src = `https://flagcdn.com/w40/${opt.flag}.png`; } }}
                             />
                           ) : (opt.code === 'all' || opt.code === 'All') ? (
-                            <i className="bi bi-globe text-gray-400" style={{ fontSize: '16px', lineHeight: '16px' }}></i>
+                            <i className="bi bi-globe text-gray-400 dark:text-white" style={{ fontSize: '16px', lineHeight: '16px' }}></i>
                           ) : null}
                           <span>{opt.label}</span>
                         </span>
@@ -770,13 +771,13 @@ const News = () => {
                   onKeyDown={onSearchKey}
                   onFocus={handleSearchFocus}
                   placeholder={country === 'all' ? "Search..." : `Search ${country} stocks...`}
-                className="w-full h-[37.33px] bg-white pl-3 pr-12 py-2 sm:pl-5 pr-12 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#0B102A] shadow-sm text-xs md:text-sm lg:w-[307.2px] lg:h-[44.79px] lg:text-[17px]"
+                  className="w-full h-[37.33px] bg-white dark:bg-[#595959] dark:border-none text-gray-900 dark:text-white placeholder:text-gray-400 placeholder:dark:text-white/70 pl-3 pr-12 py-2 sm:pl-5 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#0B102A] dark:focus:ring-0 shadow-sm text-xs md:text-sm lg:w-[307.2px] lg:h-[44.79px] lg:text-[17px]"
                   style={{ fontSize: undefined, boxSizing: 'border-box' }}
                 />
                 {search ? (
-                  <button onClick={clearSearch} className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"><i className="bi bi-x-lg" style={{fontSize: '19.2px', lineHeight: '19.2px'}}></i></button>
+                  <button onClick={clearSearch} className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:text-white/70 dark:hover:text-white"><i className="bi bi-x-lg" style={{ fontSize: '19.2px', lineHeight: '19.2px' }}></i></button>
                 ) : (
-                  <i className="bi bi-search absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 pointer-events-none lg:text-[16px] lg:leading-[16px]" style={{fontSize: '17px', lineHeight: '17px'}} />
+                  <i className="bi bi-search absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 dark:text-white pointer-events-none lg:text-[16px] lg:leading-[16px]" style={{ fontSize: '17px', lineHeight: '17px' }} />
                 )}
 
                 {/* Suggestions Dropdown */}
@@ -791,7 +792,7 @@ const News = () => {
           {selected ? (
             <div className="space-y-6">
               {loadingSearch ? (
-                <div className="animate-pulse h-32 bg-gray-200 rounded-xl" />
+                <NewsSkeleton />
               ) : errorSearch ? (
                 <div className="p-4 bg-red-50 text-red-600 rounded-xl">{errorSearch}</div>
               ) : (
@@ -819,7 +820,7 @@ const News = () => {
                   )}
 
                   <div>
-                    <h2 className="text-lg font-bold text-[#0B102A] mb-4">Latest News for {selected}</h2>
+                    <h2 className="text-lg font-bold text-[#0B102A] dark:text-white mb-4">Latest News for {selected}</h2>
                     <div className="flex flex-col gap-4">
                       {symbolNews.length > 0 ? symbolNews.map((news, idx) => <NewsCard key={idx} news={news} />) : (
                         <div className="text-gray-500 text-center py-10">No news available</div>
@@ -832,9 +833,9 @@ const News = () => {
           ) : (
             <div className="space-y-8">
               <div className="space-y-4">
-                <h2 className="text-lg sm:text-[20px] font-bold text-[#0B102A]">Top Stories</h2>
+                <h2 className="text-lg sm:text-[20px] font-bold text-[#0B102A] dark:text-white">Top Stories</h2>
                 {loadingHome ? (
-                  <div className="animate-pulse h-48 bg-gray-200 rounded-2xl" />
+                  <NewsSkeleton />
                 ) : topStory ? (
                   <a href={topStory.news.url} target="_blank" rel="noreferrer" className="block group">
                     <div className="bg-[#0B102A] rounded-2xl px-5 sm:px-7 md:px-8 py-4 sm:py-5 md:py-6 text-white relative overflow-hidden shadow-lg">
@@ -874,10 +875,10 @@ const News = () => {
               </div>
 
               <div className="space-y-4">
-                <h2 className="text-lg sm:text-[20px] font-bold text-[#0B102A]">Latest Updates</h2>
+                <h2 className="text-lg sm:text-[20px] font-bold text-[#0B102A] dark:text-white">Latest Updates</h2>
                 <div className="flex flex-col gap-4">
                   {loadingHome ? (
-                    Array.from({ length: 3 }).map((_, i) => <div key={i} className="animate-pulse h-24 bg-gray-100 rounded-xl" />)
+                    <NewsSkeleton />
                   ) : defaultUpdates.length > 0 ? (
                     defaultUpdates.map((item, idx) => <NewsCard key={idx} ticker={item.ticker} quote={item.quote} news={item.news} />)
                   ) : (

@@ -16,12 +16,12 @@ const StatsSummary = React.memo(({ summary, loading, processedPageData, totalVie
     return (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             {/* Card 1: Unique Visitors */}
-            <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 flex flex-col justify-between h-[300px]">
+            <div className="bg-white dark:bg-[#10172A] dark:border-white/10 dark:text-white rounded-2xl p-6 shadow-sm border border-gray-100 flex flex-col justify-between h-[300px]">
                 <div className="flex items-center gap-3 mb-4">
                     <div className="w-10 h-10 rounded-full bg-blue-50 flex items-center justify-center text-blue-600">
                         <i className="bi bi-people-fill text-xl"></i>
                     </div>
-                    <span className="font-bold text-gray-700">User Visit</span>
+                    <span className="font-bold text-gray-700 dark:text-gray-200">User Visit</span>
                 </div>
 
                 <div className="flex-1 flex flex-col justify-center space-y-6">
@@ -62,17 +62,17 @@ const StatsSummary = React.memo(({ summary, loading, processedPageData, totalVie
             </div>
 
             {/* Card 2: Pie Chart */}
-            <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 flex flex-col justify-between h-[300px]">
+            <div className="bg-white dark:bg-[#10172A] dark:border-white/10 dark:text-white rounded-2xl p-6 shadow-sm border border-gray-100 flex flex-col justify-between h-[300px]">
                 <div className="flex items-center gap-3 mb-2">
                     <div className="w-10 h-10 rounded-full bg-purple-50 flex items-center justify-center text-purple-600">
                         <i className="bi bi-pie-chart-fill text-xl"></i>
                     </div>
-                    <span className="font-bold text-gray-700">Page Usage Distribution</span>
+                    <span className="font-bold text-gray-700 dark:text-gray-200">Page Usage Distribution</span>
                 </div>
 
                 <div className="flex-1 min-h-0 relative">
                     {loading ? (
-                        <div className="w-full h-full bg-gray-50 animate-pulse rounded-xl"></div>
+                        <div className="w-full h-full bg-gray-50 dark:bg-[#0B102A] animate-pulse rounded-xl"></div>
                     ) : (
                         <>
                             <ResponsiveContainer width="100%" height="100%">
@@ -120,20 +120,20 @@ const StatsSummary = React.memo(({ summary, loading, processedPageData, totalVie
             </div>
 
             {/* Card 3: Bar Chart */}
-            <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 flex flex-col h-[300px]">
+            <div className="bg-white dark:bg-[#10172A] dark:border-white/10 dark:text-white rounded-2xl p-6 shadow-sm border border-gray-100 flex flex-col h-[300px]">
                 <div className="flex justify-between items-center mb-6">
                     <div className="flex items-center gap-3">
                         <div className="w-10 h-10 rounded-full bg-blue-50 flex items-center justify-center text-blue-600">
                             <i className="bi bi-bar-chart-fill text-xl"></i>
                         </div>
-                        <span className="font-bold text-gray-700">Page View Value</span>
+                        <span className="font-bold text-gray-700 dark:text-gray-200">Page View Value</span>
                     </div>
-                    <span className="text-xs text-gray-400 bg-gray-50 px-2 py-1 rounded">All Pages</span>
+                    <span className="text-xs text-gray-400 bg-gray-50 dark:bg-[#0B102A] px-2 py-1 rounded">All Pages</span>
                 </div>
 
                 <div className="flex-1 w-full min-h-0 pr-2">
                     {loading ? (
-                        <div className="w-full h-full bg-gray-50 animate-pulse rounded-xl"></div>
+                        <div className="w-full h-full bg-gray-50 dark:bg-[#0B102A] animate-pulse rounded-xl"></div>
                     ) : (
                         <ResponsiveContainer width="100%" height="100%">
                             <BarChart
@@ -356,12 +356,12 @@ const Stats = () => {
     if (!isAuth) {
         return (
             <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
-                <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-md transform scale-100 transition-all">
+                <div className="bg-white dark:bg-[#10172A] dark:border-white/10 dark:text-white rounded-2xl shadow-2xl p-8 w-full max-w-md transform scale-100 transition-all">
                     <div className="text-center mb-6">
                         <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
                             <i className="bi bi-shield-lock text-3xl text-blue-600"></i>
                         </div>
-                        <h2 className="text-2xl font-bold text-gray-900">Protected Area</h2>
+                        <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Protected Area</h2>
                         <p className="text-gray-500 mt-2">Please enter the access code to view statistics.</p>
                     </div>
 
@@ -372,7 +372,7 @@ const Stats = () => {
                                 value={password}
                                 onChange={(e) => setPassword(e.target.value)}
                                 placeholder="Enter Code"
-                                className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-center text-lg tracking-widest"
+                                className="w-full px-4 py-3 rounded-xl border border-gray-200 dark:border-white/10 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-center text-lg tracking-widest"
                                 autoFocus
                             />
                         </div>
@@ -394,11 +394,11 @@ const Stats = () => {
             <div className="max-w-6xl mx-auto space-y-6">
 
                 {/* Header */}
-                <div className="bg-white rounded-2xl p-8 shadow-sm border border-gray-100 text-center relative overflow-hidden">
+                <div className="bg-white dark:bg-[#10172A] dark:border-white/10 dark:text-white rounded-2xl p-8 shadow-sm border border-gray-100 text-center relative overflow-hidden">
                     {/* Back Button */}
                     <button
                         onClick={() => navigate(-1)}
-                        className="absolute top-6 left-6 w-10 h-10 bg-white/80 backdrop-blur-sm rounded-full flex items-center justify-center text-gray-600 hover:text-blue-600 hover:bg-white shadow-sm border border-gray-100 transition-all z-20 group"
+                        className="absolute top-6 left-6 w-10 h-10 bg-white/80 backdrop-blur-sm rounded-full flex items-center justify-center text-gray-600 hover:text-blue-600 hover:bg-white dark:bg-[#10172A] dark:border-white/10 dark:text-white shadow-sm border border-gray-100 transition-all z-20 group"
                         title="Go Back"
                     >
                         <i className="bi bi-arrow-left text-xl group-hover:-translate-x-0.5 transition-transform"></i>
@@ -408,7 +408,7 @@ const Stats = () => {
                         <h1 className="text-3xl md:text-4xl font-extrabold text-[#0B102A] mb-2 tracking-tight">
                             CAL-DR STATS LOGS
                         </h1>
-                        <div className="inline-flex items-center gap-2 text-gray-500 bg-gray-50 px-3 py-1 rounded-full text-sm font-medium border border-gray-100">
+                        <div className="inline-flex items-center gap-2 text-gray-500 bg-gray-50 dark:bg-[#0B102A] px-3 py-1 rounded-full text-sm font-medium border border-gray-100">
                             <i className="bi bi-calendar-event"></i>
                             Last 30 Days
                         </div>
@@ -426,13 +426,13 @@ const Stats = () => {
                     />
 
                     {/* Card 3: Trend - Grouped Bar Chart */}      {/* Card 3: Trend - Grouped Bar Chart */}
-                    <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 md:col-span-3 h-[500px] flex flex-col">
+                    <div className="bg-white dark:bg-[#10172A] dark:border-white/10 dark:text-white rounded-2xl p-6 shadow-sm border border-gray-100 md:col-span-3 h-[500px] flex flex-col">
                         <div className="flex justify-between items-center mb-6">
                             <div className="flex items-center gap-3">
                                 <div className="w-10 h-10 rounded-full bg-blue-50 flex items-center justify-center text-blue-600">
                                     <i className="bi bi-bar-chart text-xl"></i>
                                 </div>
-                                <span className="font-bold text-gray-700 text-lg">
+                                <span className="font-bold text-gray-700 dark:text-gray-200 text-lg">
                                     {trendType === 'weekly' ? 'Weekly' : 'Monthly'} User Distribution by Page
                                 </span>
                             </div>
@@ -442,8 +442,8 @@ const Stats = () => {
                                 <button
                                     onClick={() => setTrendType('weekly')}
                                     className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${trendType === 'weekly'
-                                        ? 'bg-white text-blue-600 shadow-sm'
-                                        : 'text-gray-500 hover:text-gray-700'
+                                        ? 'bg-white dark:bg-[#10172A] dark:border-white/10 dark:text-white text-blue-600 shadow-sm'
+                                        : 'text-gray-500 hover:text-gray-700 dark:text-gray-200'
                                         }`}
                                 >
                                     Weekly
@@ -451,8 +451,8 @@ const Stats = () => {
                                 <button
                                     onClick={() => setTrendType('monthly')}
                                     className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${trendType === 'monthly'
-                                        ? 'bg-white text-blue-600 shadow-sm'
-                                        : 'text-gray-500 hover:text-gray-700'
+                                        ? 'bg-white dark:bg-[#10172A] dark:border-white/10 dark:text-white text-blue-600 shadow-sm'
+                                        : 'text-gray-500 hover:text-gray-700 dark:text-gray-200'
                                         }`}
                                 >
                                     Monthly
@@ -462,7 +462,7 @@ const Stats = () => {
 
                         <div className="flex-1 w-full min-h-0">
                             {trendLoading ? (
-                                <div className="w-full h-full bg-gray-50 animate-pulse rounded-xl"></div>
+                                <div className="w-full h-full bg-gray-50 dark:bg-[#0B102A] animate-pulse rounded-xl"></div>
                             ) : (
                                 <ResponsiveContainer width="100%" height="100%">
                                     <BarChart

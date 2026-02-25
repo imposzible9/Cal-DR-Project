@@ -88,7 +88,21 @@ const normalizePagePath = (path) => {
     return '/' + pageName;
 };
 
+// Global cache for deduplication
+const eventCache = new Map();
+
 const sendTrackingEvent = async (eventType, eventData = {}, pagePath = normalizePagePath(window.location.pathname)) => {
+    // Deduplication: if exactly same event was sent in last 1000ms, skip it
+    const eventKey = `${eventType}:${JSON.stringify(eventData)}:${pagePath}`;
+    const now = Date.now();
+    const lastSent = eventCache.get(eventKey) || 0;
+
+    if (now - lastSent < 1000) {
+        // console.log("⏭️ Skipping duplicate event:", eventType);
+        return;
+    }
+    eventCache.set(eventKey, now);
+
     try {
         const payload = {
             session_id: getSessionId(),

@@ -108,10 +108,42 @@ app = FastAPI(
 )
 
 # Add CORS middleware
-# DEV ONLY: Using wildcard for all origins temporarily
+frontend_origins_env = os.getenv("FRONTEND_ORIGIN", "*")
+
+if frontend_origins_env == "*":
+    # Allow all origins
+    allow_origins = ["*"]
+else:
+    # Parse origins from environment variable (comma-separated)
+    # Examples:
+    # FRONTEND_ORIGIN=http://localhost:3000,http://localhost:5173
+    # FRONTEND_ORIGIN=http://192.168.1.100:3000,https://yourdomain.com
+    allow_origins = []
+    for origin in frontend_origins_env.split(","):
+        origin = origin.strip()
+        if origin:
+            allow_origins.append(origin)
+    
+    # Always add common local development origins if not explicitly set
+    common_local_origins = [
+        "http://localhost:3000",
+        "http://localhost:5173", 
+        "http://localhost:8080",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:8080"
+    ]
+    
+    # Add common local origins if they're not already in the list
+    for local_origin in common_local_origins:
+        if local_origin not in allow_origins:
+            allow_origins.append(local_origin)
+
+print(f"[CORS] Allowing origins: {allow_origins}")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allow_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

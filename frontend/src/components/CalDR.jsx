@@ -3,7 +3,7 @@ import { trackPageView, trackDRSelection, trackCalculation } from "../utils/trac
 import { API_CONFIG } from "../config/api";
 
 // const API_BASE = "http://172.17.1.85:8333";
-const API_BASE = import.meta.env.VITE_DR_LIST_BASE_API; // DR snapshot (use same as DRList)
+const API_BASE = import.meta.env.VITE_DR_LIST_API; // DR snapshot (use same as DRList)
 
 const EXCHANGE_CURRENCY_MAP = {
   "The Nasdaq Global Select Market": "USD",
@@ -34,7 +34,7 @@ const EXCHANGE_SHORT_NAME_MAP = {
   "Euronext Milan": "Mil",
   "Tokyo Stock Exchange": "TSE",
   "Singapore Exchange": "SGX",
-  "Shanghai Stock Exchange" : "SSE",
+  "Shanghai Stock Exchange": "SSE",
   "Taiwan Stock Exchange": "TWSE",
   "Shenzhen Stock Exchange": "SZSE",
   "Hochiminh Stock Exchange": "HOSE",
@@ -188,43 +188,16 @@ export default function DRCal() {
 
   // ================== ดึง DR ทั้งหมด ==================
   useEffect(() => {
+    let isMounted = true;
     async function fetchDR() {
       try {
-        const res = await fetch(
-          // `${API_BASE}/dr?fields=` +
-          `${API_BASE}/caldr?fields=` +
-          [
-            "symbol",
-            "name",
-            "conversionRatio",
-            "conversionRatioR",
-            "last",
-            "change",
-            "percentChange",
-            "underlyingExchange",
-            "open",
-            "high",
-            "low",
-            "bidPrice",
-            "offerPrice",
-            "totalVolume",
-            "totalValue",
-            "tradingSession",
-            "underlying",
-            "underlyingName",
-            "issuer",
-            "issuerName",
-            "marketCap",
-            "ytdChange",
-            "ytdPercentChange",
-            "dividendYield12M",
-            "underlyingClassName",
-            "outstandingShare",
-          ].join(",")
-        );
+        const apiUrl = import.meta.env.VITE_DR_LIST_API;
+        const res = await fetch(apiUrl);
         if (!res.ok) throw new Error("Error fetching DR");
 
         const data = await res.json();
+        if (!isMounted) return;
+
         setAllDR(data.rows || []);
 
         if (data.updated_at) {
@@ -248,8 +221,8 @@ export default function DRCal() {
         console.error(err);
       }
     }
-    fetchDR();
-
+    const t = setTimeout(fetchDR, 100);
+    return () => clearTimeout(t);
   }, []);
 
   // Track Calculation
@@ -434,19 +407,10 @@ export default function DRCal() {
   };
 
   const onReset = () => {
-    if (!defaultDR) return;
-
-    setSelectedDR(defaultDR);
-    setSearchText(defaultDR.symbol);
-    setShowSuggest(false);
-    setHighlightIndex(-1);
-
-    setUnderlyingCurrency(
-      EXCHANGE_CURRENCY_MAP[defaultDR.underlyingExchange] || "USD"
-    );
-
-    // ดึง realtime ใหม่ของ default
-    fetchRealtimeUnderlying(defaultDR.symbol);
+    // Clear only Underlying Price and Exchange Rate values
+    setUnderlyingValue(null);
+    setUnderlyingValueRaw(null);
+    setFxTHBPerUnderlying(null);
   };
 
   const SortIndicator = ({ colKey }) => {
@@ -530,50 +494,50 @@ export default function DRCal() {
     if (filteredTableData.length === 0) return null;
 
     return (
-      <div ref={tableRef} className="w-full mt-3 md:mt-2 bg-white rounded-xl shadow-[0_4px_20px_rgba(0,0,0,0.05)] border border-gray-100 overflow-hidden font-['Sarabun'] overflow-x-auto md:overflow-x-visible">
-        <div className="overflow-x-auto">
-          <table className="w-full text-[10px] sm:text-xs md:text-sm lg:text-sm text-left border-separate border-spacing-0">
-            <thead className="bg-[#0B102A] text-white font-bold sticky top-0">
-              <tr>
-                <th rowSpan={2} className="py-3 md:py-4 px-2 sm:px-3 text-left sticky bg-[#0B102A] align-middle cursor-pointer relative"
-                  style={{ left: "0px", width: "120px", minWidth: "120px", zIndex: 30 }}
+      <div ref={tableRef} className="w-full mt-3 md:mt-2 bg-white dark:bg-[#10172A] dark:border-white/10 dark:text-white rounded-xl shadow-[0_4px_20px_rgba(0,0,0,0.05)] border border-gray-100 dark:border-white/10 overflow-hidden font-['Sarabun'] overflow-x-auto md:overflow-x-visible">
+        <div className="overflow-x-auto hide-scrollbar">
+          <table className="w-full text-[12px] md:text-[14.4px] text-left border-collapse">
+            <thead className="bg-[#0B102A] text-white font-bold sticky top-0" style={{ zIndex: 50 }}>
+              <tr className="h-[45px] md:h-[50px]">
+                <th rowSpan={2} className="py-2 md:py-4 px-2 md:px-3 text-left sticky top-0 bg-[#0B102A] align-middle cursor-pointer relative text-xs md:text-sm"
+                  style={{ left: "0px", width: "130px", minWidth: "130px", zIndex: 110 }}
                   onClick={() => handleSort("dr")}>
-                  <div className={`flex items-center gap-0.5 text-[10px] sm:text-xs`}>DR <SortIndicator colKey="dr" /></div>
+                  <div className={`flex items-center gap-0.5 text-xs md:text-sm`}>DR <SortIndicator colKey="dr" /></div>
                   {sortConfig.key === "dr" && (
-                    <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#2F80ED] z-50">
+                    <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#2F80ED]" style={{ zIndex: 120 }}>
                       <div className="absolute bottom-[-4px] left-1/2 -translate-x-1/2 w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[4px] border-t-[#2F80ED]"></div>
                     </div>
                   )}
                 </th>
-                <th colSpan={9} className="py-2 md:py-3 text-center text-[10px] sm:text-xs bg-[#020323]">Trading information</th>
-                <th colSpan={6} className="py-2 md:py-3 text-center text-[10px] sm:text-xs bg-[#020323] border-l border-gray-700">Basic DR information</th>
+                <th colSpan={9} className="py-2 md:py-3 text-center text-xs md:text-sm bg-[#020323]">Trading information</th>
+                <th colSpan={6} className="py-2 md:py-3 text-center text-xs md:text-sm bg-[#020323] border-l border-gray-200 dark:border-white/10">Basic DR information</th>
               </tr>
-              <tr>
+              <tr className="h-[45px] md:h-[50px]">
                 {[
                   { key: "open", label: "Open", align: "right" },
                   { key: "high", label: "High", align: "right" },
                   { key: "low", label: "Low", align: "right" },
                   { key: "last", label: "Last", align: "right" },
-                  { key: "pct", label: "%Chg", align: "right" },
+                  { key: "pct", label: "%Change", align: "right" },
                   { key: "bid", label: "Bid", align: "right" },
-                  { key: "offer", label: "Ask", align: "right" },
-                  { key: "vol", label: "Vol", align: "right" },
+                  { key: "offer", label: "Offer", align: "right" },
+                  { key: "vol", label: "Volume", align: "right" },
                   { key: "value", label: "Value('000)", align: "right" },
-                  { key: "marketCap", label: "MCap (M)", align: "right", border: true },
-                  { key: "underlying", label: "UDL", align: "left" },
+                  { key: "marketCap", label: "Market Cap (M)", align: "right", border: true },
+                  { key: "underlying", label: "Underlying", align: "left" },
                   { key: "ratio", label: "Ratio", align: "right" },
-                  { key: "divYield", label: "Div%", align: "right" },
-                  { key: "exchange", label: "Exchange", align: "left" },
-                  { key: "outstandingShare", label: "Out Share", align: "right" },
+                  { key: "divYield", label: "Div. Yield", align: "right" },
+                  { key: "exchange", label: "Underlying Exchange", align: "left" },
+                  { key: "outstandingShare", label: "Outstanding Share", align: "right" },
                 ].map((item) => (
                   <th key={item.key}
-                    className={`py-2 md:py-3 px-2 sm:px-3 text-${item.align} text-[10px] sm:text-xs bg-[#1C1D39] border-b border-gray-700 whitespace-nowrap cursor-pointer relative ${item.border ? 'border-l border-gray-700' : ''}`}
+                    className={`py-2 md:py-3 px-2 md:px-4 text-${item.align} text-xs md:text-sm bg-[#1C1D39] border-b border-gray-200 dark:border-white/10 whitespace-nowrap cursor-pointer relative ${item.border ? 'border-l border-gray-200 dark:border-white/10' : ''}`}
                     onClick={() => handleSort(item.key)}>
                     <div className={`flex items-center ${item.align === "right" ? "justify-end" : "justify-start"} gap-0.5`}>
                       {item.label} <SortIndicator colKey={item.key} />
                     </div>
                     {sortConfig.key === item.key && (
-                      <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#2F80ED] z-50">
+                      <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#2F80ED]" style={{ zIndex: 120 }}>
                         <div className="absolute bottom-[-4px] left-1/2 -translate-x-1/2 w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[4px] border-t-[#2F80ED]"></div>
                       </div>
                     )}
@@ -581,37 +545,42 @@ export default function DRCal() {
                 ))}
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100 bg-white">
+            <tbody className="bg-white dark:bg-transparent dark:text-white">
               {filteredTableData.map((row, index) => {
                 const isSelected = row.dr === selectedDR?.symbol;
-                let stickyBgClass = isSelected ? "#eff6ff" : (index % 2 === 0 ? "#ffffff" : "#F9FAFB");
-                const textBaseColor = isSelected ? "text-[#1e3a8a] font-semibold" : "text-gray-600";
+                const rowBg = index % 2 === 0 ? "bg-[#FFFFFF] dark:bg-[#2D3136]" : "bg-[#F3F4F6] dark:bg-[#24272B]";
+
+                const getChangeColor = (val) => {
+                  if (val > 0) return "text-[#27AE60] dark:text-[#4CE60F]";
+                  if (val < 0) return "text-[#EB5757]";
+                  return "text-[#4B5563] dark:text-white";
+                };
 
                 return (
-                  <tr key={row.dr} className={`transition-colors duration-200 text-[10px] sm:text-xs md:text-sm ${isSelected ? "bg-[#eff6ff] border-l-4 border-[#2F80ED] shadow-sm relative z-10" : (index % 2 === 0 ? "bg-white" : "bg-[#F9FAFB]") + " hover:bg-gray-50 border-l-4 border-transparent"}`} style={{ height: "auto", minHeight: "48px" }}>
-                    <td className="py-2 md:py-4 px-2 sm:px-3 text-left font-bold text-[#2F80ED] sticky left-0 z-20" style={{ backgroundColor: stickyBgClass }}>
+                  <tr key={row.dr} className={`transition-colors duration-200 text-xs md:text-[14.4px] ${isSelected ? "bg-[#eff6ff] dark:bg-[#2C2C45] border-l-4 border-[#2F80ED] shadow-sm relative z-10" : (rowBg) + " border-l-4 border-transparent"}`} style={{ height: "53.6px" }}>
+                    <td className={`py-3 md:py-4 px-2 md:px-3 text-left font-bold text-[#2F80ED] sticky left-0 z-20 ${isSelected ? "bg-[#eff6ff] dark:bg-[#2C2C45]" : rowBg}`}>
                       <div className="flex items-center gap-1">
                         {isSelected && <div className="w-1 md:w-1.5 h-1 md:h-1.5 rounded-full bg-[#2F80ED]"></div>}
-                        <span className="text-[10px] sm:text-xs md:text-sm">{row.dr}</span>
+                        <span className="text-xs md:text-[14.4px]">{row.dr}</span>
                       </div>
                     </td>
-                    <td className={`py-2 md:py-4 px-2 sm:px-3 text-right text-[9px] sm:text-[10px] md:text-xs font-medium font-mono ${textBaseColor}`}>{formatNum(row.open)}</td>
-                    <td className={`py-2 md:py-4 px-2 sm:px-3 text-right text-[9px] sm:text-[10px] md:text-xs font-medium font-mono ${textBaseColor}`}>{formatNum(row.high)}</td>
-                    <td className={`py-2 md:py-4 px-2 sm:px-3 text-right text-[9px] sm:text-[10px] md:text-xs font-medium font-mono ${textBaseColor}`}>{formatNum(row.low)}</td>
-                    <td className={`py-2 md:py-4 px-2 sm:px-3 text-right text-[9px] sm:text-[10px] md:text-xs font-medium font-mono ${textBaseColor}`}>{formatNum(row.last)}</td>
-                    <td className="py-2 md:py-4 px-2 sm:px-3 text-right font-medium text-[9px] sm:text-[10px] md:text-xs font-mono" style={{ color: row.pct > 0 ? "#27AE60" : row.pct < 0 ? "#EB5757" : "#111827" }}>
-                      {row.pct === 0 ? "-" : row.pct > 0 ? `+${formatNum(row.pct)}` : formatNum(row.pct)}
+                    <td className={`py-3 md:py-4 px-2 md:px-4 text-right text-xs md:text-[14.4px] font-medium font-mono text-gray-600 dark:text-white/90`}>{formatNum(row.open)}</td>
+                    <td className={`py-3 md:py-4 px-2 md:px-4 text-right text-xs md:text-[14.4px] font-medium font-mono text-gray-600 dark:text-white/90`}>{formatNum(row.high)}</td>
+                    <td className={`py-3 md:py-4 px-2 md:px-4 text-right text-xs md:text-[14.4px] font-medium font-mono text-gray-600 dark:text-white/90`}>{formatNum(row.low)}</td>
+                    <td className={`py-3 md:py-4 px-2 md:px-4 text-right text-xs md:text-[14.4px] font-medium font-mono text-gray-600 dark:text-white/90`}>{formatNum(row.last)}</td>
+                    <td className={`py-3 md:py-4 px-2 md:px-4 text-right font-medium text-xs md:text-[14.4px] font-mono ${getChangeColor(row.pct)}`}>
+                      {row.pct === 0 ? "-" : row.pct > 0 ? `+${formatNum(row.pct)}%` : `${formatNum(row.pct)}%`}
                     </td>
-                    <td className={`py-2 md:py-4 px-2 sm:px-3 text-right text-gray-600 text-[9px] sm:text-[10px] md:text-xs font-medium font-mono`}>{formatNum(row.bid)}</td>
-                    <td className={`py-2 md:py-4 px-2 sm:px-3 text-right text-gray-600 text-[9px] sm:text-[10px] md:text-xs font-medium font-mono`}>{formatNum(row.offer)}</td>
-                    <td className={`py-2 md:py-4 px-2 sm:px-3 text-right text-gray-600 text-[9px] sm:text-[10px] md:text-xs font-medium font-mono`}>{formatInt(row.vol)}</td>
-                    <td className={`py-2 md:py-4 px-2 sm:px-3 text-right text-gray-600 text-[9px] sm:text-[10px] md:text-xs font-medium font-mono`}>{formatNum(row.value)}</td>
-                    <td className={`py-2 md:py-4 px-2 sm:px-3 text-right text-gray-600 text-[9px] sm:text-[10px] md:text-xs font-medium font-mono border-l border-gray-200`}>{row.marketCap ? formatNum(row.marketCap / 1000000) : "-"}</td>
-                    <td className={`py-2 md:py-4 px-2 sm:px-3 text-left font-bold text-[#2F80ED] text-[10px] sm:text-xs md:text-sm`}>{row.underlying || "-"}</td>
-                    <td className={`py-2 md:py-4 px-2 sm:px-3 text-right text-gray-600 text-[9px] sm:text-[10px] md:text-xs font-medium`}>{row.ratio}</td>
-                    <td className={`py-2 md:py-4 px-2 sm:px-3 text-right text-gray-600 text-[9px] sm:text-[10px] md:text-xs font-medium font-mono`}>{row.divYield ? formatNum(row.divYield) : "-"}</td>
-                    <td className={`py-2 md:py-4 px-2 sm:px-3 text-left text-gray-600 text-[9px] sm:text-[10px] md:text-xs font-medium max-w-[120px] md:max-w-[200px] truncate`} title={row.exchange}>{row.exchange || "-"}</td>
-                    <td className={`py-2 md:py-4 px-2 sm:px-3 text-right text-gray-600 text-[9px] sm:text-[10px] md:text-xs font-medium font-mono`}>{row.outstandingShare ? formatInt(row.outstandingShare) : "-"}</td>
+                    <td className={`py-3 md:py-4 px-2 md:px-4 text-right text-gray-600 dark:text-white/90 text-xs md:text-[14.4px] font-medium font-mono`}>{formatNum(row.bid)}</td>
+                    <td className={`py-3 md:py-4 px-2 md:px-4 text-right text-gray-600 dark:text-white/90 text-xs md:text-[14.4px] font-medium font-mono`}>{formatNum(row.offer)}</td>
+                    <td className={`py-3 md:py-4 px-2 md:px-4 text-right text-gray-600 dark:text-white/90 text-xs md:text-[14.4px] font-medium font-mono`}>{formatInt(row.vol)}</td>
+                    <td className={`py-3 md:py-4 px-2 md:px-4 text-right text-gray-600 dark:text-white/90 text-xs md:text-[14.4px] font-medium font-mono`}>{formatNum(row.value)}</td>
+                    <td className={`py-3 md:py-4 px-3 md:px-4 text-right text-gray-600 dark:text-white/90 text-xs md:text-[14.4px] font-medium font-mono border-l border-gray-200 dark:border-white/10`}>{row.marketCap ? formatNum(row.marketCap / 1000000) : "-"}</td>
+                    <td className={`py-3 md:py-4 px-2 md:px-4 text-left font-bold text-[#2F80ED] text-xs md:text-[14.4px] whitespace-nowrap`}>{row.underlying || "-"}</td>
+                    <td className={`py-3 md:py-4 px-2 md:px-4 text-right text-gray-600 dark:text-white/90 text-xs md:text-[14.4px] font-medium`}>{row.ratio}</td>
+                    <td className={`py-3 md:py-4 px-2 md:px-4 text-right text-gray-600 dark:text-white/90 text-xs md:text-[14.4px] font-medium font-mono`}>{row.divYield ? `${formatNum(row.divYield)}%` : "-"}</td>
+                    <td className={`py-3 md:py-4 px-2 md:px-4 text-left text-gray-600 dark:text-white/90 text-xs md:text-[14.4px] font-medium max-w-[120px] md:max-w-[200px] truncate`} title={row.exchange}>{row.exchange || "-"}</td>
+                    <td className={`py-3 md:py-4 px-2 md:px-4 text-right text-gray-600 dark:text-white/90 text-xs md:text-[14.4px] font-medium font-mono`}>{row.outstandingShare ? formatInt(row.outstandingShare) : "-"}</td>
                   </tr>
                 );
               })}
@@ -623,17 +592,17 @@ export default function DRCal() {
   };
 
   return (
-    <div className="min-h-screen w-full bg-[#f5f5f5] flex flex-col items-center pb-6 lg:pb-10">
+    <div className="min-h-screen w-full bg-[#F5F5F5] dark:bg-[#0B0E14] flex flex-col items-center pb-6 lg:pb-10">
       <div className="w-full max-w-[1040px] lg:scale-[1.2] origin-top px-3 sm:px-4 md:px-6 lg:px-0 mx-auto">
-        <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold mb-2 sm:mb-3 text-black mt-6 lg:mt-10">Calculation DR</h1>
-        <p className="text-xs sm:text-sm lg:text-base text-[#6B6B6B] mb-4 sm:mb-6 lg:mb-8 break-words">
+        <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold mb-2 sm:mb-3 text-black dark:text-white mt-6 lg:mt-10">Calculation DR</h1>
+        <p className="text-xs sm:text-sm lg:text-base text-[#6B6B6B] dark:text-white/70 mb-4 sm:mb-6 lg:mb-8 break-words">
           Calculate DR Fair Value based on Underlying Price, Exchange Rate, and Conversion Ratio.
         </p>
 
         <div className="w-full mt-2 font-sarabun">
           <div className="flex flex-col lg:flex-row w-full gap-3 sm:gap-4 lg:gap-0">
-            <div className="flex-1 md:min-h-[427px] bg-[#FFFFFF] rounded-t-[12px] md:rounded-tl-[12px] md:rounded-tr-none md:rounded-bl-[12px] md:rounded-br-none shadow-[0_10px_25px_rgba(0,0,0,0.12)] px-4 sm:px-6 pt-6 md:pt-10 pb-6 md:pb-0 border border-[#e0e0e0]">
-              <h2 className="font-semibold text-lg sm:text-xl md:text-[26px] text-black mb-3 md:mb-[14px]">Select DR</h2>
+            <div className="flex-1 md:min-h-[427px] bg-[#FFFFFF] dark:bg-[#23262A] rounded-t-[12px] md:rounded-tl-[12px] md:rounded-tr-none md:rounded-bl-[12px] md:rounded-br-none shadow-[0_10px_25px_rgba(0,0,0,0.12)] px-4 sm:px-6 pt-6 md:pt-10 pb-6 md:pb-0 border border-[#e0e0e0] dark:border-white/10">
+              <h2 className="font-semibold text-lg sm:text-xl md:text-[26px] text-black dark:text-white mb-3 md:mb-[14px]">Select DR</h2>
               <div className="relative w-full h-[42px] sm:h-[46px] md:h-[48px]">
                 <input
                   ref={searchInputRef}
@@ -643,22 +612,22 @@ export default function DRCal() {
                   onChange={handleSearchChange}
                   onKeyDown={handleSearchKeyDown}
                   onClick={(e) => { e.target.select(); setShowSuggest(true); }}
-                  className="w-full h-full bg-white border border-[#d0d0d0] rounded-[12px] pl-3 sm:pl-4 pr-10 sm:pr-12 text-xs sm:text-sm text-black shadow-lg focus:outline-none"
+                  className="w-full h-full bg-white dark:bg-white/20 dark:border-none dark:text-white placeholder:dark:text-white/70 border border-[#d0d0d0] rounded-[12px] pl-3 sm:pl-4 pr-10 sm:pr-12 text-xs sm:text-sm text-black shadow-lg focus:outline-none dark:focus:ring-0"
                 />
-                <svg xmlns="http://www.w3.org/2000/svg" className="absolute right-3 sm:right-4 top-1/2 -translate-y-1/2 h-5 sm:h-6 w-5 sm:w-6 text-black" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <svg xmlns="http://www.w3.org/2000/svg" className="absolute right-3 sm:right-4 top-1/2 -translate-y-1/2 h-5 sm:h-6 w-5 sm:w-6 text-black dark:text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                 </svg>
                 {showSuggest && filteredSuggest.length > 0 && (
-                  <div className="absolute z-40 mt-1 max-h-48 sm:max-h-64 w-full overflow-y-auto rounded-2xl border border-[#e0e0e0] bg-white shadow-xl">
+                  <div className="absolute z-40 mt-1 max-h-48 sm:max-h-64 w-full overflow-y-auto hide-scrollbar rounded-2xl border border-[#e0e0e0] dark:border-none bg-white dark:bg-[#595959] dark:text-white shadow-xl">
                     {filteredSuggest.map((dr, idx) => (
                       <button
                         key={dr.symbol}
                         type="button"
-                        onMouseDown={() => applyDR(dr)}
-                        className={`flex w-full justify-between px-3 sm:px-4 py-2 text-left text-xs sm:text-sm ${idx === highlightIndex ? "bg-gray-100" : "hover:bg-gray-50"}`}
+                        onClick={() => applyDR(dr)}
+                        className={`flex w-full justify-between px-3 sm:px-4 py-2 text-left text-xs sm:text-sm ${idx === highlightIndex ? "bg-gray-100 dark:bg-[#4A4A4A]" : "hover:bg-gray-50 dark:hover:bg-[#4A4A4A] dark:text-white"}`}
                       >
-                        <span className="font-semibold text-black">{dr.symbol}</span>
-                        <span className="text-xs text-gray-500 truncate w-40 text-right">
+                        <span className="font-semibold text-black dark:text-white">{dr.symbol}</span>
+                        <span className="text-xs text-gray-500 dark:text-white/70 truncate w-40 text-right">
                           {formatUnderlyingDisplayName(dr)}
                         </span>
                       </button>
@@ -667,38 +636,38 @@ export default function DRCal() {
                 )}
               </div>
 
-            <div className="mt-6">
-              <h3 className="text-[#0046b8] font-extrabold text-[30px] leading-[26px]">{selectedDR?.symbol || "—"}</h3>
-              <p className="text-[12px] font-semibold text-[#111] mt-1 truncate flex items-center gap-1">
-                <span>{formatUnderlyingDisplayName(selectedDR)}</span>
+              <div className="mt-6">
+                <h3 className="text-[#0046b8] font-extrabold text-[30px] leading-[26px]">{selectedDR?.symbol || "—"}</h3>
+                <p className="text-[12px] font-semibold text-[#111] dark:text-white mt-1 truncate flex items-center gap-1">
+                  <span>{formatUnderlyingDisplayName(selectedDR)}</span>
 
-                {selectedDR?.underlyingExchange && (
-                  <>
-                    <span className="mx-2 text-[#111]">•</span>
-                    <span className="text-[#111] text-[12px] truncate">
-                      {formatExchangeShortName(selectedDR?.underlyingExchange)}
-                    </span>
-                  </>
-                )}
-              </p>
-              <p className="font-medium text-[10px] text-[#555] mt-1 truncate">
-                {selectedDR ? `Depositary Receipt on ${selectedDR.underlying || selectedDR.underlyingName} Issued by ${selectedDR.issuer}` : "—"}
-              </p>
-              <div className="w-full h-[175px] bg-white border border-[#e0e0e0] rounded-[12px] shadow-lg mt-4 p-4 relative">
-                <p className="font-bold text-[13px] text-[#6B6B6B]">Ratio (DR : Underlying)</p>
-                <p className="font-bold text-[20px] sm:text-[26px] text-[#111]">{ratioDR ? `${fmtNum(ratioDR, 0)} : 1` : "—"} </p>
-                <div className="w-full h-[1px] bg-[#9A9A9A] mt-2"></div>
-                <div className="flex items-center mt-2">
-                  <div className="w-1/2">
-                    <p className="font-bold text-[13px] text-[#6B6B6B] mt-1">Last Price</p>
-                    <p className="font-bold text-[20px] sm:text-[26px]">{selectedDR?.last ? fmtNum(selectedDR.last) : "—"}</p>
-                  </div>
-                  <div className="absolute left-1/2 -translate-x-1/2 w-[1px] h-[56px] bg-[#9A9A9A]"></div>
-                  <div className="w-1/2 pl-6">
-                    <p className="font-bold text-[13px] text-[#6B6B6B] mt-1">Change</p>
-                    <p className={`font-bold text-[20px] sm:text-[26px] ${changeAbs > 0 ? "text-[#27AE60]" : changeAbs < 0 ? "text-[#EB5757]" : "text-black"}`}>
-                      {`${fmtNum(changeAbs)} (${fmtPct(changePct)})`}
-                    </p>                    </div>
+                  {selectedDR?.underlyingExchange && (
+                    <>
+                      <span className="mx-2 text-[#111] dark:text-white">•</span>
+                      <span className="text-[#111] dark:text-white text-[12px] truncate">
+                        {formatExchangeShortName(selectedDR?.underlyingExchange)}
+                      </span>
+                    </>
+                  )}
+                </p>
+                <p className="font-medium text-[10px] text-[#555] dark:text-white/80 mt-1 truncate">
+                  {selectedDR ? `Depositary Receipt on ${selectedDR.underlying || selectedDR.underlyingName} Issued by ${selectedDR.issuer}` : "—"}
+                </p>
+                <div className="w-full h-[175px] bg-white dark:bg-white/20 dark:border-white/10 dark:text-white border border-[#e0e0e0] rounded-[12px] shadow-lg mt-4 p-4 relative">
+                  <p className="font-bold text-[13px] text-[#6B6B6B] dark:text-white">Ratio (DR : Underlying)</p>
+                  <p className="font-bold text-[20px] sm:text-[26px] text-[#111] dark:text-white">{ratioDR ? `${fmtNum(ratioDR, 0)} : 1` : "—"} </p>
+                  <div className="w-full h-[1px] bg-[#9A9A9A] mt-2"></div>
+                  <div className="flex items-center mt-2">
+                    <div className="w-1/2">
+                      <p className="font-bold text-[13px] text-[#6B6B6B] dark:text-white mt-1">Last Price</p>
+                      <p className="font-bold text-[20px] sm:text-[26px] dark:text-white">{selectedDR?.last ? fmtNum(selectedDR.last) : "—"}</p>
+                    </div>
+                    <div className="absolute left-1/2 -translate-x-1/2 w-[1px] h-[56px] bg-[#9A9A9A]"></div>
+                    <div className="w-1/2 pl-6">
+                      <p className="font-bold text-[13px] text-[#6B6B6B] dark:text-white mt-1">Change</p>
+                      <p className={`font-bold text-[20px] sm:text-[26px] ${changeAbs > 0 ? "text-[#27AE60] dark:text-[#4CE60F]" : changeAbs < 0 ? "text-[#EB5757]" : "text-black dark:text-white"}`}>
+                        {`${fmtNum(changeAbs)} (${fmtPct(changePct)})`}
+                      </p>                    </div>
                   </div>
                 </div>
               </div>
@@ -712,11 +681,15 @@ export default function DRCal() {
                     <input
                       type="text"
                       autoComplete="off"
-                      value={formatInputNum(underlyingValue, 2)}
-                      readOnly
-                      disabled={loadingRealtime}
+                      value={underlyingValue !== null ? underlyingValue : ''}
+                      onChange={(e) => {
+                        const value = e.target.value.replace(/[^\d.]/g, '');
+                        const numValue = value === '' ? null : parseFloat(value);
+                        setUnderlyingValue(numValue);
+                        setUnderlyingValueRaw(numValue);
+                      }}
                       style={{ WebkitTextFillColor: "white" }}
-                      className={`flex-1 h-full bg-transparent text-xs sm:text-sm text-white placeholder-[#9A9A9A] px-3 sm:px-4 focus:outline-none ${loadingRealtime ? "opacity-50 cursor-not-allowed" : ""}`}
+                      className="flex-1 h-full bg-transparent text-xs sm:text-sm text-white placeholder-[#9A9A9A] px-3 sm:px-4 focus:outline-none"
                     />
                     <div className="w-px h-[25px] sm:h-[30px] bg-[#9A9A9A]"></div>
                     <div className="w-[80px] sm:w-[100px] flex justify-center text-white font-bold text-[11px] sm:text-[13px]">
@@ -731,11 +704,14 @@ export default function DRCal() {
                     <input
                       type="text"
                       autoComplete="off"
-                      value={formatInputNum(fxTHBPerUnderlying, fxDecimalsByCcy(underlyingCurrency))}
-                      readOnly
-                      disabled={loadingRealtime}
+                      value={fxTHBPerUnderlying !== null ? fxTHBPerUnderlying : ''}
+                      onChange={(e) => {
+                        const value = e.target.value.replace(/[^\d.]/g, '');
+                        const numValue = value === '' ? null : parseFloat(value);
+                        setFxTHBPerUnderlying(numValue);
+                      }}
                       style={{ WebkitTextFillColor: "white" }}
-                      className={`flex-1 h-full bg-transparent text-xs sm:text-sm text-white placeholder-[#9A9A9A] px-3 sm:px-4 focus:outline-none ${loadingRealtime ? "opacity-50 cursor-not-allowed" : ""}`}
+                      className="flex-1 h-full bg-transparent text-xs sm:text-sm text-white placeholder-[#9A9A9A] px-3 sm:px-4 focus:outline-none"
                     />
                     <div className="w-px h-[25px] sm:h-[30px] bg-[#9A9A9A]"></div>
                     <div className="w-[80px] sm:w-[100px] flex justify-center text-white font-bold text-[11px] sm:text-[13px]">{"THB/" + (underlyingCurrency || "USD")}</div>
@@ -751,7 +727,7 @@ export default function DRCal() {
                 <div className="flex justify-center gap-2 mt-0 sm:mt-0.5 w-full">
                   <button
                     onClick={onReset}
-                    className="w-[120px] sm:w-[139px] h-[36px] sm:h-[38px] bg-white rounded-[8px] flex justify-center items-center gap-2 text-black font-bold text-[11px] sm:text-[12px] hover:bg-gray-200 transition-colors"
+                    className="w-[120px] sm:w-[139px] h-[36px] sm:h-[38px] bg-white dark:bg-[#10172A] dark:border-white/10 dark:text-white rounded-[8px] flex justify-center items-center gap-2 text-black font-bold text-[11px] sm:text-[12px] hover:bg-gray-200 transition-colors"
                   >
                     Clear
                   </button>
@@ -780,25 +756,27 @@ export default function DRCal() {
               </div>
             </div>
           </div>
-
-          {updatedAt && (
-            <div className="flex flex-col items-end gap-0.5 text-[10px] sm:text-xs text-gray-500 pr-1 mt-3 sm:mt-4 mb-1 overflow-hidden">
-              <div className="break-words">
-                Last Updated:{" "}
-                {updatedAt.toLocaleString("en-US", {
-                  year: "numeric",
-                  month: "short",
-                  day: "numeric",
-                  hour: "2-digit",
-                  minute: "2-digit",
-                  second: "2-digit",
-                })}
-              </div>
-            </div>
-          )}
-
-          {renderComparisonTable()}
         </div>
+      </div>
+
+      {/* Comparison Table Section - Same as DRList, outside of scale div */}
+      <div className="w-full max-w-[1312px] mx-auto px-4 sm:px-6 lg:px-8 mt-1 sm:mt-24 lg:mt-34 mb-6 lg:mb-10 lg:scale-[1.0] lg:origin-top">
+        {updatedAt && (
+          <div className="flex flex-col items-end gap-0.5 text-[10px] sm:text-xs text-gray-500 pr-1 mt-3 sm:mt-4 mb-1 overflow-hidden">
+            <div className="break-words">
+              Last Updated:{" "}
+              {updatedAt.toLocaleString("en-US", {
+                year: "numeric",
+                month: "short",
+                day: "numeric",
+                hour: "2-digit",
+                minute: "2-digit",
+                second: "2-digit",
+              })}
+            </div>
+          </div>
+        )}
+        {renderComparisonTable()}
       </div>
     </div>
   );
