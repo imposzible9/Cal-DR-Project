@@ -211,10 +211,14 @@ const News = () => {
   const selected = searchParams.get("symbol") || "";
 
   const [search, setSearch] = useState(selected);
-  const [country, setCountry] = useState("all");
+  const [selectedCountries, setSelectedCountries] = useState(["all"]); // Array for multi-select
+  const selectedCountryLabel = selectedCountries.length === 1 && selectedCountries[0] === "all" 
+    ? "All Markets" 
+    : selectedCountries.length === 0 
+    ? "All Markets"
+    : `${selectedCountries.length} Markets`;
   const [showCountryMenu, setShowCountryMenu] = useState(false);
   const countryMenuRef = useRef(null);
-  const selectedCountryOption = useMemo(() => COUNTRY_OPTIONS.find(o => o.code === country) || COUNTRY_OPTIONS[0], [country]);
   const searchContainerRef = useRef(null);
 
   // Close menus when clicking outside
@@ -282,7 +286,7 @@ const News = () => {
   useEffect(() => {
     let mounted = true;
     async function loadMarket() {
-      const currentCacheKey = `${CACHE_KEY_HOME}_${country}`;
+      const currentCacheKey = `${CACHE_KEY_HOME}_${selectedCountries.join(',')}`;
 
       // 1. Try Valid Cache First (Strict TTL)
       // If valid cache exists, assume no new updates and skip fetch to improve performance
@@ -307,29 +311,31 @@ const News = () => {
         let merged = [];
         let symbolsToFetch = DEFAULT_SYMBOLS;
 
-        if (country === "all") {
+        if (selectedCountries.includes("all")) {
           // Fetch from optimized backend endpoint
           const res = await axios.get(API_CONFIG.endpoints.news.globalNews, {
             params: { limit: 10, trusted_only: true }
           });
           merged = res.data?.news || [];
         } else {
-          // Specific country
-          const config = COUNTRY_CONFIG[country];
-          if (config) {
-            symbolsToFetch = config.symbols;
-            const res = await axios.get(API_CONFIG.endpoints.news.getNews(encodeURIComponent(config.query)), {
-              params: { limit: 40, language: config.lang, hours: 72, country: country.toLowerCase(), trusted_only: true }
-            });
-            if (!mounted) return;
-            merged = res.data?.news || [];
-          } else {
-            // Fallback
-            const res = await axios.get(API_CONFIG.endpoints.news.getNews(encodeURIComponent(EN_QUERY)), {
-              params: { limit: 40, language: "en", hours: 72, country: country.toLowerCase(), trusted_only: true }
-            });
-            if (!mounted) return;
-            merged = res.data?.news || [];
+          // Specific countries
+          for (const countryCode of selectedCountries) {
+            const config = COUNTRY_CONFIG[countryCode];
+            if (config) {
+              symbolsToFetch = config.symbols;
+              const res = await axios.get(API_CONFIG.endpoints.news.getNews(encodeURIComponent(config.query)), {
+                params: { limit: 40, language: config.lang, hours: 72, country: countryCode.toLowerCase(), trusted_only: true }
+              });
+              if (!mounted) return;
+              merged = [...merged, ...(res.data?.news || [])];
+            } else {
+              // Fallback
+              const res = await axios.get(API_CONFIG.endpoints.news.getNews(encodeURIComponent(EN_QUERY)), {
+                params: { limit: 40, language: "en", hours: 72, country: countryCode.toLowerCase(), trusted_only: true }
+              });
+              if (!mounted) return;
+              merged = [...merged, ...(res.data?.news || [])];
+            }
           }
         }
 
@@ -347,11 +353,12 @@ const News = () => {
             limit: 2
           };
 
-          // Pass country context if specific country is selected
-          if (country !== "all") {
-            const config = COUNTRY_CONFIG[country];
+          // Pass country context if specific countries are selected
+          if (!selectedCountries.includes("all")) {
+            const firstCountry = selectedCountries[0];
+            const config = COUNTRY_CONFIG[firstCountry];
             if (config) {
-              batchParams.country = country.toLowerCase();
+              batchParams.country = firstCountry.toLowerCase();
               batchParams.language = config.lang;
             }
           }
@@ -439,7 +446,7 @@ const News = () => {
     }
 
     return () => { mounted = false; };
-  }, [selected, country, refreshKey]);
+  }, [selected, selectedCountries, refreshKey]);
 
   // Fetch Search Data
   useEffect(() => {
@@ -581,12 +588,12 @@ const News = () => {
     let filtered = allSymbols;
 
     // Filter by Country if not "All"
-    if (country !== "all") {
-      filtered = filtered.filter(s => s.country === country);
+    if (selectedCountries.length > 0 && !selectedCountries.includes("all")) {
+      filtered = filtered.filter(s => selectedCountries.includes(s.country));
 
       // Strict filter for Thailand: Show ONLY Thai Stock Market symbols (ending with .BK)
       // This excludes DRs (which might be tagged as TH but lack .BK suffix)
-      if (country === "TH") {
+      if (selectedCountries.includes("TH")) {
         filtered = filtered.filter(s => s.symbol.endsWith(".BK"));
       }
     }
@@ -596,8 +603,8 @@ const News = () => {
     }
 
     // Prioritize configured symbols (e.g. for Thailand)
-    if (country !== "all" && COUNTRY_CONFIG[country] && COUNTRY_CONFIG[country].symbols) {
-      const preferredTickers = COUNTRY_CONFIG[country].symbols; // Ordered list
+    if (selectedCountries.length === 1 && selectedCountries[0] !== "all" && COUNTRY_CONFIG[selectedCountries[0]] && COUNTRY_CONFIG[selectedCountries[0]].symbols) {
+      const preferredTickers = COUNTRY_CONFIG[selectedCountries[0]].symbols; // Ordered list
       const preferredSet = new Set(preferredTickers);
 
       const preferred = [];
@@ -718,46 +725,77 @@ const News = () => {
                   style={{ height: '37.33px', width: undefined }}
                 >
                   <span className="truncate flex items-center gap-2">
-                    {selectedCountryOption.flag ? (
+                    {selectedCountries.length === 1 && selectedCountries[0] === "all" ? (
+                      <i className="bi bi-globe text-gray-400 dark:text-white" style={{ fontSize: '16px', lineHeight: '16px' }}></i>
+                    ) : selectedCountries.length === 1 && COUNTRY_OPTIONS.find(c => c.code === selectedCountries[0])?.flag ? (
                       <img
-                        src={`https://flagcdn.com/${selectedCountryOption.flag}.svg`}
-                        srcSet={`https://flagcdn.com/w40/${selectedCountryOption.flag}.png 2x, https://flagcdn.com/w20/${selectedCountryOption.flag}.png 1x`}
+                        src={`https://flagcdn.com/${COUNTRY_OPTIONS.find(c => c.code === selectedCountries[0]).flag}.svg`}
+                        srcSet={`https://flagcdn.com/w40/${COUNTRY_OPTIONS.find(c => c.code === selectedCountries[0]).flag}.png 2x, https://flagcdn.com/w20/${COUNTRY_OPTIONS.find(c => c.code === selectedCountries[0]).flag}.png 1x`}
                         alt="flag"
                         className="w-5 h-5 object-contain rounded-sm"
-                        onError={(e) => { if (!e.target.dataset.fallback) { e.target.dataset.fallback = '1'; e.target.src = `https://flagcdn.com/w40/${selectedCountryOption.flag}.png`; } }}
+                        onError={(e) => { if (!e.target.dataset.fallback) { e.target.dataset.fallback = '1'; e.target.src = `https://flagcdn.com/w40/${COUNTRY_OPTIONS.find(c => c.code === selectedCountries[0]).flag}.png`; } }}
                       />
-                    ) : (selectedCountryOption.code === 'all' || selectedCountryOption.code === 'All') ? (
-                      <i className="bi bi-globe text-gray-400 dark:text-white" style={{ fontSize: '16px', lineHeight: '16px' }}></i>
                     ) : null}
-                    <span>{selectedCountryOption.label}</span>
+                    <span>{selectedCountryLabel}</span>
                   </span>
                   <svg className={`h-4 w-4 flex-shrink-0 transition-transform text-gray-500 dark:text-white ${showCountryMenu ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
                 </button>
 
                 {showCountryMenu && (
                   <div className="absolute left-0 top-full z-[20000] mt-2 w-full sm:w-56 max-h-72 overflow-auto hide-scrollbar rounded-2xl border border-gray-200 dark:border-none bg-white dark:bg-[#595959] dark:text-white shadow-[0_10px_30px_rgba(15,23,42,0.15)] py-1" style={{ transform: 'translateZ(0)' }}>
-                    {COUNTRY_OPTIONS.map((opt) => (
-                      <button
-                        key={opt.code}
-                        onClick={() => { setCountry(opt.code); setShowCountryMenu(false); }}
-                        className={`flex w-full items-center justify-between px-4 py-1.5 text-left text-xs sm:text-sm transition-colors ${country === opt.code ? "bg-[#EEF2FF] text-[#0B102A] font-semibold dark:bg-[#4A4A4A] dark:text-white" : "text-gray-700 dark:text-white hover:bg-gray-50 dark:hover:bg-[#4A4A4A]"}`}
-                      >
-                        <span className="flex items-center gap-2">
-                          {opt.flag ? (
-                            <img
-                              src={`https://flagcdn.com/${opt.flag}.svg`}
-                              srcSet={`https://flagcdn.com/w40/${opt.flag}.png 2x, https://flagcdn.com/w20/${opt.flag}.png 1x`}
-                              alt="flag"
-                              className="w-5 h-5 object-contain rounded-sm"
-                              onError={(e) => { if (!e.target.dataset.fallback) { e.target.dataset.fallback = '1'; e.target.src = `https://flagcdn.com/w40/${opt.flag}.png`; } }}
-                            />
-                          ) : (opt.code === 'all' || opt.code === 'All') ? (
-                            <i className="bi bi-globe text-gray-400 dark:text-white" style={{ fontSize: '16px', lineHeight: '16px' }}></i>
-                          ) : null}
-                          <span>{opt.label}</span>
-                        </span>
-                      </button>
-                    ))}
+                    {COUNTRY_OPTIONS.map((opt) => {
+                      const isSelected = selectedCountries.includes(opt.code);
+                      const isAll = opt.code === "all";
+                      return (
+                        <button
+                          key={opt.code}
+                          onClick={() => {
+                            let newSelection;
+                            if (isAll) {
+                              // If "All" is selected, clear everything else
+                              newSelection = ["all"];
+                            } else if (isSelected) {
+                              // Remove this country
+                              newSelection = selectedCountries.filter(c => c !== opt.code);
+                              // If no countries left, select "All"
+                              if (newSelection.length === 0) {
+                                newSelection = ["all"];
+                              } else {
+                                // Remove "All" if other countries are selected
+                                newSelection = newSelection.filter(c => c !== "all");
+                              }
+                            } else {
+                              // Add this country and remove "All"
+                              newSelection = selectedCountries.filter(c => c !== "all");
+                              newSelection.push(opt.code);
+                            }
+                            setSelectedCountries(newSelection);
+                            // Don't close the menu - let user continue selecting
+                          }}
+                          className={`flex w-full items-center justify-between px-4 py-1.5 text-left text-xs sm:text-sm transition-colors ${isSelected ? "bg-[#EEF2FF] text-[#0B102A] font-semibold dark:bg-[#4A4A4A] dark:text-white" : "text-gray-700 dark:text-white hover:bg-gray-50 dark:hover:bg-[#4A4A4A]"}`}
+                        >
+                          <span className="flex items-center gap-2">
+                            {opt.flag ? (
+                              <img
+                                src={`https://flagcdn.com/${opt.flag}.svg`}
+                                srcSet={`https://flagcdn.com/w40/${opt.flag}.png 2x, https://flagcdn.com/w20/${opt.flag}.png 1x`}
+                                alt="flag"
+                                className="h-4 w-4 rounded-full object-cover"
+                                onError={(e) => { e.target.style.display = 'none'; }}
+                              />
+                            ) : null}
+                            <span>{opt.label}</span>
+                          </span>
+                          <div className={`h-4 w-4 rounded border-2 flex items-center justify-center ${isSelected ? "bg-[#0B102A] border-[#0B102A]" : "border-gray-300 dark:border-gray-500"}`}>
+                            {isSelected && (
+                              <svg className="h-3 w-3 text-white" fill="currentColor" viewBox="0 0 20 20">
+                                <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                              </svg>
+                            )}
+                          </div>
+                        </button>
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -770,7 +808,7 @@ const News = () => {
                   onChange={handleSearchChange}
                   onKeyDown={onSearchKey}
                   onFocus={handleSearchFocus}
-                  placeholder={country === 'all' ? "Search..." : `Search ${country} stocks...`}
+                  placeholder={selectedCountries.length === 1 && selectedCountries[0] !== "all" ? `Search ${selectedCountries[0]} stocks...` : "Search..."}
                   className="w-full h-[37.33px] bg-white dark:bg-[#595959] dark:border-none text-gray-900 dark:text-white placeholder:text-gray-400 placeholder:dark:text-white/70 pl-3 pr-12 py-2 sm:pl-5 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#0B102A] dark:focus:ring-0 shadow-sm text-xs md:text-sm lg:w-[307.2px] lg:h-[44.79px] lg:text-[17px]"
                   style={{ fontSize: undefined, boxSizing: 'border-box' }}
                 />

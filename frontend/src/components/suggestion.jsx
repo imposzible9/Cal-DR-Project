@@ -839,7 +839,6 @@ const RatingHistoryModal = ({ item, timeframe, onClose }) => {
 
 export default function Suggestion() {
   const [timeframe, setTimeframe] = useState("1D");
-  const [country, setCountry] = useState("All");
   const [searchTerm, setSearchTerm] = useState("");
   const [data, setData] = useState([]);
   const [filterRating, setFilterRating] = useState(null);
@@ -851,8 +850,12 @@ export default function Suggestion() {
 
   const [showCountryMenu, setShowCountryMenu] = useState(false);
   const countryDropdownRef = useRef(null);
-  const selectedCountryOption = useMemo(() => countryOptions.find((c) => c.code === country) || countryOptions[0], [country]);
-  const selectedCountryLabel = selectedCountryOption.label || "All Markets";
+  const [selectedCountries, setSelectedCountries] = useState(["All"]); // Array for multi-select
+  const selectedCountryLabel = selectedCountries.length === 1 && selectedCountries[0] === "All" 
+    ? "All Markets" 
+    : selectedCountries.length === 0 
+    ? "All Markets"
+    : `${selectedCountries.length} Markets`;
 
   const [hoveredRow, setHoveredRow] = useState(null);
   const [tooltipPosition, setTooltipPosition] = useState({ x: 0, y: 0 });
@@ -1082,7 +1085,9 @@ export default function Suggestion() {
       if (changeFilter === "Positive") mapped = mapped.filter(row => row.changeDirection === "Positive");
       else if (changeFilter === "Negative") mapped = mapped.filter(row => row.changeDirection === "Negative");
     }
-    if (country !== "All") mapped = mapped.filter(row => row.exchangeCountry === country);
+    if (selectedCountries.length > 0 && !selectedCountries.includes("All")) {
+  mapped = mapped.filter(row => selectedCountries.includes(row.exchangeCountry));
+}
 
     mapped = mapped.filter(row => {
       const rating = row.technicalRating.toLowerCase();
@@ -1110,7 +1115,7 @@ export default function Suggestion() {
       });
     }
     return mapped;
-  }, [data, searchTerm, timeframe, sortConfig, filterRating, changeFilter, country]);
+  }, [data, searchTerm, timeframe, sortConfig, filterRating, changeFilter, selectedCountries]);
 
   const SortIndicator = ({ colKey }) => {
     const active = sortConfig.key === colKey;
@@ -1163,16 +1168,16 @@ export default function Suggestion() {
                       style={{ height: '37.33px', width: undefined }}
                     >
                       <span className="truncate flex items-center gap-2">
-                        {selectedCountryOption.flag ? (
+                        {selectedCountries.length === 1 && selectedCountries[0] === "All" ? (
+                          <i className="bi bi-globe text-gray-400 dark:text-white" style={{ fontSize: '16px', lineHeight: '16px' }}></i>
+                        ) : selectedCountries.length === 1 && countryOptions.find(c => c.code === selectedCountries[0])?.flag ? (
                           <img
-                            src={`https://flagcdn.com/${selectedCountryOption.flag}.svg`}
-                            srcSet={`https://flagcdn.com/w40/${selectedCountryOption.flag}.png 2x, https://flagcdn.com/w20/${selectedCountryOption.flag}.png 1x`}
+                            src={`https://flagcdn.com/${countryOptions.find(c => c.code === selectedCountries[0]).flag}.svg`}
+                            srcSet={`https://flagcdn.com/w40/${countryOptions.find(c => c.code === selectedCountries[0]).flag}.png 2x, https://flagcdn.com/w20/${countryOptions.find(c => c.code === selectedCountries[0]).flag}.png 1x`}
                             alt="flag"
                             className="w-5 h-5 object-contain rounded-sm"
-                            onError={(e) => { if (!e.target.dataset.fallback) { e.target.dataset.fallback = '1'; e.target.src = `https://flagcdn.com/w40/${selectedCountryOption.flag}.png`; } }}
+                            onError={(e) => { if (!e.target.dataset.fallback) { e.target.dataset.fallback = '1'; e.target.src = `https://flagcdn.com/w40/${countryOptions.find(c => c.code === selectedCountries[0]).flag}.png`; } }}
                           />
-                        ) : (selectedCountryOption.code === 'All' || selectedCountryOption.code === 'all') ? (
-                          <i className="bi bi-globe text-gray-400 dark:text-white" style={{ fontSize: '16px', lineHeight: '16px' }}></i>
                         ) : null}
                         <span>{selectedCountryLabel}</span>
                       </span>
@@ -1180,25 +1185,59 @@ export default function Suggestion() {
                     </button>
                     {showCountryMenu && (
                       <div className="absolute left-0 top-full z-9999 mt-2 w-full sm:w-56 max-h-72 overflow-auto hide-scrollbar rounded-2xl border border-gray-200 dark:border-none bg-white dark:bg-[#595959] dark:text-white shadow-[0_10px_30px_rgba(15,23,42,0.15)] py-1" style={{ transform: 'translateZ(0)' }}>
-                        {countryOptions.map((opt) => (
-                          <button key={opt.code} onClick={() => { setCountry(opt.code); setShowCountryMenu(false); trackFilter('country', opt.label); }} className={`flex w-full items-center justify-between px-4 py-1.5 text-left text-xs sm:text-sm transition-colors ${country === opt.code ? "bg-[#EEF2FF] text-[#0B102A] font-semibold dark:bg-[#4A4A4A] dark:text-white" : "text-gray-700 dark:text-white hover:bg-gray-50 dark:hover:bg-[#4A4A4A]"}`}>
-                            <span className="flex items-center gap-2">
-                              {opt.flag ? (
-                                <img
-                                  src={`https://flagcdn.com/${opt.flag}.svg`}
-                                  srcSet={`https://flagcdn.com/w40/${opt.flag}.png 2x, https://flagcdn.com/w20/${opt.flag}.png 1x`}
-                                  alt="flag"
-                                  className="w-5 h-5 object-contain rounded-sm"
-                                  onError={(e) => { if (!e.target.dataset.fallback) { e.target.dataset.fallback = '1'; e.target.src = `https://flagcdn.com/w40/${opt.flag}.png`; } }}
-                                />
-                              ) : (opt.code === 'all' || opt.code === 'All') ? (
-                                <i className="bi bi-globe text-gray-400 dark:text-white" style={{ fontSize: '16px', lineHeight: '16px' }}></i>
-                              ) : null}
-                              <span>{opt.label}</span>
-                            </span>
-                            {/* Removed check icon per request */}
-                          </button>
-                        ))}
+                        {countryOptions.map((opt) => {
+                          const isSelected = selectedCountries.includes(opt.code);
+                          const isAll = opt.code === "All";
+                          return (
+                            <button 
+                              key={opt.code} 
+                              onClick={() => {
+                                let newSelection;
+                                if (isAll) {
+                                  // If "All" is selected, clear everything else
+                                  newSelection = ["All"];
+                                } else if (isSelected) {
+                                  // Remove this country
+                                  newSelection = selectedCountries.filter(c => c !== opt.code);
+                                  // If no countries left, select "All"
+                                  if (newSelection.length === 0) {
+                                    newSelection = ["All"];
+                                  } else {
+                                    // Remove "All" if other countries are selected
+                                    newSelection = newSelection.filter(c => c !== "All");
+                                  }
+                                } else {
+                                  // Add this country and remove "All"
+                                  newSelection = selectedCountries.filter(c => c !== "All");
+                                  newSelection.push(opt.code);
+                                }
+                                setSelectedCountries(newSelection);
+                                // Don't close the menu - let user continue selecting
+                                trackFilter('country', opt.label);
+                              }} 
+                              className={`flex w-full items-center justify-between px-4 py-1.5 text-left text-xs sm:text-sm transition-colors ${isSelected ? "bg-[#EEF2FF] text-[#0B102A] font-semibold dark:bg-[#4A4A4A] dark:text-white" : "text-gray-700 dark:text-white hover:bg-gray-50 dark:hover:bg-[#4A4A4A]"}`}
+                            >
+                              <span className="flex items-center gap-2">
+                                {opt.flag ? (
+                                  <img
+                                    src={`https://flagcdn.com/w20/${opt.flag}.png`}
+                                    alt=""
+                                    className="h-4 w-4 rounded-full object-cover"
+                                    onError={(e) => { e.target.style.display = 'none'; }}
+                                  />
+                                ) : null}
+                                <span>{opt.label}</span>
+                              </span>
+                              <div className={`h-4 w-4 rounded border-2 flex items-center justify-center ${isSelected ? "bg-[#0B102A] border-[#0B102A]" : "border-gray-300 dark:border-gray-500"}`}>
+                                {isSelected && (
+                                  <svg className="h-3 w-3 text-white" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                                  </svg>
+                                )}
+                              </div>
+                            </button>
+                          );
+                        })}
                       </div>
                     )}
                   </div>

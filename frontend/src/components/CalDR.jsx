@@ -212,10 +212,11 @@ export default function DRCal() {
 
           const first = data.rows[0];
           setDefaultDR(first);              // ✅ เก็บ default
-          setSelectedDR(first);
-          setSearchText(first.symbol);
+          // ไม่ตั้งค่า selectedDR และ searchText ตอนเริ่มต้น
+          // setSelectedDR(first);
+          // setSearchText(first.symbol);
 
-          fetchRealtimeUnderlying(first.symbol); // ✅ ดึง realtime
+          // fetchRealtimeUnderlying(first.symbol); // ✅ ดึง realtime
         }
       } catch (err) {
         console.error(err);
@@ -594,7 +595,7 @@ export default function DRCal() {
   return (
     <div className="min-h-screen w-full bg-[#F5F5F5] dark:bg-[#0B0E14] flex flex-col items-center pb-6 lg:pb-10">
       <div className="w-full max-w-[1040px] lg:scale-[1.2] origin-top px-3 sm:px-4 md:px-6 lg:px-0 mx-auto">
-        <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold mb-2 sm:mb-3 text-black dark:text-white mt-6 lg:mt-10">Calculation DR</h1>
+        <h1 className="text-[30px] font-bold mb-2 sm:mb-2 text-black dark:text-white mt-6 lg:mt-7">Calculation DR</h1>
         <p className="text-xs sm:text-sm lg:text-base text-[#6B6B6B] dark:text-white/70 mb-4 sm:mb-6 lg:mb-8 break-words">
           Calculate DR Fair Value based on Underlying Price, Exchange Rate, and Conversion Ratio.
         </p>
