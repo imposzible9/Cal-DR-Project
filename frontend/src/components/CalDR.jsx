@@ -496,7 +496,7 @@ export default function DRCal() {
 
     return (
       <div ref={tableRef} className="w-full mt-3 md:mt-2 bg-white dark:bg-[#10172A] dark:border-white/10 dark:text-white rounded-xl shadow-[0_4px_20px_rgba(0,0,0,0.05)] border border-gray-100 dark:border-white/10 overflow-hidden font-['Sarabun'] overflow-x-auto md:overflow-x-visible">
-        <div className="overflow-x-auto hide-scrollbar">
+        <div className="overflow-x-auto">
           <table className="w-full text-[12px] md:text-[14.4px] text-left border-collapse">
             <thead className="bg-[#0B102A] text-white font-bold sticky top-0" style={{ zIndex: 50 }}>
               <tr className="h-[45px] md:h-[50px]">

@@ -963,8 +963,8 @@ export default function DRList() {
         </div>
 
         {/* Desktop Table View */}
-        <div className="hidden lg:block overflow-x-auto hide-scrollbar" style={{ position: 'relative' }}>
-          <div className="max-h-[70vh] overflow-y-auto hide-scrollbar" style={{ position: 'relative' }}>
+        <div className="hidden lg:block" style={{ position: 'relative' }}>
+          <div style={{ position: 'relative' }}>
             <table className="min-w-full w-full text-left border-collapse text-[12px] md:text-[14.4px]">
               <thead className="bg-[#0B102A] text-white font-bold sticky top-0" style={{ zIndex: 50 }}>
                 <tr className="h-[45px] md:h-[50px]">
@@ -1258,7 +1258,7 @@ export default function DRList() {
 
         {/* Main Table - Scrollable */}
         <div className="flex-1 overflow-hidden pb-6 sm:pb-10 mt-0 sm:mt-10">
-          <div className="h-full bg-white dark:bg-[#10172A] dark:border-white/0 dark:text-white rounded-xl shadow-[0_4px_20px_rgba(0,0,0,0.05)] border border-gray-100 overflow-auto hide-scrollbar">
+          <div className="h-full bg-white dark:bg-[#10172A] dark:border-white/0 dark:text-white rounded-xl shadow-[0_4px_20px_rgba(0,0,0,0.05)] border border-gray-100 overflow-auto">
             {loading ? (
               <>
                 {/* Desktop - Table Skeleton */}

@@ -411,7 +411,8 @@ export default function Calendar() {
         // Note: Using a standard fetch/axios call. If StrictMode triggers twice, 
         // the second call will be blocked by the timestamp guard above if data already exists,
         // or they will both run but the guard ensures we don't spam.
-        const res = await axios.get(API_CONFIG.endpoints.earnings.get(country), {
+        const countryParam = selectedCountries.includes("All") ? "all" : selectedCountries.join(",");
+        const res = await axios.get(API_CONFIG.endpoints.earnings.get(countryParam), {
           signal: controller.signal,
           headers: { 'Cache-Control': 'no-cache' }
         });
@@ -1083,7 +1084,7 @@ export default function Calendar() {
                   <svg className={`h-4 w-4 flex-shrink-0 transition-transform text-gray-500 dark:text-white ${showCountryMenu ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
                 </button>
                 {showCountryMenu && (
-                  <div className="absolute left-0 top-full z-[9999] mt-2 w-full sm:w-56 max-h-72 overflow-auto hide-scrollbar rounded-2xl border border-gray-200 dark:border-none bg-white dark:bg-[#595959] dark:text-white shadow-[0_10px_30px_rgba(15,23,42,0.15)] py-1" style={{ transform: 'translateZ(0)' }}>
+                  <div className="absolute left-0 top-full z-[9999] mt-2 w-full sm:w-56 max-h-72 overflow-auto rounded-2xl border border-gray-200 dark:border-none bg-white dark:bg-[#595959] dark:text-white shadow-[0_10px_30px_rgba(15,23,42,0.15)] py-1" style={{ transform: 'translateZ(0)' }}>
                     {countryOptions.map((opt) => {
                       const isSelected = selectedCountries.includes(opt.code);
                       const isAll = opt.code === "All";
@@ -1211,7 +1212,7 @@ export default function Calendar() {
 
         {/* Main Content - Scrollable */}
         <div className="flex-1 overflow-hidden pb-6 sm:pb-10 -mt-2 md:mt-9 px-4 sm:px-0">
-          <div className="h-full bg-white dark:bg-[#0B0E14] dark:border-white/10 dark:text-white rounded-xl shadow-[0_2px_10px_rgba(0,0,0,0.03)] overflow-auto hide-scrollbar">
+          <div className="h-full dark:bg-[#0B0E14] dark:border-white/10 dark:text-white rounded-xl  overflow-auto">
 
             {/* Mobile Card View */}
             <div className="block lg:hidden">
