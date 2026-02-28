@@ -426,9 +426,6 @@ export default function Calendar() {
         }
         if (!controller.signal.aborted) {
           try {
-            // Debug: sample API data (disabled in production)
-            // console.log("📥 Earnings API response sample:", responseData);
-            // console.log("📥 Flattened earnings sample:", finalData.slice(0, 3));
           } catch (err) {
             // ignore logging errors
           }

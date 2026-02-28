@@ -328,7 +328,6 @@ const RatingHistoryModal = ({ item, timeframe, onClose }) => {
           // ดึงจาก /api/intraday-history/{ticker}?timeframe=...
           const baseUrl = import.meta.env.VITE_HISTORY_API;
           const url = `${baseUrl}/api/intraday-history/${ticker}?timeframe=${timeframe}`;
-          console.log("🔍 Fetching INTRADAY from URL:", url);
           const response = await fetch(url);
           if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
           const apiData = await response.json();
@@ -347,7 +346,6 @@ const RatingHistoryModal = ({ item, timeframe, onClose }) => {
 
           // const url = `${baseUrl}/ratings/history-with-accuracy/${ticker}?timeframe=${tf}&mode=${mode}`;
           const url = `${baseUrl}/history-with-accuracy/${ticker}?timeframe=${tf}`;
-          console.log("🔍 Fetching from URL:", url);
           const response = await fetch(url);
           if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
           data = await response.json();
@@ -396,8 +394,6 @@ const RatingHistoryModal = ({ item, timeframe, onClose }) => {
       // Prefer the explicit 'prev' value on the current record if provided,
       // otherwise fall back to the next (older) record's rating.
       const ratingPrev = curr.prev ?? next.daily_rating ?? next.rating ?? next.dailyRating ?? next.rating_day ?? null;
-      // DEBUG: log prev value for troubleshooting
-      // console.log('DEBUG prev:', ratingPrev, 'raw:', next);
       const prev_timestamp = next.timestamp ?? next.date ?? null;
       const curr_open = (curr.at_price ?? curr.open ?? curr.result_price ?? curr.price) ?? null;
       let change_pct_open = null;
@@ -604,18 +600,14 @@ const RatingHistoryModal = ({ item, timeframe, onClose }) => {
                       const companyName = item.underlyingName || item.displayName || item.description || '';
                       const slug = getLogoSlug(companyName);
                       const url = `https://s3-symbol-logo.tradingview.com/${slug}.svg`;
-                      console.log('📸 Company:', companyName);
-                      console.log('📸 Logo Slug:', slug);
-                      console.log('📸 Logo URL:', url);
                       return url;
                     })()}
                     alt={item.displaySymbol}
                     className="w-full h-full object-contain rounded-xl"
                     onError={() => {
-                      console.log('❌ Logo failed to load for:', item.displaySymbol);
                       setLogoError(true);
                     }}
-                    onLoad={() => console.log('✅ Logo loaded successfully for:', item.displaySymbol)}
+                    onLoad={() => {}}
                   />
                 ) : (
                   <span className="text-white text-base sm:text-xl font-bold">{item.displaySymbol?.[0] || "?"}</span>

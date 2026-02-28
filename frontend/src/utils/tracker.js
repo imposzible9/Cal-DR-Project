@@ -98,7 +98,6 @@ const sendTrackingEvent = async (eventType, eventData = {}, pagePath = normalize
     const lastSent = eventCache.get(eventKey) || 0;
 
     if (now - lastSent < 1000) {
-        // console.log("⏭️ Skipping duplicate event:", eventType);
         return;
     }
     eventCache.set(eventKey, now);

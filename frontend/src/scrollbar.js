@@ -24,32 +24,20 @@ class ScrollbarDarkMode {
     const hasDarkClass = document.documentElement.classList.contains('dark') ||
                          document.body.classList.contains('dark');
     
-    // Debug logging
-    console.log('Dark mode check:', {
-      htmlClass: document.documentElement.classList.contains('dark'),
-      bodyClass: document.body.classList.contains('dark'),
-      systemDark: window.matchMedia('(prefers-color-scheme: dark)').matches,
-      isDark: hasDarkClass
-    });
-    
     return hasDarkClass;
   }
 
   updateScrollbar() {
     const isDark = this.isDarkMode();
     
-    console.log('Updating scrollbar - isDark:', isDark);
-    
     // Remove existing scrollbar styles
     const existingStyle = document.getElementById('dark-scrollbar-styles');
     if (existingStyle) {
       existingStyle.remove();
-      console.log('Removed existing scrollbar styles');
     }
     
     // If light mode, don't add any styles (use OS default)
     if (!isDark) {
-      console.log('Light mode detected - using OS default scrollbar');
       return;
     }
 
@@ -88,7 +76,6 @@ class ScrollbarDarkMode {
     `;
     
     document.head.appendChild(style);
-    console.log('Added dark mode scrollbar styles');
   }
 
   observeDarkMode() {
