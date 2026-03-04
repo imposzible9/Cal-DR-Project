@@ -8,6 +8,13 @@ const Navbar = () => {
   const location = useLocation();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [showStatsIcon, setShowStatsIcon] = useState(false);
+
+  // Scroll to top when navigating
+  const handleNavigation = (to) => {
+    window.scrollTo(0, 0);
+    navigate(to);
+    closeMenu();
+  };
   const [calendarNotificationCount, setCalendarNotificationCount] = useState(0);
   const [isDarkMode, setIsDarkMode] = useState(false);
 
@@ -82,7 +89,7 @@ const Navbar = () => {
         {/* 1. Logo (Left) */}
         <div
           className="cursor-pointer shrink-0 flex items-center gap-2"
-          onClick={() => { navigate('/'); closeMenu(); }}
+          onClick={() => handleNavigation('/')}
         >
           <img
             className="h-8 md:h-10"
@@ -128,6 +135,7 @@ const Navbar = () => {
                 ? 'text-blue-500'
                 : 'text-gray-700 dark:text-gray-200 hover:text-gray-900 dark:text-white dark:text-white dark:hover:text-gray-300'
                 }`}
+              onClick={() => window.scrollTo(0, 0)}
             >
               DR List
             </Link>
@@ -135,6 +143,7 @@ const Navbar = () => {
             <Link
               to="/caldr"
               className={`text-sm font-medium transition-colors duration-300 ${isActive('/caldr') ? 'text-blue-500' : 'text-gray-700 dark:text-gray-200 hover:text-gray-900 dark:text-white dark:text-white dark:hover:text-gray-300'}`}
+              onClick={() => window.scrollTo(0, 0)}
             >
               Calculation DR
             </Link>
@@ -142,6 +151,7 @@ const Navbar = () => {
             <Link
               to="/suggestion"
               className={`text-sm font-medium transition-colors duration-300 ${isActive('/suggestion') ? 'text-blue-500' : 'text-gray-700 dark:text-gray-200 hover:text-gray-900 dark:text-white dark:text-white dark:hover:text-gray-300'}`}
+              onClick={() => window.scrollTo(0, 0)}
             >
               Suggestion
             </Link>
@@ -149,6 +159,7 @@ const Navbar = () => {
             <Link
               to="/calendar"
               className={`relative text-sm font-medium transition-colors duration-300 ${isActive('/calendar') ? 'text-blue-500' : 'text-gray-700 dark:text-gray-200 hover:text-gray-900 dark:text-white dark:text-white dark:hover:text-gray-300'}`}
+              onClick={() => window.scrollTo(0, 0)}
             >
               Calendar
               {calendarNotificationCount > 0 && (
@@ -159,6 +170,7 @@ const Navbar = () => {
             <Link
               to="/news"
               className={`text-sm font-medium transition-colors duration-300 ${isActive('/news') ? 'text-blue-500' : 'text-gray-700 dark:text-gray-200 hover:text-gray-900 dark:text-white dark:text-white dark:hover:text-gray-300'}`}
+              onClick={() => window.scrollTo(0, 0)}
             >
               News
             </Link>
@@ -171,6 +183,7 @@ const Navbar = () => {
                 to="/stats"
                 className={`text-gray-700 dark:text-gray-200 hover:text-blue-600 dark:text-white dark:hover:text-blue-400 transition-colors duration-300 ${isActive('/stats') ? 'text-blue-600 dark:text-blue-400' : ''}`}
                 title="Stats"
+                onClick={() => window.scrollTo(0, 0)}
               >
                 <i className="bi bi-file-earmark-text text-xl"></i>
               </Link>
@@ -191,7 +204,7 @@ const Navbar = () => {
               ? 'text-blue-500'
               : 'text-gray-700 dark:text-gray-200 dark:text-white'
               }`}
-            onClick={closeMenu}
+            onClick={() => { window.scrollTo(0, 0); closeMenu(); }}
           >
             DR List
           </Link>
@@ -199,7 +212,7 @@ const Navbar = () => {
           <Link
             to="/caldr"
             className={`text-base font-medium transition-colors duration-300 ${isActive('/caldr') ? 'text-blue-500' : 'text-gray-700 dark:text-gray-200 dark:text-white'}`}
-            onClick={closeMenu}
+            onClick={() => { window.scrollTo(0, 0); closeMenu(); }}
           >
             Calculation DR
           </Link>
@@ -207,7 +220,7 @@ const Navbar = () => {
           <Link
             to="/suggestion"
             className={`text-base font-medium transition-colors duration-300 ${isActive('/suggestion') ? 'text-blue-500' : 'text-gray-700 dark:text-gray-200 dark:text-white'}`}
-            onClick={closeMenu}
+            onClick={() => { window.scrollTo(0, 0); closeMenu(); }}
           >
             Suggestion
           </Link>
@@ -215,7 +228,7 @@ const Navbar = () => {
           <Link
             to="/calendar"
             className={`text-base font-medium flex items-center justify-between transition-colors duration-300 ${isActive('/calendar') ? 'text-blue-500' : 'text-gray-700 dark:text-gray-200 dark:text-white'}`}
-            onClick={closeMenu}
+            onClick={() => { window.scrollTo(0, 0); closeMenu(); }}
           >
             Calendar
             {calendarNotificationCount > 0 && (
@@ -228,7 +241,7 @@ const Navbar = () => {
           <Link
             to="/news"
             className={`text-base font-medium transition-colors duration-300 ${isActive('/news') ? 'text-blue-500' : 'text-gray-700 dark:text-gray-200 dark:text-white'}`}
-            onClick={closeMenu}
+            onClick={() => { window.scrollTo(0, 0); closeMenu(); }}
           >
             News
           </Link>
