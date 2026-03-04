@@ -415,6 +415,18 @@ export default function DRList() {
                 className="absolute left-0 top-full z-[9999] mt-1 w-full sm:w-56 max-h-60 md:max-h-72 overflow-auto hide-scrollbar rounded-2xl border border-gray-200 dark:border-none bg-white dark:bg-[#595959] dark:text-white shadow-[0_10px_30px_rgba(15,23,42,0.15)] py-1"
                 style={{ transform: 'translateZ(0)' }}
               >
+                {/* Clear All Button */}
+                <button
+                  onClick={() => {
+                    setSelectedCountries(["all"]);
+                    trackFilter('country', 'all');
+                  }}
+                  className="flex w-full items-center justify-between px-3 sm:px-4 py-2 text-[11px] sm:text-xs text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20 transition-colors"
+                >
+                  <span>Clear All</span>
+                  <i className="bi bi-x-circle text-sm"></i>
+                </button>
+                <div className="border-t border-gray-200 dark:border-white/10 my-1"></div>
                 {countryOptions.map((opt) => {
                   const isSelected = selectedCountries.includes(opt.code);
                   const isAll = opt.code === "all";
@@ -970,9 +982,9 @@ export default function DRList() {
                 <tr className="h-[45px] md:h-[50px]">
                   {visibleColumns.dr && (
                     <th rowSpan={2} colSpan={visibleColumns.star ? 2 : 1} className="py-2 md:py-4 px-2 md:px-3 text-left sticky top-0 bg-[#0B102A] align-middle cursor-pointer relative text-xs md:text-sm" style={{ left: "0px", width: visibleColumns.star ? "160px" : "130px", minWidth: visibleColumns.star ? "160px" : "130px", zIndex: 110 }} onClick={() => handleSort("dr")}>
-                      <div className="flex items-center gap-0.5 text-xs md:text-sm">
-                        <span className={visibleColumns.star ? "pl-6 md:pl-8" : ""}>DR</span>
+                      <div className="flex items-center justify-end gap-0.5 text-xs md:text-sm pr-2 md:pr-3">
                         <SortIndicator colKey="dr" />
+                        <span className={visibleColumns.star ? "pr-4 md:pr-21" : ""}>DR</span>
                       </div>
                       {sortConfig.key === "dr" && (
                         <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#2F80ED]" style={{ zIndex: 120 }}>
@@ -1242,7 +1254,7 @@ export default function DRList() {
   };
 
   return (
-    <div className="h-screen w-full bg-[#F5F5F5 dark:bg-[#151D33]] overflow-hidden flex justify-center">
+    <div className="h-screen sm:h-[90vh] w-full bg-[#F5F5F5 dark:bg-[#151D33]] overflow-hidden flex justify-center">
       <div className="w-full max-w-[1248px] flex flex-col h-full">
         {/* Header Section - Responsive scaling removed for mobile */}
         <div className="pt-6 sm:pt-10 pb-0 px-4 flex-shrink-0" style={{ overflow: 'visible', zIndex: 100 }}>

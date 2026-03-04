@@ -593,7 +593,7 @@ export default function DRCal() {
   };
 
   return (
-    <div className="min-h-screen w-full bg-[#F5F5F5] dark:bg-[#0B0E14] flex flex-col items-center pb-6 lg:pb-10">
+    <div className="h-screen sm:h-[90vh] w-full bg-[#F5F5F5] dark:bg-[#0B0E14] flex flex-col items-center pb-6 lg:pb-10">
       <div className="w-full max-w-[1040px] lg:scale-[1.2] origin-top px-3 sm:px-4 md:px-6 lg:px-0 mx-auto">
         <h1 className="text-[30px] font-bold mb-2 sm:mb-2 text-black dark:text-white mt-6 lg:mt-7">Calculation DR</h1>
         <p className="text-xs sm:text-sm lg:text-base text-[#6B6B6B] dark:text-white/70 mb-4 sm:mb-6 lg:mb-8 break-words">
@@ -728,15 +728,15 @@ export default function DRCal() {
                 <div className="flex justify-center gap-2 mt-0 sm:mt-0.5 w-full">
                   <button
                     onClick={onReset}
-                    className="w-[120px] sm:w-[139px] h-[36px] sm:h-[38px] bg-white dark:bg-[#10172A] dark:border-white/10 dark:text-white rounded-[8px] flex justify-center items-center gap-2 text-black font-bold text-[11px] sm:text-[12px] hover:bg-gray-200 transition-colors"
+                    className="w-[120px] sm:w-[120px] h-[36px] sm:h-[38px] bg-white dark:bg-[#10172A] dark:border-white/10 dark:text-white rounded-[8px] flex justify-center items-center gap-2 text-black font-bold text-[11px] sm:text-[12px] hover:bg-gray-200 transition-colors"
                   >
                     Clear
                   </button>
                 </div>
               </div>
 
-              <div className="mt-4 sm:mt-6 px-2 sm:px-4">
-                <h3 className="text-white font-bold text-base sm:text-[20px] mb-3 sm:mb-4">Calculation Result</h3>
+              <div className="mt-4 sm:mt-4 px-2 sm:px-4">
+                <h3 className="text-white font-bold text-base sm:text-[20px] mb-3 sm:mb-2">Calculation Result</h3>
                 <div className="flex justify-between items-center mb-2 px-3 sm:px-4">
                   <span className="text-white font-bold text-sm sm:text-[16px]">Fair Bid</span>
                   <span className="text-white font-bold text-base sm:text-[18px]">{hasInput ? `${fmtTHB(fairBidTHB)} THB` : "-  THB"}</span>
@@ -762,7 +762,7 @@ export default function DRCal() {
 
       {/* Comparison Table Section - Same as DRList, outside of scale div */}
       <div className="w-full max-w-[1312px] mx-auto px-4 sm:px-6 lg:px-8 mt-1 sm:mt-24 lg:mt-34 mb-6 lg:mb-10 lg:scale-[1.0] lg:origin-top">
-        {updatedAt && (
+        {updatedAt && filteredTableData.length > 0 && (
           <div className="flex flex-col items-end gap-0.5 text-[10px] sm:text-xs text-gray-500 pr-1 mt-3 sm:mt-4 mb-1 overflow-hidden">
             <div className="break-words">
               Last Updated:{" "}
@@ -772,7 +772,6 @@ export default function DRCal() {
                 day: "numeric",
                 hour: "2-digit",
                 minute: "2-digit",
-                second: "2-digit",
               })}
             </div>
           </div>
