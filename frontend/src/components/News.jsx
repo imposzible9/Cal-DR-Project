@@ -318,7 +318,7 @@ const News = () => {
           });
           merged = res.data?.news || [];
         } else {
-          // Specific countries
+          // Specific countries - fetch all selected countries
           for (const countryCode of selectedCountries) {
             const config = COUNTRY_CONFIG[countryCode];
             if (config) {
@@ -355,12 +355,15 @@ const News = () => {
 
           // Pass country context if specific countries are selected
           if (!selectedCountries.includes("all")) {
-            const firstCountry = selectedCountries[0];
-            const config = COUNTRY_CONFIG[firstCountry];
-            if (config) {
-              batchParams.country = firstCountry.toLowerCase();
-              batchParams.language = config.lang;
+            // Use all selected countries for batch updates
+            const allSymbols = [];
+            for (const countryCode of selectedCountries) {
+              const config = COUNTRY_CONFIG[countryCode];
+              if (config && config.symbols) {
+                allSymbols.push(...config.symbols);
+              }
             }
+            batchParams.symbols = [...new Set(allSymbols)]; // Remove duplicates
           }
 
           const batchRes = await axios.post(API_CONFIG.endpoints.news.batchTickerData, batchParams);
@@ -743,6 +746,18 @@ const News = () => {
 
                 {showCountryMenu && (
                   <div className="absolute left-0 top-full z-[20000] mt-2 w-full sm:w-56 max-h-72 overflow-auto hide-scrollbar rounded-2xl border border-gray-200 dark:border-none bg-white dark:bg-[#595959] dark:text-white shadow-[0_10px_30px_rgba(15,23,42,0.15)] py-1" style={{ transform: 'translateZ(0)' }}>
+                    {/* Clear All Button */}
+                    <button
+                      onClick={() => {
+                        setSelectedCountries(["all"]);
+                        trackFilter('country', 'all');
+                      }}
+                      className="flex w-full items-center justify-between px-4 py-2 text-xs text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20 transition-colors"
+                    >
+                      <span>Clear All</span>
+                      <i className="bi bi-x-circle text-sm"></i>
+                    </button>
+                    <div className="border-t border-gray-200 dark:border-white/10 my-1"></div>
                     {COUNTRY_OPTIONS.map((opt) => {
                       const isSelected = selectedCountries.includes(opt.code);
                       const isAll = opt.code === "all";
