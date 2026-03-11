@@ -211,12 +211,24 @@ const News = () => {
   const selected = searchParams.get("symbol") || "";
 
   const [search, setSearch] = useState(selected);
-  const [selectedCountries, setSelectedCountries] = useState(["all"]); // Array for multi-select
-  const selectedCountryLabel = selectedCountries.length === 1 && selectedCountries[0] === "all" 
-    ? "All Markets" 
-    : selectedCountries.length === 0 
+  const [selectedCountries, setSelectedCountries] = useState(() => {
+    try {
+      const saved = localStorage.getItem("news_selected_countries");
+      return saved ? JSON.parse(saved) : ["all"];
+    } catch {
+      return ["all"];
+    }
+  }); // Array for multi-select
+  const selectedCountryLabel = selectedCountries.length === 1 && selectedCountries[0] === "all"
     ? "All Markets"
-    : `${selectedCountries.length} Markets`;
+    : selectedCountries.length === 0
+      ? "All Markets"
+      : `${selectedCountries.length} Markets`;
+
+  /* PERSIST FILTERS */
+  useEffect(() => {
+    localStorage.setItem("news_selected_countries", JSON.stringify(selectedCountries));
+  }, [selectedCountries]);
   const [showCountryMenu, setShowCountryMenu] = useState(false);
   const countryMenuRef = useRef(null);
   const searchContainerRef = useRef(null);
@@ -708,7 +720,7 @@ const News = () => {
 
   return (
     <div className="min-h-screen w-full bg-[#F5F5F5] dark:bg-[#0B0E14] flex justify-center">
-      <div className="w-full max-w-[1248px] px-4 md:px-0 flex flex-col h-full py-6">
+      <div className="w-full max-w-[1248px] px-4 md:px-6 lg:px-8 xl:px-0 flex flex-col h-full py-6">
 
         {/* Header Section */}
         <div className="flex flex-col gap-3 sm:gap-6 mb-4 sm:mb-8 sm:pt-3">
@@ -720,11 +732,11 @@ const News = () => {
           <div className="w-full flex">
             <div className="flex flex-col md:flex-row md:items-center md:justify-between w-full mb-2 md:mb-0 gap-3 md:gap-0">
               {/* Country Select */}
-              <div className="relative w-full md:w-[202.5px] lg:scale-[1.2] lg:origin-top lg:ml-6 z-[200]" ref={countryMenuRef} style={{ isolation: 'isolate', overflow: 'visible' }}>
+              <div id="tour-news-market" className="relative w-full md:w-[202.5px] xl:scale-[1.2] xl:origin-top xl:ml-6 z-[200]" ref={countryMenuRef} style={{ isolation: 'isolate', overflow: 'visible' }}>
                 <button
                   type="button"
                   onClick={() => setShowCountryMenu(!showCountryMenu)}
-                  className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 dark:border-none bg-white dark:bg-[#595959] dark:text-white px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 dark:hover:bg-[#4A4A4A] focus:outline-none focus:ring-2 focus:ring-[#0B102A] dark:focus:ring-0 w-full lg:w-[202.5px]"
+                  className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 dark:border-none bg-white dark:bg-[#595959] dark:text-white px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 dark:hover:bg-[#4A4A4A] focus:outline-none focus:ring-2 focus:ring-[#0B102A] dark:focus:ring-0 w-full md:w-[202.5px]"
                   style={{ height: '37.33px', width: undefined }}
                 >
                   <span className="truncate flex items-center gap-2">
@@ -818,19 +830,20 @@ const News = () => {
               {/* Search Input */}
               <div className="relative w-full md:w-[307.2px] md:ml-4 lg:w-[307.2px] lg:h-[44.79px]" ref={searchContainerRef}>
                 <input
+                  id="tour-news-search"
                   type="text"
                   value={search}
                   onChange={handleSearchChange}
                   onKeyDown={onSearchKey}
                   onFocus={handleSearchFocus}
                   placeholder={selectedCountries.length === 1 && selectedCountries[0] !== "all" ? `Search ${selectedCountries[0]} stocks...` : "Search..."}
-                  className="w-full h-[37.33px] bg-white dark:bg-[#595959] dark:border-none text-gray-900 dark:text-white placeholder:text-gray-400 placeholder:dark:text-white/70 pl-3 pr-12 py-2 sm:pl-5 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#0B102A] dark:focus:ring-0 shadow-sm text-xs md:text-sm lg:w-[307.2px] lg:h-[44.79px] lg:text-[17px]"
+                  className="w-full h-[37.33px] bg-white dark:bg-[#595959] dark:border-none text-gray-900 dark:text-white placeholder:text-gray-400 placeholder:dark:text-white/70 pl-3 pr-12 py-2 sm:pl-5 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#0B102A] dark:focus:ring-0 shadow-sm text-xs md:text-sm md:w-[307.2px] xl:w-[307.2px] xl:h-[44.79px] xl:text-[17px]"
                   style={{ fontSize: undefined, boxSizing: 'border-box' }}
                 />
                 {search ? (
                   <button onClick={clearSearch} className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:text-white/70 dark:hover:text-white"><i className="bi bi-x-lg" style={{ fontSize: '19.2px', lineHeight: '19.2px' }}></i></button>
                 ) : (
-                  <i className="bi bi-search absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 dark:text-white pointer-events-none lg:text-[16px] lg:leading-[16px]" style={{ fontSize: '17px', lineHeight: '17px' }} />
+                  <i className="bi bi-search absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 dark:text-white pointer-events-none xl:text-[16px] xl:leading-[16px]" style={{ fontSize: '17px', lineHeight: '17px' }} />
                 )}
 
                 {/* Suggestions Dropdown */}
@@ -884,8 +897,8 @@ const News = () => {
               )}
             </div>
           ) : (
-            <div className="space-y-8">
-              <div className="space-y-4">
+            <div id="tour-news-list" className="space-y-8">
+              <div id="tour-news-top-stories" className="space-y-4">
                 <h2 className="text-lg sm:text-[20px] font-bold text-[#0B102A] dark:text-white">Top Stories</h2>
                 {loadingHome ? (
                   <NewsSkeleton />
@@ -927,7 +940,7 @@ const News = () => {
                 )}
               </div>
 
-              <div className="space-y-4">
+              <div id="tour-news-latest-updates" className="space-y-4">
                 <h2 className="text-lg sm:text-[20px] font-bold text-[#0B102A] dark:text-white">Latest Updates</h2>
                 <div className="flex flex-col gap-4">
                   {loadingHome ? (

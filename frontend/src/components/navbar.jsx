@@ -84,7 +84,7 @@ const Navbar = () => {
 
   return (
     <header className="bg-white dark:bg-[#10172A] sticky top-0 z-[12000] shadow-sm border-b border-gray-200 dark:border-white/10 dark:border-white/10 transition-colors duration-300">
-      <div className="w-full max-w-[1040px] mx-auto px-4 md:px-0 py-3 md:py-5 flex items-center justify-between relative lg:scale-[1.2] lg:origin-center">
+      <div className="w-full max-w-[1248px] xl:max-w-[1040px] mx-auto px-4 md:px-6 lg:px-8 xl:px-0 py-3 md:py-4 xl:py-5 flex items-center justify-between relative xl:scale-[1.2] xl:origin-center">
 
         {/* 1. Logo (Left) */}
         <div
@@ -101,7 +101,9 @@ const Navbar = () => {
         {/* Mobile Menu Actions */}
         <div className="md:hidden flex items-center gap-4">
           {/* Mobile Dark Mode Switch */}
-          <ThemeToggle />
+          <div id="tour-theme-mobile">
+            <ThemeToggle />
+          </div>
 
           {showStatsIcon && (
             <Link
@@ -115,6 +117,7 @@ const Navbar = () => {
 
           {/* Hamburger Icon */}
           <button
+            id="tour-menu-mobile"
             onClick={toggleMenu}
             className="text-gray-700 dark:text-gray-200 dark:text-white hover:text-gray-900 dark:text-white focus:outline-none transition-colors duration-300"
           >
@@ -127,10 +130,11 @@ const Navbar = () => {
         </div>
 
         {/* 2 & 3. Desktop Navigation and Icons (Right) */}
-        <div className="hidden md:flex items-center gap-8 justify-end flex-1">
-          <nav className="flex flex-row items-center gap-8">
+        <div className="hidden md:flex items-center gap-5 lg:gap-6 xl:gap-8 justify-end flex-1">
+          <nav className="flex flex-row items-center gap-5 lg:gap-6 xl:gap-8">
             <Link
               to="/drlist"
+              id="tour-drlist-desktop"
               className={`text-sm font-medium transition-colors duration-300 ${location.pathname === '/' || isActive('/drlist')
                 ? 'text-blue-500'
                 : 'text-gray-700 dark:text-gray-200 hover:text-gray-900 dark:text-white dark:text-white dark:hover:text-gray-300'
@@ -142,6 +146,7 @@ const Navbar = () => {
 
             <Link
               to="/caldr"
+              id="tour-caldr-desktop"
               className={`text-sm font-medium transition-colors duration-300 ${isActive('/caldr') ? 'text-blue-500' : 'text-gray-700 dark:text-gray-200 hover:text-gray-900 dark:text-white dark:text-white dark:hover:text-gray-300'}`}
               onClick={() => window.scrollTo(0, 0)}
             >
@@ -150,6 +155,7 @@ const Navbar = () => {
 
             <Link
               to="/suggestion"
+              id="tour-suggestion-desktop"
               className={`text-sm font-medium transition-colors duration-300 ${isActive('/suggestion') ? 'text-blue-500' : 'text-gray-700 dark:text-gray-200 hover:text-gray-900 dark:text-white dark:text-white dark:hover:text-gray-300'}`}
               onClick={() => window.scrollTo(0, 0)}
             >
@@ -158,6 +164,7 @@ const Navbar = () => {
 
             <Link
               to="/calendar"
+              id="tour-calendar-desktop"
               className={`relative text-sm font-medium transition-colors duration-300 ${isActive('/calendar') ? 'text-blue-500' : 'text-gray-700 dark:text-gray-200 hover:text-gray-900 dark:text-white dark:text-white dark:hover:text-gray-300'}`}
               onClick={() => window.scrollTo(0, 0)}
             >
@@ -169,6 +176,7 @@ const Navbar = () => {
 
             <Link
               to="/news"
+              id="tour-news-desktop"
               className={`text-sm font-medium transition-colors duration-300 ${isActive('/news') ? 'text-blue-500' : 'text-gray-700 dark:text-gray-200 hover:text-gray-900 dark:text-white dark:text-white dark:hover:text-gray-300'}`}
               onClick={() => window.scrollTo(0, 0)}
             >
@@ -190,7 +198,9 @@ const Navbar = () => {
             )}
 
             {/* Dark Mode Switch */}
-            <ThemeToggle />
+            <div id="tour-theme-desktop" className="flex items-center justify-center">
+              <ThemeToggle />
+            </div>
           </div>
         </div>
       </div>

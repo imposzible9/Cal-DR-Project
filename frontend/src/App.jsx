@@ -1,6 +1,6 @@
 import { Routes, Route, useLocation } from "react-router-dom";
 import { useEffect, useRef, lazy, Suspense } from "react";
-import { Navbar, SuggestionPage, DRCal, DRList, CalendarPage, News } from "./components";
+import { Navbar, SuggestionPage, DRCal, DRList, CalendarPage, News, Tutorial } from "./components";
 import { initTracker, trackPageView, trackHeartbeat } from "./utils/tracker";
 
 // Lazy load Stats component
@@ -46,6 +46,7 @@ function App() {
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-dark-main text-gray-900 dark:text-white transition-colors duration-300">
+      <Tutorial />
       {shouldShowNavbar && <Navbar />}
 
       <Routes>

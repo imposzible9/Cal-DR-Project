@@ -126,7 +126,7 @@ const getCountryFromExchange = (exchange = "") => {
 };
 
 export default function DRList() {
-  const [tab, setTab] = useState("all");
+  const [tab, setTab] = useState(() => localStorage.getItem("dr_active_tab") || "all");
   const [searchTerm, setSearchTerm] = useState("");
   const [search, setSearch] = useState("");
   const [sortConfig, setSortConfig] = useState({ key: null, direction: "asc" });
@@ -137,8 +137,15 @@ export default function DRList() {
   const [isPending, startTransition] = useTransition();
 
   /* DR FILTER */
-  const [drFilter, setDrFilter] = useState("all");
-  const [selectedCountries, setSelectedCountries] = useState(["all"]); // Array for multi-select
+  const [drFilter, setDrFilter] = useState(() => localStorage.getItem("dr_filter_type") || "all");
+  const [selectedCountries, setSelectedCountries] = useState(() => {
+    try {
+      const saved = localStorage.getItem("dr_selected_countries");
+      return saved ? JSON.parse(saved) : ["all"];
+    } catch {
+      return ["all"];
+    }
+  }); // Array for multi-select
   const selectedCountryLabel = selectedCountries.length === 1 && selectedCountries[0] === "all"
     ? "All Markets"
     : selectedCountries.length === 0
@@ -224,6 +231,19 @@ export default function DRList() {
       localStorage.setItem("dr_watchlist", JSON.stringify(watchlist));
     } catch { }
   }, [watchlist]);
+
+  /* PERSIST FILTERS */
+  useEffect(() => {
+    localStorage.setItem("dr_active_tab", tab);
+  }, [tab]);
+
+  useEffect(() => {
+    localStorage.setItem("dr_filter_type", drFilter);
+  }, [drFilter]);
+
+  useEffect(() => {
+    localStorage.setItem("dr_selected_countries", JSON.stringify(selectedCountries));
+  }, [selectedCountries]);
 
   useEffect(() => {
     if (!showScrollHint) return;
@@ -378,13 +398,13 @@ export default function DRList() {
   ─────────────────────────────────────────────── */
   const renderControlBar = () => {
     return (
-      <div className="flex flex-col gap-2 sm:gap-3 md:gap-4 mb-3 md:mb-4 lg:flex-row lg:items-center lg:justify-between lg:gap-4">
-        <div className="flex items-center gap-1.5 sm:gap-2 md:gap-3 w-full lg:w-auto overflow-visible pb-1">
-          <div className="relative z-[200] flex-1 sm:flex-initial sm:w-auto min-w-[140px]" ref={countryDropdownRef} style={{ isolation: 'isolate', overflow: 'visible' }}>
+      <div className="flex flex-col gap-2 sm:gap-3 md:gap-4 mb-3 md:mb-4 md:flex-row md:items-center md:justify-between">
+        <div className="flex items-center gap-1.5 sm:gap-2 md:gap-3 w-full md:w-auto overflow-visible pb-1">
+          <div id="tour-country-dropdown" className="relative z-[200] flex-1 sm:flex-initial sm:w-auto min-w-[140px]" ref={countryDropdownRef} style={{ isolation: 'isolate', overflow: 'visible' }}>
             <button
               type="button"
               onClick={() => setShowCountryMenu((prev) => !prev)}
-              className="flex items-center justify-between gap-2 sm:gap-3 rounded-xl border border-gray-200 dark:border-none bg-white dark:bg-[#595959] dark:text-white px-2.5 sm:px-3 py-1.5 sm:py-2 text-[11px] sm:text-xs md:text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 dark:hover:bg-[#4A4A4A] focus:outline-none focus:ring-2 focus:ring-[#0B102A] dark:focus:ring-0 w-full lg:w-[202.5px] h-[37.33px]"
+              className="flex items-center justify-between gap-2 sm:gap-3 rounded-xl border border-gray-200 dark:border-none bg-white dark:bg-[#595959] dark:text-white px-2.5 sm:px-3 py-1.5 sm:py-2 text-[11px] sm:text-xs md:text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 dark:hover:bg-[#4A4A4A] focus:outline-none focus:ring-2 focus:ring-[#0B102A] dark:focus:ring-0 w-full md:w-[202.5px] h-[37.33px]"
             >
               <span className="truncate text-[11px] sm:text-xs md:text-sm flex items-center gap-2">
                 {selectedCountries.length === 1 && selectedCountries[0] === "all" ? (
@@ -487,6 +507,7 @@ export default function DRList() {
           </div>
 
           <button
+            id="tour-watchlist-btn"
             type="button"
             onClick={() => {
               const newFilter = drFilter === "watchlist" ? "all" : "watchlist";
@@ -505,14 +526,15 @@ export default function DRList() {
           </button>
         </div>
 
-        <div className="flex items-center w-full lg:w-auto gap-1.5 sm:gap-2 md:gap-3">
-          <div className="relative flex-1 lg:flex-initial">
+        <div className="flex items-center w-full md:w-auto gap-1.5 sm:gap-2 md:gap-3">
+          <div className="relative flex-1 md:flex-initial">
             <input
+              id="tour-drlist-search"
               type="text"
               placeholder="Search..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="bg-white dark:bg-[#595959] dark:border-none text-gray-900 dark:text-white placeholder:text-gray-400 placeholder:dark:text-white/70 pl-2.5 sm:pl-3 md:pl-4 pr-8 py-1.5 sm:py-2 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#0B102A] dark:focus:ring-0 w-full lg:w-64 text-[11px] sm:text-xs md:text-sm shadow-sm h-[35px] md:h-[37.33px]"
+              className="bg-white dark:bg-[#595959] dark:border-none text-gray-900 dark:text-white placeholder:text-gray-400 placeholder:dark:text-white/70 pl-2.5 sm:pl-3 md:pl-4 pr-8 py-1.5 sm:py-2 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#0B102A] dark:focus:ring-0 w-full md:w-48 lg:w-64 text-[11px] sm:text-xs md:text-sm shadow-sm h-[35px] md:h-[37.33px]"
             />
             <i
               className="bi bi-search absolute right-2.5 sm:right-3 top-1/2 transform -translate-y-1/2 text-gray-400 dark:text-white"
@@ -521,6 +543,7 @@ export default function DRList() {
           </div>
           <div className="shrink-0">
             <button
+              id="tour-customize-btn"
               onClick={() => setShowSettings(true)}
               className="flex items-center gap-1 sm:gap-1.5 md:gap-2 bg-white dark:bg-[#595959] dark:border-none dark:text-white text-gray-700 border border-gray-200 hover:bg-gray-50 dark:hover:bg-[#4A4A4A] rounded-xl px-2.5 sm:px-3 md:px-4 py-1.5 sm:py-2 text-[11px] sm:text-xs md:text-sm font-medium shadow-sm transition-all h-[35px] md:h-[37.33px] whitespace-nowrap"
             >
@@ -842,7 +865,7 @@ export default function DRList() {
     return (
       <div className="relative">
         {showScrollHint && (
-          <div className="pointer-events-none absolute right-2 sm:right-4 top-2 sm:top-3 z-20 hidden lg:flex items-center justify-center">
+          <div className="pointer-events-none absolute right-2 sm:right-4 top-2 sm:top-3 z-20 hidden md:flex items-center justify-center">
             <div className="flex h-8 w-8 sm:h-9 sm:w-9 items-center justify-center rounded-full bg-white dark:bg-[#10172A] dark:border-white/10 dark:text-white shadow-[0_8px_18px_rgba(15,23,42,0.45)] ring-1 ring-black/5" style={{ transform: `translateX(${swipeOffset}px)` }}>
               <img src={swipeImg} alt="scroll hint" className="h-3 w-3 sm:h-4 sm:w-4" />
             </div>
@@ -850,7 +873,7 @@ export default function DRList() {
         )}
 
         {/* Mobile Card View */}
-        <div className="block lg:hidden">
+        <div className="block md:hidden">
           <div className="space-y-3 px-4 dark:bg-[#0B0E14]">
             {sortedData.map((row, index) => {
               const isPop = badges.popularIds.has(row.dr);
@@ -858,6 +881,7 @@ export default function DRList() {
               return (
                 <div
                   key={row.dr}
+                  id={index === 0 ? "tour-first-dr-row-mobile" : undefined}
                   onClick={() => { trackStockView(row.dr, row.underlyingName); setDetailRow(row); }}
                   className="bg-white dark:bg-[#23262A] dark:border-white/10 dark:text-white rounded-xl shadow-sm border border-gray-200 dark:border-white/10 p-4 cursor-pointer hover:shadow-md transition-shadow"
                 >
@@ -942,6 +966,12 @@ export default function DRList() {
                         <span className="text-gray-700 dark:text-gray-200 font-medium">{formatNum(row.low)}</span>
                       </div>
                     )}
+                    {visibleColumns.last && (
+                      <div className="flex justify-between">
+                        <span className="text-gray-500 dark:text-gray-400">Last:</span>
+                        <span className="text-gray-700 dark:text-gray-200 font-medium">{formatNum(row.last)}</span>
+                      </div>
+                    )}
                     {visibleColumns.vol && (
                       <div className="flex justify-between">
                         <span className="text-gray-500 dark:text-gray-400">Volume:</span>
@@ -975,9 +1005,9 @@ export default function DRList() {
         </div>
 
         {/* Desktop Table View */}
-        <div className="hidden lg:block" style={{ position: 'relative' }}>
-          <div style={{ position: 'relative' }}>
-            <table className="min-w-full w-full text-left border-collapse text-[12px] md:text-[14.4px]">
+        <div className="hidden md:block relative w-full">
+          <div className="relative w-full">
+            <table className="text-left border-collapse text-[12px] md:text-[14.4px] table-auto" style={{ width: 'max-content' }}>
               <thead className="bg-[#0B102A] text-white font-bold sticky top-0" style={{ zIndex: 50 }}>
                 <tr className="h-[45px] md:h-[50px]">
                   {visibleColumns.dr && (
@@ -1022,6 +1052,12 @@ export default function DRList() {
                 {sortedData.map((row, index) => renderRow(row, index))}
               </tbody>
             </table>
+            {/* Tutorial Overlay Target - Visible Width Only */}
+            <div
+              id="tour-first-dr-row-desktop"
+              className="absolute left-0 w-full pointer-events-none"
+              style={{ top: '100px', height: '53.6px', zIndex: 5 }}
+            ></div>
           </div>
         </div>
       </div>
@@ -1120,8 +1156,9 @@ export default function DRList() {
     };
 
     return (
-      <div className="flex flex-col sm:flex-row gap-0 sm:gap-0 mb-2 justify-between items-start sm:items-center">
-        <div className="flex gap-3 sm:gap-4 relative overflow-x-auto w-full sm:w-auto pb-0 sm:pb-0">
+      <div className="flex flex-col sm:flex-row gap-0 sm:gap-0 mb-2 justify-between items-start sm:items-center relative">
+        <div id="tour-tabs-container" className="flex gap-3 sm:gap-4 relative overflow-x-auto w-full sm:w-auto pb-0 sm:pb-0">
+          <div id="tour-tabs-mobile-target" className="absolute left-0 top-0 bottom-0 w-[270px] pointer-events-none block md:hidden" style={{ zIndex: -1 }}></div>
           <button className={`pb-1 whitespace-nowrap text-sm sm:text-base transition-all duration-300 ${tab === "all" ? "border-b-2 border-black dark:border-white font-semibold text-black dark:text-white" : "border-b-2 border-transparent text-gray-500 dark:text-white/60 hover:text-black dark:hover:text-white"}`} onClick={() => setTab("all")}>All</button>
           <button
             className={`pb-1 relative flex items-center gap-1.5 whitespace-nowrap text-sm sm:text-base cursor-pointer transition-all duration-300 ${tab === "popular" ? "border-b-2 border-black dark:border-white font-semibold text-black dark:text-white" : "border-b-2 border-transparent text-gray-500 dark:text-white/60 hover:text-black dark:hover:text-white"}`}
@@ -1257,8 +1294,8 @@ export default function DRList() {
     <div className="h-screen sm:h-[90vh] w-full bg-[#F5F5F5 dark:bg-[#151D33]] overflow-hidden flex justify-center">
       <div className="w-full max-w-[1248px] flex flex-col h-full">
         {/* Header Section - Responsive scaling removed for mobile */}
-        <div className="pt-6 sm:pt-10 pb-0 px-4 flex-shrink-0" style={{ overflow: 'visible', zIndex: 100 }}>
-          <div className="w-full lg:w-[1040px] max-w-full mx-auto lg:scale-[1.2] lg:origin-top" style={{ overflow: 'visible' }}>
+        <div className="pt-6 sm:pt-10 pb-0 px-4 md:px-6 lg:px-8 xl:px-0 flex-shrink-0" style={{ overflow: 'visible', zIndex: 100 }}>
+          <div className="w-full xl:w-[1040px] max-w-full mx-auto xl:scale-[1.2] xl:origin-top" style={{ overflow: 'visible' }}>
             <h1 className="text-2xl sm:text-3xl font-bold mb-2 sm:mb-3 text-black dark:text-white">DR List</h1>
             <p className="text-[#6B6B6B] dark:text-white/70 mb-6 sm:mb-8 text-left text-sm sm:text-base">
               Track latest DR movements and trading stats.
@@ -1269,16 +1306,16 @@ export default function DRList() {
         </div>
 
         {/* Main Table - Scrollable */}
-        <div className="flex-1 overflow-hidden pb-6 sm:pb-10 mt-0 sm:mt-10">
+        <div className="flex-1 overflow-hidden pb-6 sm:pb-10 mt-0 sm:mt-10 md:mt-1 lg:mt-1 xl:mt-10 px-4 md:px-6 lg:px-8 xl:px-0">
           <div className="h-full bg-white dark:bg-[#10172A] dark:border-white/0 dark:text-white rounded-xl shadow-[0_4px_20px_rgba(0,0,0,0.05)] border border-gray-100 overflow-auto">
             {loading ? (
               <>
-                {/* Desktop - Table Skeleton */}
-                <div className="hidden sm:block">
+                {/* Desktop/iPad - Table Skeleton */}
+                <div className="hidden md:block">
                   <TableSkeleton rows={12} cols={8} showHeader={true} />
                 </div>
                 {/* Mobile - Card Skeleton */}
-                <div className="sm:hidden">
+                <div className="md:hidden">
                   <CardSkeleton count={8} />
                 </div>
               </>

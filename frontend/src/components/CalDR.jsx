@@ -126,12 +126,18 @@ export default function DRCal() {
   const [allDR, setAllDR] = useState([]);
   const [updatedAt, setUpdatedAt] = useState(null);
   const [searchText, setSearchText] = useState("");
+  const [sortConfig, setSortConfig] = useState({ key: null, direction: "asc" });
   const [selectedDR, setSelectedDR] = useState(null);
-
   const [showSuggest, setShowSuggest] = useState(false);
   const [highlightIndex, setHighlightIndex] = useState(-1);
 
-  const [sortConfig, setSortConfig] = useState({ key: null, direction: "asc" });
+  const [persistedSymbol, setPersistedSymbol] = useState(() => localStorage.getItem("caldr_last_symbol") || null);
+
+  useEffect(() => {
+    if (selectedDR?.symbol) {
+      localStorage.setItem("caldr_last_symbol", selectedDR.symbol);
+    }
+  }, [selectedDR]);
 
   // ================== state สำหรับการคำนวณ ==================
   const [underlyingValue, setUnderlyingValue] = useState(null);              // ✅ ใช้แสดงผล (ปัดแล้ว)
@@ -212,11 +218,23 @@ export default function DRCal() {
 
           const first = data.rows[0];
           setDefaultDR(first);              // ✅ เก็บ default
-          // ไม่ตั้งค่า selectedDR และ searchText ตอนเริ่มต้น
-          // setSelectedDR(first);
-          // setSearchText(first.symbol);
 
-          // fetchRealtimeUnderlying(first.symbol); // ✅ ดึง realtime
+          // ✅ Set default to persisted symbol if available, else AAPL01 / AAPL80 or fallback to first
+          let defaultSelection = first;
+          if (persistedSymbol) {
+            const foundPersisted = data.rows.find(r => (r.symbol || "").toUpperCase() === persistedSymbol.toUpperCase());
+            if (foundPersisted) defaultSelection = foundPersisted;
+            else {
+              defaultSelection = data.rows.find(r => ["AAPL01", "AAPL80"].includes((r.symbol || "").toUpperCase())) || first;
+            }
+          } else {
+            defaultSelection = data.rows.find(r => ["AAPL01", "AAPL80"].includes((r.symbol || "").toUpperCase())) || first;
+          }
+
+          setSelectedDR(defaultSelection);
+          setSearchText(defaultSelection.symbol);
+          setUnderlyingCurrency(EXCHANGE_CURRENCY_MAP[defaultSelection.underlyingExchange] || "USD");
+          fetchRealtimeUnderlying(defaultSelection.symbol);
         }
       } catch (err) {
         console.error(err);
@@ -495,7 +513,7 @@ export default function DRCal() {
     if (filteredTableData.length === 0) return null;
 
     return (
-      <div ref={tableRef} className="w-full mt-3 md:mt-2 bg-white dark:bg-[#10172A] dark:border-white/10 dark:text-white rounded-xl shadow-[0_4px_20px_rgba(0,0,0,0.05)] border border-gray-100 dark:border-white/10 overflow-hidden font-['Sarabun'] overflow-x-auto md:overflow-x-visible">
+      <div id="tour-cal-table" ref={tableRef} className="w-full mt-3 md:mt-2 bg-white dark:bg-[#10172A] dark:border-white/10 dark:text-white rounded-xl shadow-[0_4px_20px_rgba(0,0,0,0.05)] border border-gray-100 dark:border-white/10 overflow-hidden font-['Sarabun'] overflow-x-auto md:overflow-x-visible">
         <div className="overflow-x-auto">
           <table className="w-full text-[12px] md:text-[14.4px] text-left border-collapse">
             <thead className="bg-[#0B102A] text-white font-bold sticky top-0" style={{ zIndex: 50 }}>
@@ -593,8 +611,8 @@ export default function DRCal() {
   };
 
   return (
-    <div className="h-screen sm:h-[90vh] w-full bg-[#F5F5F5] dark:bg-[#0B0E14] flex flex-col items-center pb-6 lg:pb-10">
-      <div className="w-full max-w-[1040px] lg:scale-[1.2] origin-top px-3 sm:px-4 md:px-6 lg:px-0 mx-auto">
+    <div className="min-h-screen w-full bg-[#F5F5F5] dark:bg-[#0B0E14] flex flex-col items-center pb-12 lg:pb-0">
+      <div className="w-full max-w-[1248px] xl:max-w-[1040px] xl:scale-[1.2] origin-top px-4 md:px-6 lg:px-8 xl:px-0 mx-auto">
         <h1 className="text-[30px] font-bold mb-2 sm:mb-2 text-black dark:text-white mt-6 lg:mt-7">Calculation DR</h1>
         <p className="text-xs sm:text-sm lg:text-base text-[#6B6B6B] dark:text-white/70 mb-4 sm:mb-6 lg:mb-8 break-words">
           Calculate DR Fair Value based on Underlying Price, Exchange Rate, and Conversion Ratio.
@@ -602,10 +620,11 @@ export default function DRCal() {
 
         <div className="w-full mt-2 font-sarabun">
           <div className="flex flex-col lg:flex-row w-full gap-3 sm:gap-4 lg:gap-0">
-            <div className="flex-1 md:min-h-[427px] bg-[#FFFFFF] dark:bg-[#23262A] rounded-t-[12px] md:rounded-tl-[12px] md:rounded-tr-none md:rounded-bl-[12px] md:rounded-br-none shadow-[0_10px_25px_rgba(0,0,0,0.12)] px-4 sm:px-6 pt-6 md:pt-10 pb-6 md:pb-0 border border-[#e0e0e0] dark:border-white/10">
+            <div id="tour-cal-select-card" className="flex-1 md:min-h-[427px] bg-[#FFFFFF] dark:bg-[#23262A] rounded-t-[12px] md:rounded-tl-[12px] md:rounded-tr-none md:rounded-bl-[12px] md:rounded-br-none shadow-[0_10px_25px_rgba(0,0,0,0.12)] px-4 sm:px-6 pt-6 md:pt-10 pb-6 md:pb-0 border border-[#e0e0e0] dark:border-white/10">
               <h2 className="font-semibold text-lg sm:text-xl md:text-[26px] text-black dark:text-white mb-3 md:mb-[14px]">Select DR</h2>
               <div className="relative w-full h-[42px] sm:h-[46px] md:h-[48px]">
                 <input
+                  id="tour-cal-select-dr"
                   ref={searchInputRef}
                   type="text"
                   placeholder="Select DR"
@@ -675,10 +694,10 @@ export default function DRCal() {
             </div>
 
             <div className="flex-1 bg-[#0B102A] rounded-b-[16px] lg:rounded-b-none lg:rounded-tr-[16px] lg:rounded-br-[16px] shadow-lg p-4 sm:p-5 lg:p-6">
-              <div className="w-full lg:h-[253px] bg-white/20 border border-[#9A9A9A] rounded-[12px] shadow-lg p-3 sm:p-6 flex flex-col">
+              <div id="tour-cal-input-card" className="w-full lg:h-[253px] bg-white/20 border border-[#9A9A9A] rounded-[12px] shadow-lg p-3 sm:p-6 flex flex-col">
                 <div className="mb-3 sm:mb-4">
                   <p className="font-bold text-[11px] sm:text-[13px] text-white mb-1">Underlying Price</p>
-                  <div className="w-full h-[40px] sm:h-[46px] bg-white/20 border border-[#9A9A9A] rounded-[12px] flex items-center hover:border-[#4AB6FF] transition-colors duration-150">
+                  <div id="tour-cal-underlying-price" className="w-full h-[40px] sm:h-[46px] bg-white/20 border border-[#9A9A9A] rounded-[12px] flex items-center hover:border-[#4AB6FF] transition-colors duration-150">
                     <input
                       type="text"
                       autoComplete="off"
@@ -701,7 +720,7 @@ export default function DRCal() {
 
                 <div className="mb-3 sm:mb-4">
                   <p className="font-bold text-[11px] sm:text-[13px] text-white mb-1">Exchange Rate</p>
-                  <div className="w-full h-[40px] sm:h-[46px] bg-white/20 border border-[#9A9A9A] rounded-[12px] flex items-center hover:border-[#4AB6FF] transition-colors duration-150">
+                  <div id="tour-cal-exchange-rate" className="w-full h-[40px] sm:h-[46px] bg-white/20 border border-[#9A9A9A] rounded-[12px] flex items-center hover:border-[#4AB6FF] transition-colors duration-150">
                     <input
                       type="text"
                       autoComplete="off"
@@ -727,6 +746,7 @@ export default function DRCal() {
 
                 <div className="flex justify-center gap-2 mt-0 sm:mt-0.5 w-full">
                   <button
+                    id="tour-cal-clear-btn"
                     onClick={onReset}
                     className="w-[120px] sm:w-[120px] h-[36px] sm:h-[38px] bg-white dark:bg-[#10172A] dark:border-white/10 dark:text-white rounded-[8px] flex justify-center items-center gap-2 text-black font-bold text-[11px] sm:text-[12px] hover:bg-gray-200 transition-colors"
                   >
@@ -735,7 +755,7 @@ export default function DRCal() {
                 </div>
               </div>
 
-              <div className="mt-4 sm:mt-4 px-2 sm:px-4">
+              <div id="tour-cal-result-card" className="mt-4 sm:mt-4 px-2 sm:px-4">
                 <h3 className="text-white font-bold text-base sm:text-[20px] mb-3 sm:mb-2">Calculation Result</h3>
                 <div className="flex justify-between items-center mb-2 px-3 sm:px-4">
                   <span className="text-white font-bold text-sm sm:text-[16px]">Fair Bid</span>
@@ -761,7 +781,7 @@ export default function DRCal() {
       </div>
 
       {/* Comparison Table Section - Same as DRList, outside of scale div */}
-      <div className="w-full max-w-[1312px] mx-auto px-4 sm:px-6 lg:px-8 mt-1 sm:mt-24 lg:mt-34 mb-6 lg:mb-10 lg:scale-[1.0] lg:origin-top">
+      <div className="w-full max-w-[1312px] mx-auto px-4 md:px-6 lg:px-8 mt-1 sm:mt-24 md:mt-0 lg:mt-0 xl:mt-34 mb-12 lg:mb-24 lg:scale-[1.0] lg:origin-top">
         {updatedAt && filteredTableData.length > 0 && (
           <div className="flex flex-col items-end gap-0.5 text-[10px] sm:text-xs text-gray-500 pr-1 mt-3 sm:mt-4 mb-1 overflow-hidden">
             <div className="break-words">

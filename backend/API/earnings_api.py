@@ -666,27 +666,26 @@ async def get_earnings(country: str = Query("US")):
             "data": _earnings_db
         }
     
-    market_code = get_market_code(country)
-    display_name = MARKET_DISPLAY_NAMES.get(market_code, "")
+    # Split the country string by commas to support multiple selections
+    selected_countries = [c.strip() for c in country.split(',') if c.strip()]
     
-    # Calculate date range for the requested country
-    c_code = "JP" if market_code == "japan" else "US"
-    s_ts, e_ts = get_tradingview_range(c_code)
+    result_data = {}
+    primary_c_code = "US"
+    
+    for sc in selected_countries:
+        market_code = get_market_code(sc)
+        if market_code:
+            if market_code == "japan" and primary_c_code == "US":
+                primary_c_code = "JP"
+            display_name = MARKET_DISPLAY_NAMES.get(market_code, "")
+            if display_name and display_name in _earnings_db:
+                result_data[display_name] = _earnings_db[display_name]
+    
+    # Calculate date range based on primary country logic
+    s_ts, e_ts = get_tradingview_range(primary_c_code)
     start_date = datetime.fromtimestamp(s_ts, tz=timezone.utc)
     end_date = datetime.fromtimestamp(e_ts, tz=timezone.utc)
     
-    if display_name in _earnings_db:
-        return {
-            "updated_at": _last_update_str,
-            "date_range": {
-                "start": start_date.isoformat(),
-                "end": end_date.isoformat(),
-                "start_display": start_date.strftime("%Y-%m-%d %H:%M:%S UTC"),
-                "end_display": end_date.strftime("%Y-%m-%d %H:%M:%S UTC"),
-                "note": "Shows earnings from next Monday to next Sunday (excluding end date)"
-            },
-            "data": {display_name: _earnings_db[display_name]}
-        }
     return {
         "updated_at": _last_update_str,
         "date_range": {
@@ -696,7 +695,7 @@ async def get_earnings(country: str = Query("US")):
             "end_display": end_date.strftime("%Y-%m-%d %H:%M:%S UTC"),
             "note": "Shows earnings from next Monday to next Sunday (excluding end date)"
         },
-        "data": {}
+        "data": result_data
     }
 
 @app.get("/api/earnings/stream")
