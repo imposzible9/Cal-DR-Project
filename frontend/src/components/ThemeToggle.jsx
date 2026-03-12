@@ -8,7 +8,7 @@ const ThemeToggle = () => {
   useEffect(() => {
     const savedTheme = localStorage.getItem('theme');
     const systemPrefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    
+
     if (savedTheme === 'dark' || (!savedTheme && systemPrefersDark)) {
       setIsDark(true);
       document.documentElement.classList.add('dark');
@@ -21,7 +21,7 @@ const ThemeToggle = () => {
   const toggleTheme = () => {
     const newTheme = !isDark;
     setIsDark(newTheme);
-    
+
     if (newTheme) {
       document.documentElement.classList.add('dark');
       localStorage.setItem('theme', 'dark');
@@ -34,7 +34,7 @@ const ThemeToggle = () => {
   return (
     <button
       onClick={toggleTheme}
-      className="relative w-8.5 h-4.5 md:w-7 md:h-3.5 lg:w-7 lg:h-3.5 xl:w-7 xl:h-3.5 sm:w-7 sm:h-3.5 rounded-full transition-all duration-300 focus:outline-none"
+      className="tour-theme relative w-[34px] h-[18px] sm:w-7 sm:h-3.5 rounded-full transition-all duration-300 focus:outline-none"
       style={{
         backgroundColor: isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(255, 255, 255, 0.1)',
         border: isDark ? '1px solid rgba(255, 255, 255, 0.8)' : '1px solid rgba(0, 0, 0, 0.8)',
@@ -42,7 +42,7 @@ const ThemeToggle = () => {
     >
       {/* Sliding Circle */}
       <motion.div
-        className="absolute w-[14px] h-[14px] top-[1px] left-[1.6px] lg:w-2.5 lg:h-2.5 lg:left-[0.5px] rounded-full transition-colors duration-300"
+        className="absolute w-[14px] h-[14px] top-[1px] left-[1px] sm:w-[10px] sm:h-[10px] sm:top-[1px] sm:left-[1px] rounded-full transition-colors duration-300"
         style={{
           backgroundColor: isDark ? 'rgba(255, 255, 255, 0.9)' : 'rgba(0, 0, 0, 0.9)',
           border: isDark ? '1px solid rgba(255, 255, 255, 0.8)' : '1px solid rgba(0, 0, 0, 0.8)',
@@ -59,7 +59,7 @@ const ThemeToggle = () => {
 
       {/* Sun Icon (Light Mode) */}
       <motion.div
-        className="absolute top-1/2 left-0.5 lg:left-0.5 transform -translate-y-1/2"
+        className="absolute top-1/2 left-[2px] sm:left-[2px] transform -translate-y-1/2"
         animate={{
           opacity: isDark ? 0 : 1,
           scale: isDark ? 0.8 : 1,
@@ -93,7 +93,7 @@ const ThemeToggle = () => {
 
       {/* Moon Icon (Dark Mode) */}
       <motion.div
-        className="absolute top-1/2 right-0.5 lg:right-0.5 transform -translate-y-1/2"
+        className="absolute top-1/2 right-[2px] sm:right-[2px] transform -translate-y-1/2"
         animate={{
           opacity: isDark ? 1 : 0,
           scale: isDark ? 1 : 0.8,
@@ -119,7 +119,7 @@ const ThemeToggle = () => {
 
       {/* Small Stars (Dark Mode) */}
       <motion.div
-        className="absolute top-1/2 right-1 lg:right-1 transform -translate-y-1/2"
+        className="absolute top-1/2 right-[4px] sm:right-[4px] transform -translate-y-1/2"
         animate={{
           opacity: isDark ? 1 : 0,
         }}

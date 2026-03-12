@@ -70,7 +70,7 @@ const getLogoSlug = (name) => {
     if (/\bDNOW\b/.test(upper)) return 'now';
     // If company name starts with NOW or contains 'NOW INC' etc., prefer 'now'
     if (/\bNOW(\b|\s|,)/.test(upper)) return 'now';
-    
+
     // Additional logo mappings for calendar page
     if (/^ON(\s|\.|$)|ON\s+HOLDING/i.test(upper)) return 'on-holding';
     if (/^COSTCO/i.test(upper)) return 'costar-group';
@@ -144,14 +144,14 @@ const getLogoSlug = (name) => {
 // Calendar-specific logo function that handles ticker-specific mappings
 const getCalendarLogoSlug = (companyName, ticker) => {
   if (!companyName) return '';
-  
+
   const upper = String(companyName).toUpperCase();
-  
+
   // Handle ON mapping - this should be checked first
   if (/^ON(\s|\.|$)|ON\s+HOLDING/i.test(upper)) {
     return 'on-holding';
   }
-  
+
   // Handle JD mappings based on ticker
   if (/^JD(\s|\.|$)|JD\.COM/i.test(upper)) {
     if (ticker === '9618') return 'jd-com';
@@ -162,7 +162,7 @@ const getCalendarLogoSlug = (companyName, ticker) => {
   if (upper === 'JD HEALTH INTERNATIONAL' || upper === 'JD HEALTH INTERNATIONAL INC') {
     return 'jd-health-international-inc';
   }
-  
+
   // For all other cases, use the standard getLogoSlug function
   return getLogoSlug(companyName);
 };
@@ -313,12 +313,19 @@ const formatColoredValue = (val, suffix = "", currency = "") => {
 };
 
 export default function Calendar() {
-  const [selectedCountries, setSelectedCountries] = useState(["All"]); // Array for multi-select
-  const selectedCountryLabel = selectedCountries.length === 1 && selectedCountries[0] === "All" 
-    ? "All Markets" 
-    : selectedCountries.length === 0 
+  const [selectedCountries, setSelectedCountries] = useState(() => {
+    try {
+      const saved = localStorage.getItem("calendar_selected_countries");
+      return saved ? JSON.parse(saved) : ["All"];
+    } catch {
+      return ["All"];
+    }
+  }); // Array for multi-select
+  const selectedCountryLabel = selectedCountries.length === 1 && selectedCountries[0] === "All"
     ? "All Markets"
-    : `${selectedCountries.length} Markets`;
+    : selectedCountries.length === 0
+      ? "All Markets"
+      : `${selectedCountries.length} Markets`;
   const [earnings, setEarnings] = useState([]);
   const [loading, setLoading] = useState(false);
   const [lastUpdateTime, setLastUpdateTime] = useState(null);
@@ -326,7 +333,16 @@ export default function Calendar() {
   const [sortKey, setSortKey] = useState(null);
   const [sortOrder, setSortOrder] = useState("asc");
   const [search, setSearch] = useState("");
-  const [selectedDay, setSelectedDay] = useState("All");
+  const [selectedDay, setSelectedDay] = useState(() => localStorage.getItem("calendar_selected_day") || "All");
+
+  /* PERSIST FILTERS */
+  useEffect(() => {
+    localStorage.setItem("calendar_selected_countries", JSON.stringify(selectedCountries));
+  }, [selectedCountries]);
+
+  useEffect(() => {
+    localStorage.setItem("calendar_selected_day", selectedDay);
+  }, [selectedDay]);
 
   // Load seen earnings from localStorage once on initialization
   const [seenEarningsIds, setSeenEarningsIds] = useState(() => {
@@ -351,7 +367,7 @@ export default function Calendar() {
 
   const countryDropdownRef = useRef(null);
 
-  
+
   // Save seen earnings to localStorage and update navbar
   useEffect(() => {
     try {
@@ -390,9 +406,11 @@ export default function Calendar() {
     }
 
     let allRows = [];
-    Object.values(dataToProcess).forEach(group => {
+    Object.entries(dataToProcess).forEach(([key, group]) => {
       if (group && Array.isArray(group.data)) {
-        allRows.push(...group.data);
+        const countryCode = typeof key === 'string' && key.length >= 2 ? key.substring(0, 2) : "Unknown";
+        const rowsWithCountry = group.data.map(item => ({ ...item, country: item.country || countryCode }));
+        allRows.push(...rowsWithCountry);
       }
     });
     return allRows;
@@ -1051,17 +1069,17 @@ export default function Calendar() {
   return (
     <div className="h-screen sm:h-[90vh] w-full bg-[#F5F5F5 dark:bg-[#151D33]] overflow-hidden flex justify-center">
       <div className="w-full max-w-[1248px] flex flex-col h-full">
-        <div className="pt-6 sm:pt-10 pb-0 px-4 sm:px-0 flex-shrink-0" style={{ overflow: 'visible', zIndex: 100 }}>
-          <div className="w-full lg:w-[1040px] max-w-full mx-auto lg:scale-[1.2] lg:origin-top" style={{ overflow: 'visible' }}>
+        <div className="pt-6 sm:pt-10 pb-0 px-4 md:px-6 lg:px-8 xl:px-0 flex-shrink-0" style={{ overflow: 'visible', zIndex: 100 }}>
+          <div className="w-full xl:w-[1040px] max-w-full mx-auto xl:scale-[1.2] xl:origin-top" style={{ overflow: 'visible' }}>
             <h1 className="text-xl sm:text-2xl md:text-3xl font-bold mb-2 sm:mb-3 text-black dark:text-white">Earnings Calendar</h1>
             <p className="text-[#6B6B6B] dark:text-white/70 mb-8 sm:mb-6 md:mb-8 text-xs sm:text-sm md:text-base">Earnings Schedule for Companies with DRs Traded in Thailand.</p>
 
             <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-3 md:gap-4 mb-2">
-              <div className="relative z-[200] w-full md:w-auto" ref={countryDropdownRef} style={{ isolation: 'isolate', overflow: 'visible' }}>
+              <div id="tour-calendar-market" className="relative z-[200] w-full md:w-auto" ref={countryDropdownRef} style={{ isolation: 'isolate', overflow: 'visible' }}>
                 <button
                   type="button"
                   onClick={() => setShowCountryMenu((prev) => !prev)}
-                  className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 dark:border-none bg-white dark:bg-[#595959] dark:text-white px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 dark:hover:bg-[#4A4A4A] focus:outline-none focus:ring-2 focus:ring-[#0B102A] dark:focus:ring-0 w-full lg:w-[202.5px]"
+                  className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 dark:border-none bg-white dark:bg-[#595959] dark:text-white px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 dark:hover:bg-[#4A4A4A] focus:outline-none focus:ring-2 focus:ring-[#0B102A] dark:focus:ring-0 w-full md:w-[202.5px]"
                   style={{ height: '37.33px', width: undefined }}
                 >
                   <span className="truncate flex items-center gap-2">
@@ -1151,17 +1169,17 @@ export default function Calendar() {
                   </div>
                 )}
               </div>
-              <div className="relative w-full md:w-auto">
-                <input type="text" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search..." className="bg-white dark:bg-[#595959] dark:border-none text-gray-900 dark:text-white placeholder:text-gray-400 placeholder:dark:text-white/70 pl-3 sm:pl-4 pr-10 py-2 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#0B102A] dark:focus:ring-0 w-full md:w-64 text-xs sm:text-sm shadow-sm h-[37.33px]" />
+              <div className="relative w-full md:w-auto mt-2 md:mt-0">
+                <input id="tour-calendar-search" type="text" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search..." className="bg-white dark:bg-[#595959] dark:border-none text-gray-900 dark:text-white placeholder:text-gray-400 placeholder:dark:text-white/70 pl-3 sm:pl-4 pr-10 py-2 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#0B102A] dark:focus:ring-0 w-full md:w-48 lg:w-64 text-xs sm:text-sm shadow-sm h-[37.33px]" />
                 <i className="bi bi-search absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 dark:text-white" style={{ fontSize: 14 }} />
               </div>
             </div>
 
             <div className="flex flex-col md:flex-row md:items-end md:justify-between mb-2 gap-2">
-              <div className="overflow-x-auto pb-1">
-                <div className="inline-flex items-center gap-2 sm:gap-3 bg-white dark:bg-[#595959] dark:border-none dark:text-white rounded-xl px-2 py-1.5 shadow-sm border border-gray-100 min-w-full sm:min-w-0">
-                  <span className="text-xs sm:text-sm font-semibold text-gray-700 dark:text-white whitespace-nowrap">Days</span>
-                  <div className="flex justify-between flex-1 sm:gap-2">
+              <div className="overflow-x-auto pb-1 w-full md:w-auto">
+                <div id="tour-calendar-days" className="inline-flex items-center gap-1 sm:gap-2 md:gap-1 lg:gap-3 bg-white dark:bg-[#595959] dark:border-none dark:text-white rounded-xl px-2 py-1.5 shadow-sm border border-gray-100 min-w-0 w-full md:w-auto overflow-x-auto hide-scrollbar">
+                  <span className="text-xs sm:text-sm font-semibold text-gray-700 dark:text-white whitespace-nowrap shrink-0 pr-1 md:pr-0 lg:pr-1">Days</span>
+                  <div className="flex justify-start sm:justify-between md:flex-1 gap-1 md:gap-0.5 lg:gap-2 overflow-x-auto hide-scrollbar">
                     {["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].map((day) => {
                       const isSelected = selectedDay === day;
                       const shortDay = day.substring(0, 3);
@@ -1173,7 +1191,7 @@ export default function Calendar() {
                             setSelectedDay(nextDay);
                             trackFilter('day', nextDay);
                           }}
-                          className={`px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-lg text-[10px] sm:text-xs font-bold transition-all whitespace-nowrap ${isSelected
+                          className={`px-1.5 md:px-1 lg:px-2 py-0.5 sm:py-1 rounded-lg text-[10px] sm:text-xs font-bold transition-all whitespace-nowrap ${isSelected
                             ? "bg-[#0B102A] text-white ring-2 ring-offset-1 ring-black/10 shadow-md scale-105 dark:bg-[#4A4A4A] dark:ring-white/20"
                             : "text-gray-600 opacity-60 hover:opacity-100 dark:text-white dark:opacity-60 dark:hover:opacity-100"
                             }`}
@@ -1186,7 +1204,8 @@ export default function Calendar() {
                   </div>
                 </div>
               </div>
-              <div className="flex flex-col items-end gap-0.5 text-[10px] sm:text-xs text-gray-500 pr-1 mt-0 md:mt-1">
+              {/* Desktop Results */}
+              <div id="tour-calendar-results-desktop" className="hidden md:flex flex-col items-end gap-0.5 text-[10px] sm:text-xs text-gray-500 md:pr-1 shrink-0">
                 <div>Found {sortedEarnings.length.toLocaleString()} results</div>
                 {lastUpdateTime && (
                   <div className="text-right">Last Updated: {lastUpdateTime.toLocaleString("en-US", { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" })}</div>
@@ -1194,37 +1213,47 @@ export default function Calendar() {
               </div>
             </div>
 
-            <div className="flex flex-col sm:flex-row items-end gap-2 text-[10px] sm:text-xs text-gray-500 pr-1 mb-5">
-              <button
-                onClick={forceRefresh}
-                disabled={loading}
-                className="text-green-600 dark:text-[#4CE60F] hover:text-green-700 dark:hover:text-[#4CE60F]/80 font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
-                title="Refresh earnings data"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                </svg>
-                Refresh Data
-              </button>
-              {sortedEarnings.filter(e => e.isNew).length > 0 && (
+            <div className="flex flex-row items-end justify-between w-full mb-5 pr-1 text-[10px] sm:text-xs text-gray-500">
+              <div id="tour-calendar-actions" className="flex flex-row items-center gap-3 w-fit">
                 <button
-                  onClick={markAllAsSeen}
-                  className="text-blue-600 hover:text-blue-700 font-medium transition-colors"
-                  title="Mark all as read"
+                  onClick={forceRefresh}
+                  disabled={loading}
+                  className="text-green-600 dark:text-[#4CE60F] hover:text-green-700 dark:hover:text-[#4CE60F]/80 font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                  title="Refresh earnings data"
                 >
-                  Mark all as read ({sortedEarnings.filter(e => e.isNew).length})
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                  Refresh Data
                 </button>
-              )}
+                {sortedEarnings.filter(e => e.isNew).length > 0 && (
+                  <button
+                    onClick={markAllAsSeen}
+                    className="text-blue-600 hover:text-blue-700 font-medium transition-colors"
+                    title="Mark all as read"
+                  >
+                    Mark all as read ({sortedEarnings.filter(e => e.isNew).length})
+                  </button>
+                )}
+              </div>
+              
+              {/* Mobile Results */}
+              <div id="tour-calendar-results-mobile" className="md:hidden flex flex-col items-end gap-0.5 shrink-0 text-right">
+                <div>Found {sortedEarnings.length.toLocaleString()} results</div>
+                {lastUpdateTime && (
+                  <div className="text-right">Last Updated: {lastUpdateTime.toLocaleString("en-US", { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" })}</div>
+                )}
+              </div>
             </div>
           </div>
         </div>
 
         {/* Main Content - Scrollable */}
-        <div className="flex-1 overflow-hidden pb-6 sm:pb-10 -mt-2 md:mt-9 px-4 sm:px-0">
+        <div className="flex-1 overflow-hidden pb-6 sm:pb-10 -mt-2 md:mt-1 lg:mt-1 xl:mt-10 px-4 md:px-6 lg:px-8 xl:px-0">
           <div className="h-full dark:bg-[#0B0E14] dark:border-white/10 dark:text-white rounded-xl  overflow-auto">
 
             {/* Mobile Card View */}
-            <div className="block lg:hidden">
+            <div className="block md:hidden">
               <div className="space-y-3">
                 {loading ? (
                   <CalendarCardSkeleton count={8} />
@@ -1261,6 +1290,7 @@ export default function Calendar() {
                     return (
                       <div
                         key={i}
+                        id={i === 0 ? "tour-calendar-first-row-mobile" : undefined}
                         onClick={() => e.isNew && markAsSeen(e.earningId)}
                         className={`rounded-xl shadow-sm border border-gray-200 dark:border-white/10 p-3 cursor-pointer hover:shadow-md transition-shadow ${bgColor}`}
                       >
@@ -1361,152 +1391,162 @@ export default function Calendar() {
               </div>
             </div>
 
-            {/* Desktop Table View */}
-            <table className="hidden lg:table min-w-[1300px] w-full text-left border-collapse text-[14.4px]">
-              <colgroup>
-                <col style={{ width: '250px', maxWidth: '250px' }} />
-                <col style={{ minWidth: '90px' }} />
-                <col style={{ minWidth: '90px' }} />
-                <col style={{ minWidth: '110px' }} />
-                <col style={{ minWidth: '110px' }} />
-                <col style={{ minWidth: '90px' }} />
-                <col style={{ minWidth: '90px' }} />
-                <col style={{ minWidth: '100px' }} />
-                <col style={{ minWidth: '100px' }} />
-                <col style={{ minWidth: '150px' }} />
-              </colgroup>
-              <thead className="bg-[#0B102A] text-white font-semibold sticky top-0" style={{ zIndex: 50 }}>
-                <tr className="h-[50px]">
-                  {[
-                    { k: "ticker", l: "Symbol", a: "left" },
-                    { k: "date", l: "Date", a: "right" },
-                    { k: "period", l: "Period End", a: "right" },
-                    { k: "popularDR", l: "Most Popular DR", a: "center" },
-                    { k: "sensitivityDR", l: "High Sensitivity DR", a: "center" },
-                    { k: "epsEstimate", l: "EPS Est.", a: "right" },
-                    { k: "epsReported", l: "EPS Rep.", a: "right" },
-                    { k: "revenueForecast", l: "Rev Forecast", a: "right" },
-                    { k: "revenueActual", l: "Rev Actual", a: "right" },
-                    { k: "marketCap", l: "Market Cap", a: "center" }
-                  ].map((h) => (
-                    <th key={h.k} onClick={() => handleSort(h.k)} className="cursor-pointer transition-colors relative whitespace-nowrap px-4">
-                      <div className={`flex items-center ${h.a === "right" ? "justify-end" : h.a === "center" ? "justify-center" : "justify-start"} gap-0.5`}>
-                        {h.l} <SortIndicator colKey={h.k} />
-                      </div>
-                      {sortKey === h.k && (
-                        <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#2F80ED] z-50">
-                          <div className="absolute bottom-[-4px] left-1/2 -translate-x-1/2 w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[4px] border-t-[#2F80ED]"></div>
-                        </div>
-                      )}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="">
-                {loading ? (
-                  <CalendarTableSkeleton rows={12} />
-                ) : sortedEarnings.length === 0 ? (
-                  <tr>
-                    <td colSpan={10} className="p-0">
-                      <div className="w-full h-[50vh] flex items-center justify-start pl-117">
-                        <div className="text-center">
-                          <div className="empty-icon-wrapper mb-4">
-                            <svg className="empty-icon empty-pulse w-36 h-36 ml-20" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden>
-                              <rect x="6" y="10" width="52" height="44" rx="6" fill="#F0F7FF" stroke="#D4E8FF" strokeWidth="1.5" />
-                              <rect x="10" y="6" width="12" height="8" rx="2" fill="#2F80ED" />
-                              <rect x="42" y="6" width="12" height="8" rx="2" fill="#2F80ED" />
-                              <rect x="12" y="20" width="40" height="4" rx="2" fill="#E6F0FF" />
-                              <g className="dot-group">
-                                <circle className="dot dot-1" cx="20" cy="42" r="4" fill="#0B102A" />
-                                <circle className="dot dot-2" cx="32" cy="42" r="4" fill="#0B102A" />
-                                <circle className="dot dot-3" cx="44" cy="42" r="4" fill="#0B102A" />
-                              </g>
-                            </svg>
+            {/* Desktop/iPad Table View */}
+            <div className="hidden md:block relative w-full">
+              <div className="relative w-full">
+                <table className="text-left border-collapse text-[14.4px] table-auto" style={{ width: 'max-content' }}>
+                  <colgroup>
+                    <col style={{ width: '250px', maxWidth: '250px' }} />
+                    <col style={{ minWidth: '90px' }} />
+                    <col style={{ minWidth: '90px' }} />
+                    <col style={{ minWidth: '110px' }} />
+                    <col style={{ minWidth: '110px' }} />
+                    <col style={{ minWidth: '90px' }} />
+                    <col style={{ minWidth: '90px' }} />
+                    <col style={{ minWidth: '100px' }} />
+                    <col style={{ minWidth: '100px' }} />
+                    <col style={{ minWidth: '150px' }} />
+                  </colgroup>
+                  <thead className="bg-[#0B102A] text-white font-semibold sticky top-0" style={{ zIndex: 50 }}>
+                    <tr className="h-[50px]">
+                      {[
+                        { k: "ticker", l: "Symbol", a: "left" },
+                        { k: "date", l: "Date", a: "right" },
+                        { k: "period", l: "Period End", a: "right" },
+                        { k: "popularDR", l: "Most Popular DR", a: "center" },
+                        { k: "sensitivityDR", l: "High Sensitivity DR", a: "center" },
+                        { k: "epsEstimate", l: "EPS Est.", a: "right" },
+                        { k: "epsReported", l: "EPS Rep.", a: "right" },
+                        { k: "revenueForecast", l: "Rev Forecast", a: "right" },
+                        { k: "revenueActual", l: "Rev Actual", a: "right" },
+                        { k: "marketCap", l: "Market Cap", a: "center" }
+                      ].map((h) => (
+                        <th key={h.k} onClick={() => handleSort(h.k)} className="cursor-pointer transition-colors relative whitespace-nowrap px-4">
+                          <div className={`flex items-center ${h.a === "right" ? "justify-end" : h.a === "center" ? "justify-center" : "justify-start"} gap-0.5`}>
+                            {h.l} <SortIndicator colKey={h.k} />
                           </div>
-                          <div className="text-2xl font-semibold text-gray-700 dark:text-gray-200">No upcoming earnings</div>
-                          <div className="text-sm text-gray-500">You're all caught up — no scheduled earnings.</div>
-                        </div>
-                      </div>
-                    </td>
-                  </tr>
-                ) : (
-                  sortedEarnings.map((e, i) => {
-                    const isFuture = (e.date * 1000) > Date.now();
-                    const displayEpsRep = isFuture ? "-" : e.epsReported;
-                    const displaySurprise = isFuture ? "-" : e.surprise;
-                    const displayPctSurprise = isFuture ? "-" : e.pctSurprise;
-                    const displayRevAct = isFuture ? "-" : e.revenueActual;
-
-                    const rowBg = i % 2 === 0 ? "bg-[#FFFFFF] dark:bg-[#2D3136]" : "bg-[#F3F4F6] dark:bg-[#24272B]";
-                    const highlightClass = e.isNew ? "bg-blue-50 dark:bg-blue-900/30 border-l-4 border-l-blue-600 dark:border-l-blue-500" : rowBg;
-
-                    return (
-                      <tr
-                        key={i}
-                        className={`transition-colors duration-200 ${highlightClass} hover:bg-gray-50 dark:hover:bg-white/5 dark:text-white cursor-pointer`}
-                        style={{ height: "53.6px" }}
-                        onClick={() => e.isNew && markAsSeen(e.earningId)}
-                      >
-                        <td className="px-4 align-middle overflow-hidden" style={{ width: '250px', maxWidth: '250px' }}>
-                          <div className="flex items-center gap-2 overflow-hidden w-full min-w-0">
-                            <div className="w-10 h-10 flex items-center justify-center shrink-0 overflow-hidden">
-                              {!logoErrors[e.ticker] ? (
-                                <img
-                                  src={(() => {
-                                    const companyName = e.company || '';
-                                    const slug = getCalendarLogoSlug(companyName, e.ticker);
-                                    return `https://s3-symbol-logo.tradingview.com/${slug}.svg`;
-                                  })()}
-                                  alt={e.ticker}
-                                  className="w-full h-full object-contain rounded-xl"
-                                  onError={() => setLogoErrors(prev => ({ ...prev, [e.ticker]: true }))}
-                                />
-                              ) : (
-                                <span className="w-10 h-10 rounded-xl bg-slate-600/50 flex items-center justify-center text-sm font-bold text-white">
-                                  {e.ticker?.[0] || "?"}
-                                </span>
-                              )}
+                          {sortKey === h.k && (
+                            <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#2F80ED] z-50">
+                              <div className="absolute bottom-[-4px] left-1/2 -translate-x-1/2 w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[4px] border-t-[#2F80ED]"></div>
                             </div>
-                            <div className="flex flex-col overflow-hidden w-full min-w-0">
-                              <span className="font-bold text-[#2F80ED] text-[14.4px] leading-tight truncate" title={e.ticker}>{e.ticker}</span>
-                              <span className="text-[12.4px] text-gray-500 dark:text-white/80 truncate" title={e.company}>{e.company}</span>
+                          )}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="">
+                    {loading ? (
+                      <CalendarTableSkeleton rows={12} />
+                    ) : sortedEarnings.length === 0 ? (
+                      <tr>
+                        <td colSpan={10} className="p-0">
+                          <div className="w-full h-[50vh] flex items-center justify-start pl-117">
+                            <div className="text-center">
+                              <div className="empty-icon-wrapper mb-4">
+                                <svg className="empty-icon empty-pulse w-36 h-36 ml-20" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden>
+                                  <rect x="6" y="10" width="52" height="44" rx="6" fill="#F0F7FF" stroke="#D4E8FF" strokeWidth="1.5" />
+                                  <rect x="10" y="6" width="12" height="8" rx="2" fill="#2F80ED" />
+                                  <rect x="42" y="6" width="12" height="8" rx="2" fill="#2F80ED" />
+                                  <rect x="12" y="20" width="40" height="4" rx="2" fill="#E6F0FF" />
+                                  <g className="dot-group">
+                                    <circle className="dot dot-1" cx="20" cy="42" r="4" fill="#0B102A" />
+                                    <circle className="dot dot-2" cx="32" cy="42" r="4" fill="#0B102A" />
+                                    <circle className="dot dot-3" cx="44" cy="42" r="4" fill="#0B102A" />
+                                  </g>
+                                </svg>
+                              </div>
+                              <div className="text-2xl font-semibold text-gray-700 dark:text-gray-200">No upcoming earnings</div>
+                              <div className="text-sm text-gray-500">You're all caught up — no scheduled earnings.</div>
                             </div>
                           </div>
                         </td>
-                        <td className="px-4 align-middle text-right text-gray-800 dark:text-white font-medium whitespace-nowrap">
-                          {formatDate(e.date)}
-                        </td>
-                        <td className="px-4 align-middle text-right text-gray-800 dark:text-white font-medium whitespace-nowrap">
-                          {formatDate(e.period)}
-                        </td>
-                        <td className="px-4 align-middle text-center">
-                          {e.mostPopularDR ? (
-                            <div className="flex flex-col items-center gap-0.5">
-                              <span className="font-bold text-[#50B728] dark:text-[#4CE60F]">{e.mostPopularDR.symbol}</span>
-                              <span className="text-gray-600 dark:text-white/80 text-[13.4px]">Vol: {e.mostPopularDR.volume > 0 ? formatInt(e.mostPopularDR.volume) : "-"}</span>
-                            </div>
-                          ) : <span className="text-gray-600 dark:text-white/60">-</span>}
-                        </td>
-                        <td className="px-4 align-middle text-center">
-                          {e.highSensitivityDR ? (
-                            <div className="flex flex-col items-center gap-0.5">
-                              <span className="font-bold text-[#0007DE] dark:text-[#4A90FF]">{e.highSensitivityDR.symbol}</span>
-                              <span className="text-gray-600 dark:text-white/80 text-[13.4px]">Bid: {e.highSensitivityDR.bid > 0 ? <span className="font-mono">{formatPrice(e.highSensitivityDR.bid)}</span> : "-"}</span>
-                            </div>
-                          ) : <span className="text-gray-600 dark:text-white/60">-</span>}
-                        </td>
-                        <td className="px-4 align-middle text-right text-gray-800 dark:text-white font-medium">{formatColoredValue(e.epsEstimate, e.currency)}</td>
-                        <td className="px-4 align-middle text-right text-gray-800 dark:text-white font-semibold">{formatColoredValue(displayEpsRep, e.currency)}</td>
-                        {/* Surprise and %Surprise columns removed */}
-                        <td className="px-4 align-middle text-right text-gray-800 dark:text-white font-medium">{formatValue(e.revenueForecast, e.currency, true)}</td>
-                        <td className="px-4 align-middle text-right text-gray-800 dark:text-white font-semibold">{formatValue(displayRevAct, e.currency, true)}</td>
-                        <td className="px-4 align-middle text-center text-gray-800 dark:text-white font-medium">{formatMarketCapValue(e.marketCap, e.currency, true)}</td>
                       </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
+                    ) : (
+                      sortedEarnings.map((e, i) => {
+                        const isFuture = (e.date * 1000) > Date.now();
+                        const displayEpsRep = isFuture ? "-" : e.epsReported;
+                        const displaySurprise = isFuture ? "-" : e.surprise;
+                        const displayPctSurprise = isFuture ? "-" : e.pctSurprise;
+                        const displayRevAct = isFuture ? "-" : e.revenueActual;
+
+                        const rowBg = i % 2 === 0 ? "bg-[#FFFFFF] dark:bg-[#2D3136]" : "bg-[#F3F4F6] dark:bg-[#24272B]";
+                        const highlightClass = e.isNew ? "bg-blue-50 dark:bg-blue-900/30 border-l-4 border-l-blue-600 dark:border-l-blue-500" : rowBg;
+
+                        return (
+                          <tr
+                            key={i}
+                            className={`transition-colors duration-200 ${highlightClass} hover:bg-gray-50 dark:hover:bg-white/5 dark:text-white cursor-pointer`}
+                            style={{ height: "53.6px" }}
+                            onClick={() => e.isNew && markAsSeen(e.earningId)}
+                          >
+                            <td className="px-4 align-middle overflow-hidden" style={{ width: '250px', maxWidth: '250px' }}>
+                              <div className="flex items-center gap-2 overflow-hidden w-full min-w-0">
+                                <div className="w-10 h-10 flex items-center justify-center shrink-0 overflow-hidden">
+                                  {!logoErrors[e.ticker] ? (
+                                    <img
+                                      src={(() => {
+                                        const companyName = e.company || '';
+                                        const slug = getCalendarLogoSlug(companyName, e.ticker);
+                                        return `https://s3-symbol-logo.tradingview.com/${slug}.svg`;
+                                      })()}
+                                      alt={e.ticker}
+                                      className="w-full h-full object-contain rounded-xl"
+                                      onError={() => setLogoErrors(prev => ({ ...prev, [e.ticker]: true }))}
+                                    />
+                                  ) : (
+                                    <span className="w-10 h-10 rounded-xl bg-slate-600/50 flex items-center justify-center text-sm font-bold text-white">
+                                      {e.ticker?.[0] || "?"}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="flex flex-col overflow-hidden w-full min-w-0">
+                                  <span className="font-bold text-[#2F80ED] text-[14.4px] leading-tight truncate" title={e.ticker}>{e.ticker}</span>
+                                  <span className="text-[12.4px] text-gray-500 dark:text-white/80 truncate" title={e.company}>{e.company}</span>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="px-4 align-middle text-right text-gray-800 dark:text-white font-medium whitespace-nowrap">
+                              {formatDate(e.date)}
+                            </td>
+                            <td className="px-4 align-middle text-right text-gray-800 dark:text-white font-medium whitespace-nowrap">
+                              {formatDate(e.period)}
+                            </td>
+                            <td className="px-4 align-middle text-center">
+                              {e.mostPopularDR ? (
+                                <div className="flex flex-col items-center gap-0.5">
+                                  <span className="font-bold text-[#50B728] dark:text-[#4CE60F]">{e.mostPopularDR.symbol}</span>
+                                  <span className="text-gray-600 dark:text-white/80 text-[13.4px]">Vol: {e.mostPopularDR.volume > 0 ? formatInt(e.mostPopularDR.volume) : "-"}</span>
+                                </div>
+                              ) : <span className="text-gray-600 dark:text-white/60">-</span>}
+                            </td>
+                            <td className="px-4 align-middle text-center">
+                              {e.highSensitivityDR ? (
+                                <div className="flex flex-col items-center gap-0.5">
+                                  <span className="font-bold text-[#0007DE] dark:text-[#4A90FF]">{e.highSensitivityDR.symbol}</span>
+                                  <span className="text-gray-600 dark:text-white/80 text-[13.4px]">Bid: {e.highSensitivityDR.bid > 0 ? <span className="font-mono">{formatPrice(e.highSensitivityDR.bid)}</span> : "-"}</span>
+                                </div>
+                              ) : <span className="text-gray-600 dark:text-white/60">-</span>}
+                            </td>
+                            <td className="px-4 align-middle text-right text-gray-800 dark:text-white font-medium">{formatColoredValue(e.epsEstimate, e.currency)}</td>
+                            <td className="px-4 align-middle text-right text-gray-800 dark:text-white font-semibold">{formatColoredValue(displayEpsRep, e.currency)}</td>
+                            {/* Surprise and %Surprise columns removed */}
+                            <td className="px-4 align-middle text-right text-gray-800 dark:text-white font-medium">{formatValue(e.revenueForecast, e.currency, true)}</td>
+                            <td className="px-4 align-middle text-right text-gray-800 dark:text-white font-semibold">{formatValue(displayRevAct, e.currency, true)}</td>
+                            <td className="px-4 align-middle text-center text-gray-800 dark:text-white font-medium">{formatMarketCapValue(e.marketCap, e.currency, true)}</td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+                {/* Tutorial Overlay Target - Visible Width Only */}
+                <div
+                  id="tour-calendar-first-row"
+                  className="absolute left-0 w-full pointer-events-none"
+                  style={{ top: '50px', height: '53.6px', zIndex: 5 }}
+                ></div>
+              </div>
+            </div>
           </div>
         </div>
       </div>

@@ -147,7 +147,7 @@ const FilterDropdown = ({ label, value, options, onSelect }) => {
   const currentLabel = options.find(o => o.val === value)?.label || value;
   return (
     <div className="relative z-60 flex-1 sm:flex-initial sm:w-auto" ref={ref}>
-      <button onClick={() => setIsOpen(!isOpen)} className="flex items-center justify-between gap-2 px-3 sm:px-4 py-2 bg-white dark:bg-[#595959] dark:border-none dark:text-white border border-gray-200 rounded-xl text-xs sm:text-sm w-full sm:min-w-[140px] md:min-w-[180px] hover:border-gray-300 transition-colors shadow-sm h-[37.33px] dark:hover:bg-[#4A4A4A]">
+      <button onClick={() => setIsOpen(!isOpen)} className="flex items-center justify-between gap-2 px-3 sm:px-4 py-2 bg-white dark:bg-[#595959] dark:border-none dark:text-white border border-gray-200 rounded-xl text-xs sm:text-sm w-full sm:min-w-[140px] lg:min-w-[180px] hover:border-gray-300 transition-colors shadow-sm h-[37.33px] dark:hover:bg-[#4A4A4A]">
         <span className="text-gray-800 dark:text-white font-medium truncate">{currentLabel}</span>
         <svg className={`h-4 w-4 shrink-0 transition-transform text-gray-500 dark:text-white ${isOpen ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" /></svg>
       </button>
@@ -607,7 +607,7 @@ const RatingHistoryModal = ({ item, timeframe, onClose }) => {
                     onError={() => {
                       setLogoError(true);
                     }}
-                    onLoad={() => {}}
+                    onLoad={() => { }}
                   />
                 ) : (
                   <span className="text-white text-base sm:text-xl font-bold">{item.displaySymbol?.[0] || "?"}</span>
@@ -830,11 +830,11 @@ const RatingHistoryModal = ({ item, timeframe, onClose }) => {
 };
 
 export default function Suggestion() {
-  const [timeframe, setTimeframe] = useState("1D");
+  const [timeframe, setTimeframe] = useState(() => localStorage.getItem("suggestion_timeframe") || "1D");
   const [searchTerm, setSearchTerm] = useState("");
   const [data, setData] = useState([]);
-  const [filterRating, setFilterRating] = useState(null);
-  const [changeFilter, setChangeFilter] = useState("All");
+  const [filterRating, setFilterRating] = useState(() => localStorage.getItem("suggestion_filter_rating") || null);
+  const [changeFilter, setChangeFilter] = useState(() => localStorage.getItem("suggestion_change_filter") || "All");
   const [selectedItem, setSelectedItem] = useState(null);
   const [loading, setLoading] = useState(true);
   const [sortConfig, setSortConfig] = useState({ key: null, direction: "asc" });
@@ -842,12 +842,40 @@ export default function Suggestion() {
 
   const [showCountryMenu, setShowCountryMenu] = useState(false);
   const countryDropdownRef = useRef(null);
-  const [selectedCountries, setSelectedCountries] = useState(["All"]); // Array for multi-select
-  const selectedCountryLabel = selectedCountries.length === 1 && selectedCountries[0] === "All" 
-    ? "All Markets" 
-    : selectedCountries.length === 0 
+  const [selectedCountries, setSelectedCountries] = useState(() => {
+    try {
+      const saved = localStorage.getItem("suggestion_selected_countries");
+      return saved ? JSON.parse(saved) : ["All"];
+    } catch {
+      return ["All"];
+    }
+  }); // Array for multi-select
+  const selectedCountryLabel = selectedCountries.length === 1 && selectedCountries[0] === "All"
     ? "All Markets"
-    : `${selectedCountries.length} Markets`;
+    : selectedCountries.length === 0
+      ? "All Markets"
+      : `${selectedCountries.length} Markets`;
+
+  /* PERSIST FILTERS */
+  useEffect(() => {
+    localStorage.setItem("suggestion_timeframe", timeframe);
+  }, [timeframe]);
+
+  useEffect(() => {
+    if (filterRating) {
+      localStorage.setItem("suggestion_filter_rating", filterRating);
+    } else {
+      localStorage.removeItem("suggestion_filter_rating");
+    }
+  }, [filterRating]);
+
+  useEffect(() => {
+    localStorage.setItem("suggestion_change_filter", changeFilter);
+  }, [changeFilter]);
+
+  useEffect(() => {
+    localStorage.setItem("suggestion_selected_countries", JSON.stringify(selectedCountries));
+  }, [selectedCountries]);
 
   const [hoveredRow, setHoveredRow] = useState(null);
   const [tooltipPosition, setTooltipPosition] = useState({ x: 0, y: 0 });
@@ -1078,8 +1106,8 @@ export default function Suggestion() {
       else if (changeFilter === "Negative") mapped = mapped.filter(row => row.changeDirection === "Negative");
     }
     if (selectedCountries.length > 0 && !selectedCountries.includes("All")) {
-  mapped = mapped.filter(row => selectedCountries.includes(row.exchangeCountry));
-}
+      mapped = mapped.filter(row => selectedCountries.includes(row.exchangeCountry));
+    }
 
     mapped = mapped.filter(row => {
       const rating = row.technicalRating.toLowerCase();
@@ -1133,30 +1161,30 @@ export default function Suggestion() {
     }
   };
   const RATINGS_OPTIONS = ["Strong Buy", "Buy", "Sell", "Strong Sell"];
-  const CHANGE_OPTIONS = [{ label: "Latest Only", val: "All" }, { label: "Show Changes", val: "ShowChanges", color: "bg-blue-500" }, { label: "Positive", val: "Positive", color: "bg-[#137333] dark:bg-[#4CE60F]" }, { label: "Negative", val: "Negative", color: "bg-[#C5221F] dark:bg-[#EB5757]" }];
+  const CHANGE_OPTIONS = [{ label: "Latest Only", val: "All", color: "bg-gray-400" }, { label: "Show Changes", val: "ShowChanges", color: "bg-blue-500" }, { label: "Positive", val: "Positive", color: "bg-[#137333] dark:bg-[#4CE60F]" }, { label: "Negative", val: "Negative", color: "bg-[#C5221F] dark:bg-[#EB5757]" }];
   const shouldShowChange = filterRating !== null || changeFilter !== "All";
 
   return (
     <div className="h-screen sm:h-[90vh] w-full bg-[#F5F5F5 dark:bg-[#151D33]] overflow-hidden flex justify-center">
       <div className="w-full max-w-[1248px] flex flex-col h-full">
-        <div className="pt-6 md:pt-10 pb-0 px-4 md:px-0 shrink-0" style={{ overflow: 'visible', zIndex: 100 }}>
-          <div className="w-full md:w-[1040px] max-w-full mx-auto md:scale-[1.2] md:origin-top" style={{ overflow: 'visible' }}>
+        <div className="pt-6 md:pt-10 pb-0 px-4 md:px-6 lg:px-8 xl:px-0 shrink-0" style={{ overflow: 'visible', zIndex: 100 }}>
+          <div className="w-full xl:w-[1040px] max-w-full mx-auto xl:scale-[1.2] xl:origin-top" style={{ overflow: 'visible' }}>
             <h1 className="text-2xl md:text-3xl font-bold mb-2 md:mb-3 text-black dark:text-white">Suggestion</h1>
             <p className="text-[#6B6B6B] dark:text-white/70 mb-6 md:mb-8 text-sm md:text-base">Technical Ratings (Underlying Assets)</p>
 
             {/* Filters Row */}
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 md:gap-4 mb-2">
               <div className="flex flex-col sm:flex-row sm:items-center gap-3 w-full md:w-auto">
-                <div className="flex bg-white dark:bg-[#595959] dark:border-none dark:text-white p-1 rounded-xl border border-gray-200 shadow-sm h-[37.33px] w-full sm:w-auto">
+                <div id="tour-sugg-timeframe" className="flex bg-white dark:bg-[#595959] dark:border-none dark:text-white p-1 rounded-xl border border-gray-200 shadow-sm h-[37.33px] w-full sm:w-auto">
                   <button onClick={() => { setTimeframe("1D"); trackFilter('timeframe', '1D'); }} className={`flex-1 sm:flex-none px-3 py-1 rounded-lg text-xs sm:text-sm font-medium transition-all h-full ${timeframe === "1D" ? "bg-[#0B102A] text-white shadow-md dark:bg-[#10172A]" : "text-gray-800 hover:bg-gray-50 dark:text-white dark:hover:bg-[#4A4A4A]"}`}>1 Day</button>
                   <button onClick={() => { setTimeframe("1W"); trackFilter('timeframe', '1W'); }} className={`flex-1 sm:flex-none px-3 py-1 rounded-lg text-xs sm:text-sm font-medium transition-all h-full ${timeframe === "1W" ? "bg-[#0B102A] text-white shadow-md dark:bg-[#10172A]" : "text-gray-800 hover:bg-gray-50 dark:text-white dark:hover:bg-[#4A4A4A]"}`}>1 Week</button>
                 </div>
-                <div className="flex items-center gap-2 md:gap-4 w-full sm:w-auto">
-                  <div className="relative z-200 flex-1 sm:flex-initial w-1/2" ref={countryDropdownRef} style={{ isolation: 'isolate', overflow: 'visible' }}>
+                <div className="flex items-center gap-2 lg:gap-4 w-full sm:w-auto">
+                  <div id="tour-sugg-market" className="relative z-200 flex-1 sm:flex-initial w-1/2 sm:w-auto" ref={countryDropdownRef} style={{ isolation: 'isolate', overflow: 'visible' }}>
                     <button
                       type="button"
                       onClick={() => setShowCountryMenu((prev) => !prev)}
-                      className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 dark:border-none bg-white dark:bg-[#595959] dark:text-white px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 dark:hover:bg-[#4A4A4A] focus:outline-none focus:ring-2 focus:ring-[#0B102A] dark:focus:ring-0 w-full md:w-[202.5px]"
+                      className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 dark:border-none bg-white dark:bg-[#595959] dark:text-white px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 dark:hover:bg-[#4A4A4A] focus:outline-none focus:ring-2 focus:ring-[#0B102A] dark:focus:ring-0 w-full md:w-[150px] lg:w-[202.5px]"
                       style={{ height: '37.33px', width: undefined }}
                     >
                       <span className="truncate flex items-center gap-2">
@@ -1193,8 +1221,8 @@ export default function Suggestion() {
                           const isSelected = selectedCountries.includes(opt.code);
                           const isAll = opt.code === "All";
                           return (
-                            <button 
-                              key={opt.code} 
+                            <button
+                              key={opt.code}
                               onClick={() => {
                                 let newSelection;
                                 if (isAll) {
@@ -1218,7 +1246,7 @@ export default function Suggestion() {
                                 setSelectedCountries(newSelection);
                                 // Don't close the menu - let user continue selecting
                                 trackFilter('country', opt.label);
-                              }} 
+                              }}
                               className={`flex w-full items-center justify-between px-4 py-1.5 text-left text-xs sm:text-sm transition-colors ${isSelected ? "bg-[#EEF2FF] text-[#0B102A] font-semibold dark:bg-[#4A4A4A] dark:text-white" : "text-gray-700 dark:text-white hover:bg-gray-50 dark:hover:bg-[#4A4A4A]"}`}
                             >
                               <span className="flex items-center gap-2">
@@ -1245,13 +1273,13 @@ export default function Suggestion() {
                       </div>
                     )}
                   </div>
-                  <div className="flex-1 w-1/2">
+                  <div id="tour-sugg-change-filter" className="flex-1 w-1/2 sm:w-auto">
                     <FilterDropdown label="Rating change" value={changeFilter} options={CHANGE_OPTIONS} onSelect={(val) => { setChangeFilter(val); trackFilter('change', val); }} />
                   </div>
                 </div>
               </div>
               <div className="relative w-full md:w-auto">
-                <input type="text" placeholder="Search..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="bg-white dark:bg-[#595959] dark:border-none text-gray-900 dark:text-white placeholder:text-gray-400 placeholder:dark:text-white/70 pl-4 pr-10 py-2 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#0B102A] dark:focus:ring-0 w-full md:w-64 text-sm shadow-sm h-[37.33px]" />
+                <input type="text" placeholder="Search..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="bg-white dark:bg-[#595959] dark:border-none text-gray-900 dark:text-white placeholder:text-gray-400 placeholder:dark:text-white/70 pl-4 pr-10 py-2 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#0B102A] dark:focus:ring-0 w-full md:w-48 lg:w-64 text-sm shadow-sm h-[37.33px]" />
                 <i className="bi bi-search absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 dark:text-white" style={{ fontSize: 14 }} />
               </div>
             </div>
@@ -1259,7 +1287,7 @@ export default function Suggestion() {
             {/* Rating Select Row */}
             <div className="flex flex-col md:flex-row md:items-end md:justify-between mb-2 gap-0 md:gap-2">
               <div className="overflow-x-auto pb-1 w-full md:w-auto">
-                <div className="flex md:inline-flex items-center gap-3 bg-white dark:bg-[#595959] dark:border-none dark:text-white rounded-xl px-2 py-1.5 shadow-sm border border-gray-100 w-full md:w-auto h-[37.33px]">
+                <div id="tour-sugg-ratings-filter" className="flex md:inline-flex items-center gap-3 bg-white dark:bg-[#595959] dark:border-none dark:text-white rounded-xl px-2 py-1.5 shadow-sm border border-gray-100 w-full md:w-auto h-[37.33px]">
                   <span className="text-sm font-semibold text-gray-700 dark:text-white whitespace-nowrap">Ratings</span>
                   <div className="flex gap-2 flex-1 md:flex-initial h-full">
                     {RATINGS_OPTIONS.map((rating) => (
@@ -1279,197 +1307,208 @@ export default function Suggestion() {
         </div>
 
         {/* Main Content - Scrollable */}
-        <div className="flex-1 overflow-hidden pb-6 md:pb-10 mt-0 md:mt-9 px-4 md:px-0">
+        <div className="flex-1 overflow-hidden pb-6 md:pb-10 mt-0 -mt-1 md:mt-1 lg:mt-1 xl:mt-10 px-4 md:px-6 lg:px-8 xl:px-0">
           <div className="h-full dark:bg-[#0B0E14] dark:border-white/0 dark:text-white rounded-xl overflow-auto">
             {loading ? (
               <>
-                {/* Desktop - Table Skeleton */}
-                <div className="hidden lg:block">
+                {/* Desktop/iPad - Table Skeleton */}
+                <div className="hidden md:block">
                   <TableSkeleton rows={12} cols={8} showHeader={true} />
                 </div>
                 {/* Mobile - Card Skeleton */}
-                <div className="lg:hidden">
+                <div className="md:hidden">
                   <CardSkeleton count={8} />
                 </div>
               </>
             ) : (
               <>
-            {/* Mobile Card View */}
-            <div className="lg:hidden ">
-              <div className="space-y-3 dark:bg-[#0B0E14]">
-                {processedData.map((row, idx) => (
-                  <div
-                    key={idx}
-                    onClick={() => setSelectedItem(row)}
-                    className="bg-white dark:bg-[#23262A] dark:border-white/10 dark:text-white rounded-xl shadow-sm border border-gray-200 dark:border-white/10 p-3 cursor-pointer hover:shadow-md transition-shadow"
-                  >
-                    {/* Header */}
-                    <div className="flex items-start justify-between mb-2">
-                      <div className="flex-1 min-w-0 mr-2">
-                        <div className="font-bold text-[#2F80ED] text-sm truncate">{row.displaySymbol}</div>
-                        <div className="text-xs text-gray-600 dark:text-white/80 truncate">{row.displayName}</div>
-                      </div>
-                      <div className="text-right shrink-0">
-                        <div className="flex items-baseline justify-end gap-0.5">
-                          <span className="font-medium text-gray-800 dark:text-white text-sm font-mono">{formatPrice(row.sortPrice)}</span>
-                          <span className="text-xs text-gray-600 dark:text-white/80 uppercase">{row.currency}</span>
-                        </div>
-                        <div className={`text-xs font-medium ${row.displayPct > 0 ? "text-[#27AE60] dark:text-[#4CE60F]" : row.displayPct < 0 ? "text-[#EB5757] dark:text-[#EB5757]" : "text-gray-800 dark:text-white"}`}>
-                          {row.hasData ? <span className="font-mono">{row.displayPct > 0 ? "+" : ""}{formatPct(row.displayPct)}%</span> : "-"}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Rating */}
-                    <div className="mb-2 py-2 border-y border-gray-400 dark:border-gray-400">
-                      <div className="flex items-center justify-between mb-1">
-                        <div className="text-[10px] text-gray-500 dark:text-gray-400">Technical Rating</div>
-                        <div className="ml-2">
-                          <RatingChangeCell prev={row.prevTechnicalRating} current={row.technicalRating} showChange={shouldShowChange} />
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Details Grid */}
-                    <div className="grid grid-cols-2 gap-2 text-xs">
-                      <div>
-                        <div className="text-gray-500 text-[10px] dark:text-gray-400">Last Update</div>
-                        <div className="text-gray-800 dark:text-white font-medium">{row.displayTime}</div>
-                      </div>
-                      <div className="text-right">
-                        <div className="text-gray-500 text-[10px] dark:text-gray-400">Change</div>
-                        <div className={`font-medium ${row.displayChange > 0 ? "text-[#27AE60] dark:text-[#4CE60F]" : row.displayChange < 0 ? "text-[#EB5757] dark:text-[#EB5757]" : "text-gray-800 dark:text-white"}`}>
-                          {row.hasData ? (row.displayChange > 0 ? `+${formatPrice(row.displayChange)}` : formatPrice(row.displayChange)) : "-"}
-                        </div>
-                      </div>
-                      {row.mostPopularDR ? (
-                        <div>
-                          <div className="text-gray-500 text-[10px] dark:text-white/60">Popular DR</div>
-                          <div className="font-bold text-[#50B728] dark:text-[#4CE60F] truncate">{row.mostPopularDR.symbol}</div>
-                          <div className="text-[10px] text-gray-600 dark:text-white/80">Vol: {row.mostPopularDR.volume > 0 ? formatInt(row.mostPopularDR.volume) : "-"}</div>
-                        </div>
-                      ) : (
-                        <div>
-                          <div className="text-gray-500 text-[10px] dark:text-white/60">Popular DR</div>
-                          <div className="font-bold text-gray-400 truncate">-</div>
-                          <div className="text-[10px] text-gray-600 dark:text-white/80">Vol: -</div>
-                        </div>
-                      )}
-                      {row.highSensitivityDR ? (
-                        <div className="text-right">
-                          <div className="text-gray-500 text-[10px] dark:text-white/60">Sensitivity DR</div>
-                          <div className="font-bold text-[#0007DE] dark:text-blue-400 truncate">{row.highSensitivityDR.symbol}</div>
-                          <div className="text-[10px] text-gray-600 dark:text-white/80">Bid: {row.highSensitivityDR.bid > 0 ? formatPrice(row.highSensitivityDR.bid) : "-"}</div>
-                        </div>
-                      ) : (
-                        <div className="text-right">
-                          <div className="text-gray-500 text-[10px] dark:text-white/60">Sensitivity DR</div>
-                          <div className="font-bold text-gray-400 truncate">-</div>
-                          <div className="text-[10px] text-gray-600 dark:text-white/80">Bid: -</div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Desktop Table View */}
-            <table className="hidden lg:table w-full text-left border-collapse text-[14.4px]">
-              <thead className="bg-[#0B102A] text-white font-semibold sticky top-0" style={{ zIndex: 50 }}>
-                <tr className="h-[50px]">
-                  {[{ key: 'symbol', label: 'Symbol', align: 'left' }, { key: 'rating', label: 'Technical Rating', align: 'center', width: '240px' }, { key: 'time', label: 'Last Update', align: 'center' }, { key: 'popularDR', label: 'Most Popular DR', align: 'center' }, { key: 'sensitivityDR', label: 'High Sensitivity DR', align: 'center' }, { key: 'price', label: 'Price', align: 'right' }, { key: 'pct', label: '%Change', align: 'right' }, { key: 'chg', label: 'Change', align: 'right' }, { key: 'high', label: 'High', align: 'right' }, { key: 'low', label: 'Low', align: 'right' }].map(h => (
-                    <th
-                      key={h.key}
-                      className={`px-4 cursor-pointer text-${h.align} whitespace-nowrap relative`}
-                      style={h.width ? { minWidth: h.width, width: h.width } : {}}
-                      onClick={() => handleSort(h.key)}
-                    >
-                      <div className={`flex items-center justify-${h.align === 'left' ? 'start' : h.align === 'center' ? 'center' : 'end'} gap-0.5`}>{h.label} <SortIndicator colKey={h.key} /></div>
-                      {sortConfig.key === h.key && (
-                        <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#2F80ED] z-50">
-                          <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-0 h-0 border-l-4 border-l-transparent border-r-4 border-r-transparent border-t-4 border-t-[#2F80ED]"></div>
-                        </div>
-                      )}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="bg-white dark:bg-transparent" ref={tableRef}>
-                {processedData.map((row, idx) => {
-                  const rowBg = idx % 2 === 0 ? "bg-[#FFFFFF] dark:bg-[#2D3136]" : "bg-[#F3F4F6] dark:bg-[#24272B]";
-                  return (
-                    <tr
-                      key={idx}
-                      onClick={() => setSelectedItem(row)}
-                      className={`transition-colors ${rowBg} hover:bg-gray-50 dark:hover:bg-white/5 cursor-pointer relative`}
-                      style={{ height: "53.6px" }}
-                    >
-                      <td className="px-4 align-middle overflow-hidden max-w-[130px]">
-                        <div className="flex flex-col w-full">
-                          <span className="font-bold text-[#2F80ED] truncate block">{row.displaySymbol}</span>
-                          <span className="text-[12.4px] text-gray-600 dark:text-white/80 truncate block" title={row.displayName}>{row.displayName}</span>
-                        </div>
-                      </td>
-                      <td
-                        className="px-3 align-middle text-center"
-                        style={{ minWidth: '190px', width: '190px' }}
-                        onMouseEnter={(e) => {
-                          e.stopPropagation();
-                          handleRatingCellMouseEnter(e, row);
-                        }}
-                        onMouseLeave={(e) => {
-                          e.stopPropagation();
-                          handleRatingCellMouseLeave();
-                        }}
+                {/* Mobile Card View */}
+                <div className="md:hidden ">
+                  <div className="space-y-3 dark:bg-[#0B0E14]">
+                    {processedData.map((row, idx) => (
+                      <div
+                        key={idx}
+                        id={idx === 0 ? "tour-sugg-first-row-mobile" : undefined}
+                        onClick={() => setSelectedItem(row)}
+                        className="bg-white dark:bg-[#23262A] dark:border-white/10 dark:text-white rounded-xl shadow-sm border border-gray-200 dark:border-white/10 p-3 cursor-pointer hover:shadow-md transition-shadow"
                       >
-                        <RatingChangeCell prev={row.prevTechnicalRating} current={row.technicalRating} showChange={shouldShowChange} />
-                      </td>
-                      <td className="px-4 align-middle text-center whitespace-nowrap text-gray-800 dark:text-white font-medium">{row.displayTime}</td>
-                      <td className="px-4 align-middle text-center">
-                        <div className="flex flex-col items-center gap-0.5">
+                        {/* Header */}
+                        <div className="flex items-start justify-between mb-2">
+                          <div className="flex-1 min-w-0 mr-2">
+                            <div className="font-bold text-[#2F80ED] text-sm truncate">{row.displaySymbol}</div>
+                            <div className="text-xs text-gray-600 dark:text-white/80 truncate">{row.displayName}</div>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <div className="flex items-baseline justify-end gap-0.5">
+                              <span className="font-medium text-gray-800 dark:text-white text-sm font-mono">{formatPrice(row.sortPrice)}</span>
+                              <span className="text-xs text-gray-600 dark:text-white/80 uppercase">{row.currency}</span>
+                            </div>
+                            <div className={`text-xs font-medium ${row.displayPct > 0 ? "text-[#27AE60] dark:text-[#4CE60F]" : row.displayPct < 0 ? "text-[#EB5757] dark:text-[#EB5757]" : "text-gray-800 dark:text-white"}`}>
+                              {row.hasData ? <span className="font-mono">{row.displayPct > 0 ? "+" : ""}{formatPct(row.displayPct)}%</span> : "-"}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Rating */}
+                        <div className="mb-2 py-2 border-y border-gray-400 dark:border-gray-400">
+                          <div className="flex items-center justify-between mb-1">
+                            <div className="text-[10px] text-gray-500 dark:text-gray-400">Technical Rating</div>
+                            <div className="ml-2">
+                              <RatingChangeCell prev={row.prevTechnicalRating} current={row.technicalRating} showChange={shouldShowChange} />
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Details Grid */}
+                        <div className="grid grid-cols-2 gap-2 text-xs">
+                          <div>
+                            <div className="text-gray-500 text-[10px] dark:text-gray-400">Last Update</div>
+                            <div className="text-gray-800 dark:text-white font-medium">{row.displayTime}</div>
+                          </div>
+                          <div className="text-right">
+                            <div className="text-gray-500 text-[10px] dark:text-gray-400">Change</div>
+                            <div className={`font-medium ${row.displayChange > 0 ? "text-[#27AE60] dark:text-[#4CE60F]" : row.displayChange < 0 ? "text-[#EB5757] dark:text-[#EB5757]" : "text-gray-800 dark:text-white"}`}>
+                              {row.hasData ? (row.displayChange > 0 ? `+${formatPrice(row.displayChange)}` : formatPrice(row.displayChange)) : "-"}
+                            </div>
+                          </div>
                           {row.mostPopularDR ? (
-                            <>
-                              <span className="font-bold text-[#50B728] dark:text-[#4CE60F]">{row.mostPopularDR.symbol}</span>
-                              <span className="text-gray-600 dark:text-white/80 text-[13.4px]">Vol: <span className="font-mono">{row.mostPopularDR.volume > 0 ? formatInt(row.mostPopularDR.volume) : "-"}</span></span>
-                            </>
+                            <div>
+                              <div className="text-gray-500 text-[10px] dark:text-white/60">Popular DR</div>
+                              <div className="font-bold text-[#50B728] dark:text-[#4CE60F] truncate">{row.mostPopularDR.symbol}</div>
+                              <div className="text-[10px] text-gray-600 dark:text-white/80">Vol: {row.mostPopularDR.volume > 0 ? formatInt(row.mostPopularDR.volume) : "-"}</div>
+                            </div>
                           ) : (
-                            <>
-                              <span className="text-gray-600 dark:text-white/80">-</span>
-                              <span className="text-gray-600 dark:text-white/80 text-[13.4px]">Vol: -</span>
-                            </>
+                            <div>
+                              <div className="text-gray-500 text-[10px] dark:text-white/60">Popular DR</div>
+                              <div className="font-bold text-gray-400 truncate">-</div>
+                              <div className="text-[10px] text-gray-600 dark:text-white/80">Vol: -</div>
+                            </div>
                           )}
-                        </div>
-                      </td>
-                      <td className="px-4 align-middle text-center">
-                        <div className="flex flex-col items-center gap-0.5">
                           {row.highSensitivityDR ? (
-                            <>
-                              <span className="font-bold text-[#0007DE] dark:text-blue-400">{row.highSensitivityDR.symbol}</span>
-                              <span className="text-gray-600 dark:text-white/80 text-[13.4px]">Bid: <span className="font-mono">{row.highSensitivityDR.bid > 0 ? formatPrice(row.highSensitivityDR.bid) : "-"}</span></span>
-                            </>
+                            <div className="text-right">
+                              <div className="text-gray-500 text-[10px] dark:text-white/60">Sensitivity DR</div>
+                              <div className="font-bold text-[#0007DE] dark:text-blue-400 truncate">{row.highSensitivityDR.symbol}</div>
+                              <div className="text-[10px] text-gray-600 dark:text-white/80">Bid: {row.highSensitivityDR.bid > 0 ? formatPrice(row.highSensitivityDR.bid) : "-"}</div>
+                            </div>
                           ) : (
-                            <>
-                              <span className="text-gray-600 dark:text-white/80">-</span>
-                              <span className="text-gray-600 dark:text-white/80 text-[13.4px]">Bid: -</span>
-                            </>
+                            <div className="text-right">
+                              <div className="text-gray-500 text-[10px] dark:text-white/60">Sensitivity DR</div>
+                              <div className="font-bold text-gray-400 truncate">-</div>
+                              <div className="text-[10px] text-gray-600 dark:text-white/80">Bid: -</div>
+                            </div>
                           )}
                         </div>
-                      </td>
-                      <td className="px-4 align-middle text-right">{renderPriceWithCurrency(row.sortPrice, row.currency)}</td>
-                      <td className={`px-4 align-middle text-right font-medium ${row.displayPct > 0 ? "text-[#27AE60] dark:text-[#4CE60F]" : row.displayPct < 0 ? "text-[#EB5757]" : "text-gray-800 dark:text-white"}`}>{row.hasData ? <span className="font-mono">{row.displayPct > 0 ? "+" : ""}{formatPct(row.displayPct)}%</span> : "-"}</td>
-                      <td className={`px-4 align-middle text-right font-medium ${row.displayChange > 0 ? "text-[#27AE60] dark:text-[#4CE60F]" : row.displayChange < 0 ? "text-[#EB5757]" : "text-gray-800 dark:text-white"}`}>
-                        <div className="flex items-baseline justify-end gap-0.5">
-                          <span className="font-mono">{row.hasData ? (row.displayChange > 0 ? `+${formatPrice(row.displayChange)}` : formatPrice(row.displayChange)) : "-"}</span>
-                        </div>
-                      </td>
-                      <td className="px-4 align-middle text-right">{renderPriceWithCurrency(row.high, row.currency)}</td>
-                      <td className="px-4 align-middle text-right">{renderPriceWithCurrency(row.low, row.currency)}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Desktop/iPad Table View */}
+                <div className="hidden md:block relative w-full">
+                  <div className="relative w-full">
+                    <table className="text-left border-collapse text-[14.4px] table-auto" style={{ width: 'max-content' }}>
+                      <thead className="bg-[#0B102A] text-white font-semibold sticky top-0" style={{ zIndex: 50 }}>
+                        <tr className="h-[50px]">
+                          {[{ key: 'symbol', label: 'Symbol', align: 'left' }, { key: 'rating', label: 'Technical Rating', align: 'center', width: '240px' }, { key: 'time', label: 'Last Update', align: 'center' }, { key: 'popularDR', label: 'Most Popular DR', align: 'center' }, { key: 'sensitivityDR', label: 'High Sensitivity DR', align: 'center' }, { key: 'price', label: 'Price', align: 'right' }, { key: 'pct', label: '%Change', align: 'right' }, { key: 'chg', label: 'Change', align: 'right' }, { key: 'high', label: 'High', align: 'right' }, { key: 'low', label: 'Low', align: 'right' }].map(h => (
+                            <th
+                              key={h.key}
+                              className={`px-4 cursor-pointer text-${h.align} whitespace-nowrap relative`}
+                              style={h.width ? { minWidth: h.width, width: h.width } : {}}
+                              onClick={() => handleSort(h.key)}
+                            >
+                              <div className={`flex items-center justify-${h.align === 'left' ? 'start' : h.align === 'center' ? 'center' : 'end'} gap-0.5`}>{h.label} <SortIndicator colKey={h.key} /></div>
+                              {sortConfig.key === h.key && (
+                                <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#2F80ED] z-50">
+                                  <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-0 h-0 border-l-4 border-l-transparent border-r-4 border-r-transparent border-t-4 border-t-[#2F80ED]"></div>
+                                </div>
+                              )}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="bg-white dark:bg-transparent" ref={tableRef}>
+                        {processedData.map((row, idx) => {
+                          const rowBg = idx % 2 === 0 ? "bg-[#FFFFFF] dark:bg-[#2D3136]" : "bg-[#F3F4F6] dark:bg-[#24272B]";
+                          return (
+                            <tr
+                              key={idx}
+                              onClick={() => setSelectedItem(row)}
+                              className={`transition-colors ${rowBg} hover:bg-gray-50 dark:hover:bg-white/5 cursor-pointer relative`}
+                              style={{ height: "53.6px" }}
+                            >
+                              <td className="px-4 align-middle overflow-hidden max-w-[130px]">
+                                <div className="flex flex-col w-full">
+                                  <span className="font-bold text-[#2F80ED] truncate block">{row.displaySymbol}</span>
+                                  <span className="text-[12.4px] text-gray-600 dark:text-white/80 truncate block" title={row.displayName}>{row.displayName}</span>
+                                </div>
+                              </td>
+                              <td
+                                className="px-3 align-middle text-center"
+                                style={{ minWidth: '190px', width: '190px' }}
+                                onMouseEnter={(e) => {
+                                  e.stopPropagation();
+                                  handleRatingCellMouseEnter(e, row);
+                                }}
+                                onMouseLeave={(e) => {
+                                  e.stopPropagation();
+                                  handleRatingCellMouseLeave();
+                                }}
+                              >
+                                <RatingChangeCell prev={row.prevTechnicalRating} current={row.technicalRating} showChange={shouldShowChange} />
+                              </td>
+                              <td className="px-4 align-middle text-center whitespace-nowrap text-gray-800 dark:text-white font-medium">{row.displayTime}</td>
+                              <td className="px-4 align-middle text-center">
+                                <div className="flex flex-col items-center gap-0.5">
+                                  {row.mostPopularDR ? (
+                                    <>
+                                      <span className="font-bold text-[#50B728] dark:text-[#4CE60F]">{row.mostPopularDR.symbol}</span>
+                                      <span className="text-gray-600 dark:text-white/80 text-[13.4px]">Vol: <span className="font-mono">{row.mostPopularDR.volume > 0 ? formatInt(row.mostPopularDR.volume) : "-"}</span></span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <span className="text-gray-600 dark:text-white/80">-</span>
+                                      <span className="text-gray-600 dark:text-white/80 text-[13.4px]">Vol: -</span>
+                                    </>
+                                  )}
+                                </div>
+                              </td>
+                              <td className="px-4 align-middle text-center">
+                                <div className="flex flex-col items-center gap-0.5">
+                                  {row.highSensitivityDR ? (
+                                    <>
+                                      <span className="font-bold text-[#0007DE] dark:text-blue-400">{row.highSensitivityDR.symbol}</span>
+                                      <span className="text-gray-600 dark:text-white/80 text-[13.4px]">Bid: <span className="font-mono">{row.highSensitivityDR.bid > 0 ? formatPrice(row.highSensitivityDR.bid) : "-"}</span></span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <span className="text-gray-600 dark:text-white/80">-</span>
+                                      <span className="text-gray-600 dark:text-white/80 text-[13.4px]">Bid: -</span>
+                                    </>
+                                  )}
+                                </div>
+                              </td>
+                              <td className="px-4 align-middle text-right">{renderPriceWithCurrency(row.sortPrice, row.currency)}</td>
+                              <td className={`px-4 align-middle text-right font-medium ${row.displayPct > 0 ? "text-[#27AE60] dark:text-[#4CE60F]" : row.displayPct < 0 ? "text-[#EB5757]" : "text-gray-800 dark:text-white"}`}>{row.hasData ? <span className="font-mono">{row.displayPct > 0 ? "+" : ""}{formatPct(row.displayPct)}%</span> : "-"}</td>
+                              <td className={`px-4 align-middle text-right font-medium ${row.displayChange > 0 ? "text-[#27AE60] dark:text-[#4CE60F]" : row.displayChange < 0 ? "text-[#EB5757]" : "text-gray-800 dark:text-white"}`}>
+                                <div className="flex items-baseline justify-end gap-0.5">
+                                  <span className="font-mono">{row.hasData ? (row.displayChange > 0 ? `+${formatPrice(row.displayChange)}` : formatPrice(row.displayChange)) : "-"}</span>
+                                </div>
+                              </td>
+                              <td className="px-4 align-middle text-right">{renderPriceWithCurrency(row.high, row.currency)}</td>
+                              <td className="px-4 align-middle text-right">{renderPriceWithCurrency(row.low, row.currency)}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                    {/* Tutorial Overlay Target - Visible Width Only */}
+                    <div
+                      id="tour-sugg-first-row"
+                      className="absolute left-0 w-full pointer-events-none"
+                      style={{ top: '50px', height: '53.6px', zIndex: 5 }}
+                    ></div>
+                  </div>
+                </div>
               </>
             )}
           </div>
