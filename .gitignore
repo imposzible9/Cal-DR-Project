@@ -1,4 +1,42 @@
-# Logs
+###################################################
+# --- [ BASE: OS Garbage ] ---
+.DS_Store
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# --- [ BASE: Editors & IDEs ] ---
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/launch.json
+.idea/
+*.swp
+*.swo
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.classpath
+.project
+.settings/
+
+# --- [ BASE: Security & Config ] ---
+# ดักไฟล์ Environment ทุกรูปแบบ
+.env
+.env.local
+.env.*.local
+.env.production
+.env.development
+.env.staging
+.env.test
+
+# ยกเว้นไฟล์ตัวอย่างเพื่อให้ทีมรู้โครงสร้างตัวแปร
+!.env.example
+
+# --- [ BASE: Logs & Temporary ] ---
 logs
 *.log
 npm-debug.log*
@@ -6,19 +44,32 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
+.cache/
+tmp/
 
-node_modules
-dist
-dist-ssr
-*.local
+# --- [ SPECIFIC: Frontend (Node.js/Vite) ] ---
+node_modules/
+dist/
+dist-ssr/
+out/
+.eslintcache
+.stylelintcache
+coverage/
+.next/
+.svelte-kit/
 
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-.idea
-.DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
+# --- [ SPECIFIC: Backend (Python) ] ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.toast
+.build/
+.pytest_cache/
+.mypy_cache/
