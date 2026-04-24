@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback, useTransition, useRef
 import swipeImg from "../assets/swipe.png";
 import { trackPageView, trackSearch, trackFilter, trackStockView } from "../utils/tracker";
 import { TableSkeleton, CardSkeleton } from "./SkeletonLoader";
+import { param } from "framer-motion/client";
 
 const API_URL = import.meta.env.VITE_DR_LIST_API;
 const CACHE_KEY = "dr_cache_v3";
@@ -204,6 +205,7 @@ export default function DRList() {
   useEffect(() => {
     const t = setTimeout(() => {
       const trimmed = searchTerm.trim();
+      console.log('trimmed', trimmed)
       setSearch(trimmed);
       if (trimmed) {
         trackSearch(trimmed);
@@ -214,6 +216,7 @@ export default function DRList() {
 
   /* TRACK PAGE VIEW */
 
+  const [displayHistResult, setDisplayHistResult] = useState(false);
 
   /* LOAD WATCHLIST */
   useEffect(() => {
@@ -317,6 +320,7 @@ export default function DRList() {
         setIsRefreshing(true);
         const res = await fetch(API_URL);
         const json = await res.json();
+        console.log(json)
         const rows = json.rows || [];
 
         if (json.updated_at) {
@@ -372,6 +376,7 @@ export default function DRList() {
 
         if (!mounted) return;
         setData(formatted);
+        console.log('data', formatted)
 
         try {
           localStorage.setItem(CACHE_KEY, JSON.stringify({ ts: Date.now(), rows: formatted }));
@@ -392,6 +397,113 @@ export default function DRList() {
       clearTimeout(timeoutId);
     };
   }, []);
+
+
+  const [onDateSelect, setOnDateSelect] = useState('')
+  const [onNumberDate, setOnNumberDate] = useState('')
+  const [searchLoad, setSearchLoad] = useState(false)
+
+  async function onHistSearch() {
+    // let mounted = true;
+    // try {
+    //   const raw = localStorage.getItem(CACHE_KEY);
+    //   if (raw) {
+    //     const parsed = JSON.parse(raw);
+    //     if (parsed?.rows && mounted) {
+    //       setData(parsed.rows);
+    //       setLoading(false);
+    //     }
+    //   }
+    // } catch { }
+
+    try {
+      // setIsRefreshing(true);
+      setSearchLoad(true);
+      var param = ''
+      if (onNumberDate != '') {
+        param = param + `number_date=${onNumberDate}&`
+      }
+      if (onDateSelect != '') {
+        param = param + `date=${onDateSelect}&`
+      }
+      const url = `http://172.18.1.80:7000/cal-dr?${param}`
+      const res = await fetch(url);
+      console.log(url)
+      const json = await res.json();
+      console.log(json)
+      const rows = json.rows || [];
+
+      // if (json.updated_at) {
+      //   const date = new Date(json.updated_at * 1000);
+      //   setLastUpdated(date);
+      // }
+
+      const formatted = rows.map((x, i) => {
+        const rawRatio = x.conversionRatio ?? "";
+
+        const conversionRatioSort = (() => {
+          if (!rawRatio) return null;
+          const match = String(rawRatio).match(/[\d,.]+/);
+          if (!match) return null;
+          const n = Number(match[0].replace(/,/g, ""));
+          return Number.isFinite(n) ? n : null;
+        })();
+
+        return {
+          _id: `${x.symbol ?? "unknown"}-${i}`,
+          dr: x.symbol ?? "-",
+          open: x.open ?? 0,
+          high: x.high ?? 0,
+          low: x.low ?? 0,
+          last: x.last ?? 0,
+          change: x.change ?? 0,
+          pct: x.percentChange ?? 0,
+          bid: x.bidPrice ?? 0,
+          offer: x.offerPrice ?? 0,
+          vol: x.totalVolume ?? 0,
+          value: (x.totalValue ?? 0) / 1000,
+
+          tradingSession: mapTradingSessionEN(x.tradingSession),
+          issuer: x.issuer ?? "",
+          issuerName: x.issuerName ?? "",
+          marketCap: x.marketCap ?? null,
+          ytdChange: x.ytdChange ?? null,
+          ytdPercentChange: x.ytdPercentChange ?? null,
+          underlying: extractSymbol(x.underlying || x.underlyingName),
+          underlyingName: x.underlyingName ?? "",
+
+          conversionRatio: rawRatio,
+          ratio: formatRatio(rawRatio),
+          conversionRatioSort,
+
+          divYield: x.dividendYield12M ?? null,
+          securityTypeName: mapSecurityTypeEN(x.underlyingClassName),
+          exchange: x.underlyingExchange ?? "",
+          outstandingShare: x.outstandingShare ?? null,
+          country: getCountryFromExchange(x.underlyingExchange),
+          full: x,
+        };
+      });
+
+      // if (!mounted) return;
+      setDisplayHistResult(true);
+      setData(formatted);
+      console.log('data', formatted)
+
+      // try {
+      //   localStorage.setItem(CACHE_KEY, JSON.stringify({ ts: Date.now(), rows: formatted }));
+      // } catch { }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setSearchLoad(false);
+      // if (mounted) {
+      //   setLoading(false);
+      //   setIsRefreshing(false);
+      //   searchLoad(false);
+      // }
+    }
+  }
 
   /* ───────────────────────────────────────────────
       UI SECTION – CONTROL BAR
@@ -583,10 +695,13 @@ export default function DRList() {
         if (!groups[r.underlying]) groups[r.underlying] = [];
         groups[r.underlying].push(r);
       });
+      console.log('groups', groups);
       const winners = Object.values(groups).map(group =>
         group.reduce((prev, curr) => (Number(curr.vol) || 0) > (Number(prev.vol) || 0) ? curr : prev)
       );
-      return winners.sort((a, b) => (Number(b.vol) || 0) - (Number(a.vol) || 0));
+      var outputArray = winners.sort((a, b) => (Number(b.vol) || 0) - (Number(a.vol) || 0));
+      console.log('outputArray', outputArray);
+      return outputArray;
     }
 
     if (tab === "sensitivity") {
@@ -637,6 +752,8 @@ export default function DRList() {
       if (!groups[key]) groups[key] = [];
       groups[key].push(r);
     });
+
+    console.log('groups', groups);
 
     Object.values(groups).forEach(group => {
       if (group.length <= 1) return;
@@ -753,7 +870,7 @@ export default function DRList() {
     };
 
     return (
-      <tr key={row.dr} className={`${rowBg} cursor-pointer`} onClick={() => { trackStockView(row.dr, row.underlyingName); setDetailRow(row); }} style={{ height: "53.6px" }}>
+      <tr key={row._id} className={`${rowBg} cursor-pointer`} onClick={() => { trackStockView(row.dr, row.underlyingName); setDetailRow(row); }} style={{ height: "53.6px" }}>
         {visibleColumns.star && (
           <td className={`py-3 sm:py-4 px-1 text-center sticky left-0 ${rowBg}`} style={{ width: "35px", minWidth: "35px", zIndex: 20 }} onClick={(e) => { e.stopPropagation(); toggleWatchlist(row.dr); }}>
             {isStarred(row.dr) ? <i className="bi bi-star-fill text-yellow-500 text-xs sm:text-sm"></i> : <i className="bi bi-star text-gray-400 text-xs sm:text-sm hover:text-yellow-500"></i>}
@@ -862,6 +979,62 @@ export default function DRList() {
       });
     };
 
+    const displayTable = () => {
+      return (<div className="relative w-full">
+        <table className="text-left border-collapse text-[12px] md:text-[14.4px] table-auto" style={{ width: 'max-content' }}>
+          <thead className="bg-[#0B102A] text-white font-bold sticky top-0" style={{ zIndex: 50 }}>
+            <tr className="h-[45px] md:h-[50px]">
+              {visibleColumns.dr && (
+                <th rowSpan={2} colSpan={visibleColumns.star ? 2 : 1} className="py-2 md:py-4 px-2 md:px-3 text-left sticky top-0 bg-[#0B102A] align-middle cursor-pointer relative text-xs md:text-sm" style={{ left: "0px", width: visibleColumns.star ? "160px" : "130px", minWidth: visibleColumns.star ? "160px" : "130px", zIndex: 110 }} onClick={() => handleSort("dr")}>
+                  <div className="flex items-center justify-end gap-0.5 text-xs md:text-sm pr-2 md:pr-3">
+                    <SortIndicator colKey="dr" />
+                    <span className={visibleColumns.star ? "pr-4 md:pr-21" : ""}>DR</span>
+                  </div>
+                  {sortConfig.key === "dr" && (
+                    <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#2F80ED]" style={{ zIndex: 120 }}>
+                      <div className="absolute bottom-[-4px] left-1/2 -translate-x-1/2 w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[4px] border-t-[#2F80ED]"></div>
+                    </div>
+                  )}
+                </th>
+              )}
+              {visibleTradingCount > 0 && <th colSpan={visibleTradingCount} className="py-2 md:py-3 px-2 md:px-4 text-center text-xs md:text-sm bg-[#020323]">Trading information {tab}</th>}
+              {visibleFundamentalCount > 0 && <th colSpan={visibleFundamentalCount} className="py-2 md:py-3 px-2 md:px-4 text-center text-xs md:text-sm bg-[#020323] border-l border-gray-200 dark:border-white/10">Basic DR information</th>}
+            </tr>
+            <tr className="h-[45px] md:h-[50px]">
+              {[...tradingKeys, ...fundamentalKeys].map(key => visibleColumns[key] && (
+                <th
+                  key={key}
+                  className={`py-2 md:py-3 px-2 md:px-4 text-xs md:text-sm ${textCols.includes(key) ? "text-left" : "text-right"} bg-[#1C1D39] border-b border-gray-200 dark:border-white/10 whitespace-nowrap cursor-pointer relative ${fundamentalKeys.includes(key) && key === firstVisibleFundamentalKey ? 'border-l border-gray-200 dark:border-white/10' : ''}`}
+                  style={key === "securityTypeName" ? { minWidth: 280 } : undefined}
+                  onClick={() => handleSort(key)}
+                >
+                  <div className={`flex items-center text-xs md:text-sm ${textCols.includes(key) ? "justify-start" : "justify-end"} gap-0.5`}>
+                    {key === "open" && "Open"}{key === "high" && "High"}{key === "low" && "Low"}{key === "last" && "Last"}{key === "change" && "Change"}{key === "pct" && "%Change"}{key === "bid" && "Bid"}{key === "offer" && "Offer"}{key === "vol" && "Volume"}{key === "value" && "Value('000)"}{key === "tradingSession" && "Trading Session"}
+                    {key === "issuerName" && "Issuer"}{key === "marketCap" && "Market Cap (M)"}{key === "ytdChange" && "Change (YTD)"}{key === "ytdPercentChange" && "%Change (YTD)"}{key === "underlyingName" && "Underlying"}{key === "conversionRatio" && "Ratio"}{key === "divYield" && "Div. Yield"}{key === "exchange" && "Underlying Exchange"}{key === "securityTypeName" && "Foreign Security Type"}{key === "outstandingShare" && "Outstanding Share"}
+                    <SortIndicator colKey={key} />
+                  </div>
+                  {sortConfig.key === key && (
+                    <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#2F80ED]" style={{ zIndex: 120 }}>
+                      <div className="absolute bottom-[-4px] left-1/2 -translate-x-1/2 w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[4px] border-t-[#2F80ED]"></div>
+                    </div>
+                  )}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="bg-white dark:bg-transparent dark:text-white">
+            {sortedData.map((row, index) => renderRow(row, index))}
+          </tbody>
+        </table>
+        {/* Tutorial Overlay Target - Visible Width Only */}
+        <div
+          id="tour-first-dr-row-desktop"
+          className="absolute left-0 w-full pointer-events-none"
+          style={{ top: '100px', height: '53.6px', zIndex: 5 }}
+        ></div>
+      </div>)
+    }
+
     return (
       <div className="relative">
         {showScrollHint && (
@@ -880,7 +1053,7 @@ export default function DRList() {
               const isSens = badges.sensitivityIds.has(row.dr);
               return (
                 <div
-                  key={row.dr}
+                  key={row._id}
                   id={index === 0 ? "tour-first-dr-row-mobile" : undefined}
                   onClick={() => { trackStockView(row.dr, row.underlyingName); setDetailRow(row); }}
                   className="bg-white dark:bg-[#23262A] dark:border-white/10 dark:text-white rounded-xl shadow-sm border border-gray-200 dark:border-white/10 p-4 cursor-pointer hover:shadow-md transition-shadow"
@@ -1006,59 +1179,38 @@ export default function DRList() {
 
         {/* Desktop Table View */}
         <div className="hidden md:block relative w-full">
-          <div className="relative w-full">
-            <table className="text-left border-collapse text-[12px] md:text-[14.4px] table-auto" style={{ width: 'max-content' }}>
-              <thead className="bg-[#0B102A] text-white font-bold sticky top-0" style={{ zIndex: 50 }}>
-                <tr className="h-[45px] md:h-[50px]">
-                  {visibleColumns.dr && (
-                    <th rowSpan={2} colSpan={visibleColumns.star ? 2 : 1} className="py-2 md:py-4 px-2 md:px-3 text-left sticky top-0 bg-[#0B102A] align-middle cursor-pointer relative text-xs md:text-sm" style={{ left: "0px", width: visibleColumns.star ? "160px" : "130px", minWidth: visibleColumns.star ? "160px" : "130px", zIndex: 110 }} onClick={() => handleSort("dr")}>
-                      <div className="flex items-center justify-end gap-0.5 text-xs md:text-sm pr-2 md:pr-3">
-                        <SortIndicator colKey="dr" />
-                        <span className={visibleColumns.star ? "pr-4 md:pr-21" : ""}>DR</span>
-                      </div>
-                      {sortConfig.key === "dr" && (
-                        <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#2F80ED]" style={{ zIndex: 120 }}>
-                          <div className="absolute bottom-[-4px] left-1/2 -translate-x-1/2 w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[4px] border-t-[#2F80ED]"></div>
-                        </div>
-                      )}
-                    </th>
-                  )}
-                  {visibleTradingCount > 0 && <th colSpan={visibleTradingCount} className="py-2 md:py-3 px-2 md:px-4 text-center text-xs md:text-sm bg-[#020323]">Trading information</th>}
-                  {visibleFundamentalCount > 0 && <th colSpan={visibleFundamentalCount} className="py-2 md:py-3 px-2 md:px-4 text-center text-xs md:text-sm bg-[#020323] border-l border-gray-200 dark:border-white/10">Basic DR information</th>}
-                </tr>
-                <tr className="h-[45px] md:h-[50px]">
-                  {[...tradingKeys, ...fundamentalKeys].map(key => visibleColumns[key] && (
-                    <th
-                      key={key}
-                      className={`py-2 md:py-3 px-2 md:px-4 text-xs md:text-sm ${textCols.includes(key) ? "text-left" : "text-right"} bg-[#1C1D39] border-b border-gray-200 dark:border-white/10 whitespace-nowrap cursor-pointer relative ${fundamentalKeys.includes(key) && key === firstVisibleFundamentalKey ? 'border-l border-gray-200 dark:border-white/10' : ''}`}
-                      style={key === "securityTypeName" ? { minWidth: 280 } : undefined}
-                      onClick={() => handleSort(key)}
-                    >
-                      <div className={`flex items-center text-xs md:text-sm ${textCols.includes(key) ? "justify-start" : "justify-end"} gap-0.5`}>
-                        {key === "open" && "Open"}{key === "high" && "High"}{key === "low" && "Low"}{key === "last" && "Last"}{key === "change" && "Change"}{key === "pct" && "%Change"}{key === "bid" && "Bid"}{key === "offer" && "Offer"}{key === "vol" && "Volume"}{key === "value" && "Value('000)"}{key === "tradingSession" && "Trading Session"}
-                        {key === "issuerName" && "Issuer"}{key === "marketCap" && "Market Cap (M)"}{key === "ytdChange" && "Change (YTD)"}{key === "ytdPercentChange" && "%Change (YTD)"}{key === "underlyingName" && "Underlying"}{key === "conversionRatio" && "Ratio"}{key === "divYield" && "Div. Yield"}{key === "exchange" && "Underlying Exchange"}{key === "securityTypeName" && "Foreign Security Type"}{key === "outstandingShare" && "Outstanding Share"}
-                        <SortIndicator colKey={key} />
-                      </div>
-                      {sortConfig.key === key && (
-                        <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#2F80ED]" style={{ zIndex: 120 }}>
-                          <div className="absolute bottom-[-4px] left-1/2 -translate-x-1/2 w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[4px] border-t-[#2F80ED]"></div>
-                        </div>
-                      )}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="bg-white dark:bg-transparent dark:text-white">
-                {sortedData.map((row, index) => renderRow(row, index))}
-              </tbody>
-            </table>
-            {/* Tutorial Overlay Target - Visible Width Only */}
-            <div
-              id="tour-first-dr-row-desktop"
-              className="absolute left-0 w-full pointer-events-none"
-              style={{ top: '100px', height: '53.6px', zIndex: 5 }}
-            ></div>
+          {tab == "hist" ? <div><div className="relative w-full">
+            <div class="flex m-5">
+              <div class="w-82 relative max-w-sm">
+                <div class="absolute inset-y-0 start-0 flex items-center ps-3 pointer-events-none">
+                  <svg class="w-4 h-4 text-gray-500" aria-hidden="true" xmlns="http://w3.org" fill="currentColor" viewBox="0 0 20 20">
+                    <path d="M20 4a2 2 0 0 0-2-2h-2V1a1 1 0 0 0-2 0v1h-3V1a1 1 0 0 0-2 0v1H6V1a1 1 0 0 0-2 0v1H2a2 2 0 0 0-2 2v2h20V4ZM0 18a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8H0v10Zm5-8h10a1 1 0 0 1 0 2H5a1 1 0 0 1 0-2Z" />
+                  </svg>
+                </div>
+                <input type="date" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full ps-10 p-2.5"
+                  onChange={e => {
+                    console.log(e.target.value)
+                    setOnDateSelect(e.target.value)
+                  }}
+                  placeholder="Select date" />
+              </div>
+              <input type="text"
+                class="ml-5 border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                onChange={e => setOnNumberDate(e.target.value)}
+                placeholder="Enter number of date" />
+              <button
+                onClick={() => {
+                  setSearchLoad(true);
+                  onHistSearch();
+                }}
+                class="ml-5 bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded cursor-pointer">
+                Search
+              </button>
+            </div>
+            {searchLoad && (<div class="h-8 w-8 animate-spin rounded-full border-4 border-solid border-blue-600 border-t-transparent"></div>)}
+            {displayHistResult && displayTable()}
           </div>
+          </div> : <div>{displayTable()}</div>}
         </div>
       </div>
     );
@@ -1193,6 +1345,25 @@ export default function DRList() {
               onMouseEnter={(e) => handleMouseEnter("sensitivity", e)}
               onMouseLeave={handleMouseLeave}
               onPointerEnter={(e) => handleMouseEnter("sensitivity", e)}
+              onPointerLeave={handleMouseLeave}
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </button>
+          <button
+            className={`pb-1 relative flex items-center gap-1.5 whitespace-nowrap text-sm sm:text-base cursor-pointer transition-all duration-300 ${tab === "hist" ? "border-b-2 border-black dark:border-white font-semibold text-black dark:text-white" : "border-b-2 border-transparent text-gray-500 dark:text-white/60 hover:text-black dark:hover:text-white"}`}
+            onClick={() => setTab("hist")}
+          >
+            <span>Hist Most Popular</span>
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              className="h-4 w-4 text-gray-500 mt-0.5 cursor-help"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              onMouseEnter={(e) => handleMouseEnter("hist", e)}
+              onMouseLeave={handleMouseLeave}
+              onPointerEnter={(e) => handleMouseEnter("hist", e)}
               onPointerLeave={handleMouseLeave}
             >
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
