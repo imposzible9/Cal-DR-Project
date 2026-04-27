@@ -1,4 +1,5 @@
 import os
+from typing import Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
@@ -824,6 +825,36 @@ async def calculate_dr(dr_symbol: str):
         print("CALC_CRASH", "dr_symbol=", dr_symbol, "err=", type(e).__name__, str(e))
         raise HTTPException(500, f"Unhandled error: {type(e).__name__}")
 
+@app.get("/api/caldr")
+async def calculate_dr(date: Optional[str] = None,
+                       number_date: Optional[int] = None):
+    """Return DR list by fetching from external DR_LIST_URL (no local fallback).
 
+    This endpoint will always attempt to GET the URL configured in the
+    `DR_LIST_URL` environment variable. If that variable is not set, it
+    defaults to `https://api.ideatrade1.com/caldr`.
+    """
+    try:
+        url = ""
+        if date != None and number_date == None:
+            url = f"http://172.18.1.80:7000/cal-dr?date={date}"
+        elif date != None and number_date != None:
+            url = f"http://172.18.1.80:7000/cal-dr?number_date={number_date}&date={date}"
+        elif date == None and number_date != None:
+            url = f"http://172.18.1.80:7000/cal-dr?number_date={number_date}"
+
+        # Use requests (synchronous handler) to fetch external DR list
+        import requests
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        # Return an error response so the caller knows external fetch failed
+        try:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=502, content={"error": "Failed to fetch DR list from external source", "detail": str(e)})
+        except Exception:
+            return {"error": str(e)}
+        
 if __name__ == "__main__":
     uvicorn.run("dr_calculation_api:app", host="0.0.0.0", port=8002, reload=True)

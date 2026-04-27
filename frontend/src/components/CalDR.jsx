@@ -143,6 +143,13 @@ export default function DRCal() {
   const [underlyingValue, setUnderlyingValue] = useState(null);              // ✅ ใช้แสดงผล (ปัดแล้ว)
   const [underlyingValueRaw, setUnderlyingValueRaw] = useState(null);        // ✅ ค่าดิบจาก backend (ไว้คำนวณ)
   const [fxTHBPerUnderlying, setFxTHBPerUnderlying] = useState(null);
+  // const [fxTHBPerUnderlying, setFxTHBPerUnderlying] = useState(
+  //   fxTHBPerUnderlying !== null ? String(fxTHBPerUnderlying) : ''
+  // )
+  // const [fxTHBPerUnderlyingStr, setFxTHBPerUnderlyingStr] = useState(
+  //   fxTHBPerUnderlying !== null ? String(fxTHBPerUnderlying) : ''
+  // );
+
   const [underlyingCurrency, setUnderlyingCurrency] = useState("USD");
 
   const [loadingRealtime, setLoadingRealtime] = useState(false);
@@ -726,9 +733,20 @@ export default function DRCal() {
                       autoComplete="off"
                       value={fxTHBPerUnderlying !== null ? fxTHBPerUnderlying : ''}
                       onChange={(e) => {
-                        const value = e.target.value.replace(/[^\d.]/g, '');
-                        const numValue = value === '' ? null : parseFloat(value);
-                        setFxTHBPerUnderlying(numValue);
+                        // const value = e.target.value.replace(/[^\d.]/g, '');
+                        // const value = e.target.value;
+                        // const numValue = value === '' ? null : parseFloat(value);
+                        // setFxTHBPerUnderlying(numValue);
+                        // const value = e.target.value;
+                        // // Allow digits, single dot, leading minus (if needed)
+                        // if (/^-?\d*\.?\d{0,2}$/.test(value)) {
+                        //   setFxTHBPerUnderlyingStr(value);
+                        //   const numValue = value === '' || value === '-' || value.endsWith('.')
+                        //     ? null
+                        //     : parseFloat(value);
+                        //   setFxTHBPerUnderlying(numValue);
+                        // }
+                        setFxTHBPerUnderlying(e.target.value);
                       }}
                       style={{ WebkitTextFillColor: "white" }}
                       className="flex-1 h-full bg-transparent text-xs sm:text-sm text-white placeholder-[#9A9A9A] px-3 sm:px-4 focus:outline-none"
