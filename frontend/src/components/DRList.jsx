@@ -5,6 +5,7 @@ import { TableSkeleton, CardSkeleton } from "./SkeletonLoader";
 import { param } from "framer-motion/client";
 
 const API_URL = import.meta.env.VITE_DR_LIST_API;
+const API_DB_URL = import.meta.env.VITE_DR_LIST_BASE_API;
 const CACHE_KEY = "dr_cache_v3";
 
 // 🔹 MAP TH → EN (Trading Session)
@@ -426,7 +427,7 @@ export default function DRList() {
       if (onDateSelect != '') {
         param = param + `date=${onDateSelect}&`
       }
-      const url = `http://172.18.1.80:7000/cal-dr?${param}`
+      const url = `${API_DB_URL}/calculation/api/caldr?${param}`
       const res = await fetch(url);
       console.log(url)
       const json = await res.json();
