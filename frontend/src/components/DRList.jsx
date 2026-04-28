@@ -419,6 +419,7 @@ export default function DRList() {
 
     try {
       // setIsRefreshing(true);
+      setSortConfig({ key: 'value', direction: 'desc' });
       setSearchLoad(true);
       var param = ''
       if (onNumberDate != '') {
