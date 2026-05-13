@@ -2,13 +2,11 @@ import React, { useState, useEffect, useMemo, useCallback, useTransition, useRef
 import swipeImg from "../assets/swipe.png";
 import { trackPageView, trackSearch, trackFilter, trackStockView } from "../utils/tracker";
 import { TableSkeleton, CardSkeleton } from "./SkeletonLoader";
-import { param } from "framer-motion/client";
 
 const API_URL = import.meta.env.VITE_DR_LIST_API;
 const API_DB_URL = import.meta.env.VITE_DR_LIST_BASE_API;
 const CACHE_KEY = "dr_cache_v3";
 
-// 🔹 MAP TH → EN (Trading Session)
 const mapTradingSessionEN = (v) => {
   if (!v) return "-";
   if (v.includes("กลางวันและกลางคืน")) return "Day & Night Session";
@@ -16,7 +14,6 @@ const mapTradingSessionEN = (v) => {
   return v;
 };
 
-// 🔹 MAP TH → EN (Foreign Security Type)
 const mapSecurityTypeEN = (v) => {
   if (!v) return "-";
   if (v.includes("หุ้นสามัญต่างประเทศ")) return "Foreign Common Stock";
@@ -25,46 +22,31 @@ const mapSecurityTypeEN = (v) => {
   return v;
 };
 
-// 🔹 Remove "บริษัท" prefix from company names
 const removeCompanyPrefix = (v) => {
   if (!v) return "-";
   return String(v).replace(/^บริษัท\s*/i, "");
 };
 
-/* ───────────────────────────────────────────────
-    FORMAT HELPERS
-─────────────────────────────────────────────── */
 const formatNum = (n) => {
-  // Check if value is null, undefined, empty string, or "-" (no data)
   if (n === null || n === undefined || n === "" || n === "-") return "-";
-
   const num = Number(n);
-
   if (!isFinite(num)) return "-";
   if (num === 0) return "-";
-
   return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 
 const formatChange = (n) => {
   if (n === null || n === undefined || n === "" || n === "-") return "-";
-
   const num = Number(n);
-
   if (!isFinite(num)) return "-";
-
   return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 
 const formatInt = (n) => {
   if (n === null || n === undefined || n === "" || n === "-") return "-";
-
   const num = Number(n);
-
   if (!isFinite(num)) return "-";
-
   if (num === 0) return "-";
-
   return Math.round(num).toLocaleString();
 };
 
@@ -99,13 +81,9 @@ const countryOptions = [
   { code: "VN", label: "VN Vietnam", flag: "vn" },
 ];
 
-/* ───────────────────────────────────────────────
-    GET COUNTRY FROM EXCHANGE (STRICT MAPPING)
-─────────────────────────────────────────────── */
 const getCountryFromExchange = (exchange = "") => {
   if (!exchange) return "OTHER";
   const ex = String(exchange).toLowerCase();
-
   if (ex.includes("euronext amsterdam")) return "NL";
   if (ex.includes("euronext milan")) return "IT";
   if (ex.includes("euronext paris")) return "FR";
@@ -123,8 +101,49 @@ const getCountryFromExchange = (exchange = "") => {
     ex.includes("nyse") ||
     ex.includes("nasdaq")
   ) return "US";
-
   return "OTHER";
+};
+
+const formatRow = (x, i) => {
+  const rawRatio = x.conversionRatio ?? "";
+  const conversionRatioSort = (() => {
+    if (!rawRatio) return null;
+    const match = String(rawRatio).match(/[\d,.]+/);
+    if (!match) return null;
+    const n = Number(match[0].replace(/,/g, ""));
+    return Number.isFinite(n) ? n : null;
+  })();
+  return {
+    _id: `${x.symbol ?? "unknown"}-${i}`,
+    dr: x.symbol ?? "-",
+    open: x.open ?? 0,
+    high: x.high ?? 0,
+    low: x.low ?? 0,
+    last: x.last ?? 0,
+    change: x.change ?? 0,
+    pct: x.percentChange ?? 0,
+    bid: x.bidPrice ?? 0,
+    offer: x.offerPrice ?? 0,
+    vol: x.totalVolume ?? 0,
+    value: (x.totalValue ?? 0) / 1000,
+    tradingSession: mapTradingSessionEN(x.tradingSession),
+    issuer: x.issuer ?? "",
+    issuerName: x.issuerName ?? "",
+    marketCap: x.marketCap ?? null,
+    ytdChange: x.ytdChange ?? null,
+    ytdPercentChange: x.ytdPercentChange ?? null,
+    underlying: extractSymbol(x.underlying || x.underlyingName),
+    underlyingName: x.underlyingName ?? "",
+    conversionRatio: rawRatio,
+    ratio: formatRatio(rawRatio),
+    conversionRatioSort,
+    divYield: x.dividendYield12M ?? null,
+    securityTypeName: mapSecurityTypeEN(x.underlyingClassName),
+    exchange: x.underlyingExchange ?? "",
+    outstandingShare: x.outstandingShare ?? null,
+    country: getCountryFromExchange(x.underlyingExchange),
+    full: x,
+  };
 };
 
 export default function DRList() {
@@ -133,12 +152,14 @@ export default function DRList() {
   const [search, setSearch] = useState("");
   const [sortConfig, setSortConfig] = useState({ key: null, direction: "asc" });
 
-  const [data, setData] = useState([]);
+  // ✅ แยก state live data และ hist data
+  const [liveData, setLiveData] = useState([]);
+  const [histData, setHistData] = useState([]);
+
   const [loading, setLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isPending, startTransition] = useTransition();
 
-  /* DR FILTER */
   const [drFilter, setDrFilter] = useState(() => localStorage.getItem("dr_filter_type") || "all");
   const [selectedCountries, setSelectedCountries] = useState(() => {
     try {
@@ -147,30 +168,20 @@ export default function DRList() {
     } catch {
       return ["all"];
     }
-  }); // Array for multi-select
+  });
   const selectedCountryLabel = selectedCountries.length === 1 && selectedCountries[0] === "all"
     ? "All Markets"
     : selectedCountries.length === 0
       ? "All Markets"
       : `${selectedCountries.length} Markets`;
 
-  /* WATCHLIST */
   const [watchlist, setWatchlist] = useState([]);
-
-  /* SETTINGS MODAL */
   const [showSettings, setShowSettings] = useState(false);
-
-  /* DETAIL MODAL */
   const [detailRow, setDetailRow] = useState(null);
-
-  /* TAB TOOLTIP */
   const [hoveredTab, setHoveredTab] = useState(null);
   const [tooltipPosition, setTooltipPosition] = useState({ x: 0, y: 0 });
-
-  /* LAST UPDATED */
   const [lastUpdated, setLastUpdated] = useState(null);
 
-  /* VISIBLE COLUMNS */
   const [visibleColumns, setVisibleColumns] = useState({
     star: true,
     dr: true,
@@ -200,24 +211,17 @@ export default function DRList() {
   const [showScrollHint, setShowScrollHint] = useState(true);
   const [swipeOffset, setSwipeOffset] = useState(0);
   const [swipeDir, setSwipeDir] = useState(1);
-
+  const [displayHistResult, setDisplayHistResult] = useState(false);
 
   /* SEARCH DEBOUNCE */
   useEffect(() => {
     const t = setTimeout(() => {
       const trimmed = searchTerm.trim();
-      console.log('trimmed', trimmed)
       setSearch(trimmed);
-      if (trimmed) {
-        trackSearch(trimmed);
-      }
+      if (trimmed) trackSearch(trimmed);
     }, 250);
     return () => clearTimeout(t);
   }, [searchTerm]);
-
-  /* TRACK PAGE VIEW */
-
-  const [displayHistResult, setDisplayHistResult] = useState(false);
 
   /* LOAD WATCHLIST */
   useEffect(() => {
@@ -237,17 +241,9 @@ export default function DRList() {
   }, [watchlist]);
 
   /* PERSIST FILTERS */
-  useEffect(() => {
-    localStorage.setItem("dr_active_tab", tab);
-  }, [tab]);
-
-  useEffect(() => {
-    localStorage.setItem("dr_filter_type", drFilter);
-  }, [drFilter]);
-
-  useEffect(() => {
-    localStorage.setItem("dr_selected_countries", JSON.stringify(selectedCountries));
-  }, [selectedCountries]);
+  useEffect(() => { localStorage.setItem("dr_active_tab", tab); }, [tab]);
+  useEffect(() => { localStorage.setItem("dr_filter_type", drFilter); }, [drFilter]);
+  useEffect(() => { localStorage.setItem("dr_selected_countries", JSON.stringify(selectedCountries)); }, [selectedCountries]);
 
   useEffect(() => {
     if (!showScrollHint) return;
@@ -261,22 +257,14 @@ export default function DRList() {
       setSwipeOffset((prev) => {
         const max = 8;
         let next = prev + swipeDir * 3;
-
-        if (next > max) {
-          next = max;
-          setSwipeDir(-1);
-        } else if (next < -max) {
-          next = -max;
-          setSwipeDir(1);
-        }
-
+        if (next > max) { next = max; setSwipeDir(-1); }
+        else if (next < -max) { next = -max; setSwipeDir(1); }
         return next;
       });
     }, 40);
     return () => clearInterval(id);
   }, [showScrollHint, swipeDir]);
 
-  // Handle click outside for country dropdown
   const countryDropdownRef = useRef(null);
   const dropdownMenuRef = useRef(null);
   const [showCountryMenu, setShowCountryMenu] = useState(false);
@@ -302,6 +290,7 @@ export default function DRList() {
     []
   );
 
+  /* LOAD LIVE DATA */
   useEffect(() => {
     let mounted = true;
 
@@ -311,7 +300,7 @@ export default function DRList() {
         if (raw) {
           const parsed = JSON.parse(raw);
           if (parsed?.rows && mounted) {
-            setData(parsed.rows);
+            setLiveData(parsed.rows);
             setLoading(false);
           }
         }
@@ -321,7 +310,6 @@ export default function DRList() {
         setIsRefreshing(true);
         const res = await fetch(API_URL);
         const json = await res.json();
-        console.log(json)
         const rows = json.rows || [];
 
         if (json.updated_at) {
@@ -329,55 +317,10 @@ export default function DRList() {
           setLastUpdated(date);
         }
 
-        const formatted = rows.map((x) => {
-          const rawRatio = x.conversionRatio ?? "";
-
-          const conversionRatioSort = (() => {
-            if (!rawRatio) return null;
-            const match = String(rawRatio).match(/[\d,.]+/);
-            if (!match) return null;
-            const n = Number(match[0].replace(/,/g, ""));
-            return Number.isFinite(n) ? n : null;
-          })();
-
-          return {
-            dr: x.symbol ?? "-",
-            open: x.open ?? 0,
-            high: x.high ?? 0,
-            low: x.low ?? 0,
-            last: x.last ?? 0,
-            change: x.change ?? 0,
-            pct: x.percentChange ?? 0,
-            bid: x.bidPrice ?? 0,
-            offer: x.offerPrice ?? 0,
-            vol: x.totalVolume ?? 0,
-            value: (x.totalValue ?? 0) / 1000,
-
-            tradingSession: mapTradingSessionEN(x.tradingSession),
-            issuer: x.issuer ?? "",
-            issuerName: x.issuerName ?? "",
-            marketCap: x.marketCap ?? null,
-            ytdChange: x.ytdChange ?? null,
-            ytdPercentChange: x.ytdPercentChange ?? null,
-            underlying: extractSymbol(x.underlying || x.underlyingName),
-            underlyingName: x.underlyingName ?? "",
-
-            conversionRatio: rawRatio,
-            ratio: formatRatio(rawRatio),
-            conversionRatioSort,
-
-            divYield: x.dividendYield12M ?? null,
-            securityTypeName: mapSecurityTypeEN(x.underlyingClassName),
-            exchange: x.underlyingExchange ?? "",
-            outstandingShare: x.outstandingShare ?? null,
-            country: getCountryFromExchange(x.underlyingExchange),
-            full: x,
-          };
-        });
+        const formatted = rows.map((x, i) => formatRow(x, i));
 
         if (!mounted) return;
-        setData(formatted);
-        console.log('data', formatted)
+        setLiveData(formatted);
 
         try {
           localStorage.setItem(CACHE_KEY, JSON.stringify({ ts: Date.now(), rows: formatted }));
@@ -399,113 +342,168 @@ export default function DRList() {
     };
   }, []);
 
-
-  const [onDateSelect, setOnDateSelect] = useState('')
-  const [onNumberDate, setOnNumberDate] = useState('')
-  const [searchLoad, setSearchLoad] = useState(false)
+  const [onDateSelect, setOnDateSelect] = useState('');
+  const [onNumberDate, setOnNumberDate] = useState('');
+  const [searchLoad, setSearchLoad] = useState(false);
 
   async function onHistSearch() {
-    // let mounted = true;
-    // try {
-    //   const raw = localStorage.getItem(CACHE_KEY);
-    //   if (raw) {
-    //     const parsed = JSON.parse(raw);
-    //     if (parsed?.rows && mounted) {
-    //       setData(parsed.rows);
-    //       setLoading(false);
-    //     }
-    //   }
-    // } catch { }
-
     try {
-      // setIsRefreshing(true);
       setSortConfig({ key: 'value', direction: 'desc' });
       setSearchLoad(true);
-      var param = ''
-      if (onNumberDate != '') {
-        param = param + `number_date=${onNumberDate}&`
-      }
-      if (onDateSelect != '') {
-        param = param + `date=${onDateSelect}&`
-      }
-      const url = `${API_DB_URL}/calculation/api/caldr?${param}`
+      let param = '';
+      if (onNumberDate !== '') param += `number_date=${onNumberDate}&`;
+      if (onDateSelect !== '') param += `date=${onDateSelect}&`;
+      const url = `${API_DB_URL}/calculation/api/caldr?${param}`;
       const res = await fetch(url);
-      console.log(url)
       const json = await res.json();
-      console.log(json)
       const rows = json.rows || [];
+      const formatted = rows.map((x, i) => formatRow(x, i));
 
-      // if (json.updated_at) {
-      //   const date = new Date(json.updated_at * 1000);
-      //   setLastUpdated(date);
-      // }
-
-      const formatted = rows.map((x, i) => {
-        const rawRatio = x.conversionRatio ?? "";
-
-        const conversionRatioSort = (() => {
-          if (!rawRatio) return null;
-          const match = String(rawRatio).match(/[\d,.]+/);
-          if (!match) return null;
-          const n = Number(match[0].replace(/,/g, ""));
-          return Number.isFinite(n) ? n : null;
-        })();
-
-        return {
-          _id: `${x.symbol ?? "unknown"}-${i}`,
-          dr: x.symbol ?? "-",
-          open: x.open ?? 0,
-          high: x.high ?? 0,
-          low: x.low ?? 0,
-          last: x.last ?? 0,
-          change: x.change ?? 0,
-          pct: x.percentChange ?? 0,
-          bid: x.bidPrice ?? 0,
-          offer: x.offerPrice ?? 0,
-          vol: x.totalVolume ?? 0,
-          value: (x.totalValue ?? 0) / 1000,
-
-          tradingSession: mapTradingSessionEN(x.tradingSession),
-          issuer: x.issuer ?? "",
-          issuerName: x.issuerName ?? "",
-          marketCap: x.marketCap ?? null,
-          ytdChange: x.ytdChange ?? null,
-          ytdPercentChange: x.ytdPercentChange ?? null,
-          underlying: extractSymbol(x.underlying || x.underlyingName),
-          underlyingName: x.underlyingName ?? "",
-
-          conversionRatio: rawRatio,
-          ratio: formatRatio(rawRatio),
-          conversionRatioSort,
-
-          divYield: x.dividendYield12M ?? null,
-          securityTypeName: mapSecurityTypeEN(x.underlyingClassName),
-          exchange: x.underlyingExchange ?? "",
-          outstandingShare: x.outstandingShare ?? null,
-          country: getCountryFromExchange(x.underlyingExchange),
-          full: x,
-        };
-      });
-
-      // if (!mounted) return;
+      // ✅ set เฉพาะ histData ไม่แตะ liveData
+      setHistData(formatted);
       setDisplayHistResult(true);
-      setData(formatted);
-      console.log('data', formatted)
-
-      // try {
-      //   localStorage.setItem(CACHE_KEY, JSON.stringify({ ts: Date.now(), rows: formatted }));
-      // } catch { }
     } catch (err) {
       console.error(err);
     } finally {
       setSearchLoad(false);
-      // if (mounted) {
-      //   setLoading(false);
-      //   setIsRefreshing(false);
-      //   searchLoad(false);
-      // }
     }
   }
+
+  /* ───────────────────────────────────────────────
+      FILTER PIPELINE — ✅ ใช้ activeData แทน data
+  ─────────────────────────────────────────────── */
+
+  // ✅ เลือก data source ตาม tab
+  const activeData = useMemo(() => {
+    return tab === "hist" ? histData : liveData;
+  }, [tab, liveData, histData]);
+
+  const filteredByCountry = useMemo(() => {
+    if (selectedCountries.length > 0 && !selectedCountries.includes("all")) {
+      return activeData.filter((r) => selectedCountries.includes(r.country));
+    }
+    return activeData;
+  }, [activeData, selectedCountries]);
+
+  const filteredByDRFilter = useMemo(() => {
+    if (drFilter === "all") return filteredByCountry;
+    if (drFilter === "watchlist") return filteredByCountry.filter((r) => watchlist.includes(r.dr));
+    if (drFilter === "lt10") return filteredByCountry.filter((r) => Number(r.last) < 10);
+    return filteredByCountry;
+  }, [filteredByCountry, drFilter, watchlist]);
+
+  const filteredTab = useMemo(() => {
+    if (tab === "all") return filteredByDRFilter;
+
+    if (tab === "popular") {
+      const groups = {};
+      filteredByDRFilter.forEach(r => {
+        if (!groups[r.underlying]) groups[r.underlying] = [];
+        groups[r.underlying].push(r);
+      });
+      const winners = Object.values(groups).map(group =>
+        group.reduce((prev, curr) => (Number(curr.vol) || 0) > (Number(prev.vol) || 0) ? curr : prev)
+      );
+      return winners.sort((a, b) => (Number(b.vol) || 0) - (Number(a.vol) || 0));
+    }
+
+    if (tab === "sensitivity") {
+      const groups = {};
+      filteredByDRFilter.forEach(r => {
+        if (!groups[r.underlying]) groups[r.underlying] = [];
+        groups[r.underlying].push(r);
+      });
+      const winners = Object.values(groups).map(group =>
+        group.reduce((prev, curr) => {
+          const bPrev = Number(prev.bid) || 0;
+          const bCurr = Number(curr.bid) || 0;
+          if (bCurr > 0 && (bPrev === 0 || bCurr < bPrev)) return curr;
+          return prev;
+        })
+      );
+      return winners.sort((a, b) => (Number(a.bid) || 0) - (Number(b.bid) || 0));
+    }
+
+    // hist tab — ใช้ filteredByDRFilter ปกติ (activeData คือ histData อยู่แล้ว)
+    return filteredByDRFilter;
+  }, [filteredByDRFilter, tab]);
+
+  const filteredSearch = useMemo(() => {
+    if (!search) return filteredTab;
+    const t = search.toLowerCase();
+    return filteredTab.filter(
+      (x) =>
+        x.dr.toLowerCase().includes(t) ||
+        x.issuer.toLowerCase().includes(t) ||
+        x.issuerName.toLowerCase().includes(t) ||
+        x.underlyingName.toLowerCase().includes(t) ||
+        x.exchange.toLowerCase().includes(t)
+    );
+  }, [search, filteredTab]);
+
+  /* BADGES */
+  const badges = useMemo(() => {
+    const popularIds = new Set();
+    const sensitivityIds = new Set();
+
+    if (tab !== "all" || !search) return { popularIds, sensitivityIds };
+
+    const groups = {};
+    filteredByDRFilter.forEach(r => {
+      const key = r.underlying;
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(r);
+    });
+
+    Object.values(groups).forEach(group => {
+      if (group.length <= 1) return;
+      let maxVol = -1, popDr = null;
+      group.forEach(r => {
+        const v = Number(r.vol) || 0;
+        if (v > maxVol) { maxVol = v; popDr = r.dr; }
+      });
+      if (popDr && maxVol > 0) popularIds.add(popDr);
+
+      let minBid = Infinity, sensDr = null;
+      group.forEach(r => {
+        const b = Number(r.bid) || 0;
+        if (b > 0 && b < minBid) { minBid = b; sensDr = r.dr; }
+      });
+      if (sensDr) sensitivityIds.add(sensDr);
+    });
+
+    return { popularIds, sensitivityIds };
+  }, [filteredByDRFilter, tab, search]);
+
+  /* SORT */
+  const sortedData = useMemo(() => {
+    let arr = [...filteredSearch];
+
+    if (sortConfig.key) {
+      arr.sort((a, b) => {
+        if (sortConfig.key === "conversionRatio") {
+          const A = a.conversionRatioSort;
+          const B = b.conversionRatioSort;
+          if (A == null && B == null) return 0;
+          if (A == null) return 1;
+          if (B == null) return -1;
+          return sortConfig.direction === "asc" ? A - B : B - A;
+        }
+        const A = Number(a[sortConfig.key]);
+        const B = Number(b[sortConfig.key]);
+        if (!isNaN(A) && !isNaN(B)) {
+          return sortConfig.direction === "asc" ? A - B : B - A;
+        }
+        const Sa = String(a[sortConfig.key] ?? "");
+        const Sb = String(b[sortConfig.key] ?? "");
+        return sortConfig.direction === "asc" ? Sa.localeCompare(Sb) : Sb.localeCompare(Sa);
+      });
+    }
+
+    const starred = arr.filter((x) => isStarred(x.dr));
+    const others = arr.filter((x) => !isStarred(x.dr));
+    return [...starred, ...others];
+  }, [filteredSearch, sortConfig, isStarred]);
 
   /* ───────────────────────────────────────────────
       UI SECTION – CONTROL BAR
@@ -534,12 +532,7 @@ export default function DRList() {
                 ) : null}
                 <span>{selectedCountryLabel}</span>
               </span>
-              <svg
-                className={`h-3.5 w-3.5 sm:h-4 sm:w-4 flex-shrink-0 transition-transform`}
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
+              <svg className="h-3.5 w-3.5 sm:h-4 sm:w-4 flex-shrink-0 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
               </svg>
             </button>
@@ -549,12 +542,8 @@ export default function DRList() {
                 className="absolute left-0 top-full z-[9999] mt-1 w-full sm:w-56 max-h-60 md:max-h-72 overflow-auto hide-scrollbar rounded-2xl border border-gray-200 dark:border-none bg-white dark:bg-[#595959] dark:text-white shadow-[0_10px_30px_rgba(15,23,42,0.15)] py-1"
                 style={{ transform: 'translateZ(0)' }}
               >
-                {/* Clear All Button */}
                 <button
-                  onClick={() => {
-                    setSelectedCountries(["all"]);
-                    trackFilter('country', 'all');
-                  }}
+                  onClick={() => { setSelectedCountries(["all"]); trackFilter('country', 'all'); }}
                   className="flex w-full items-center justify-between px-3 sm:px-4 py-2 text-[11px] sm:text-xs text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20 transition-colors"
                 >
                   <span>Clear All</span>
@@ -570,29 +559,19 @@ export default function DRList() {
                       onClick={() => {
                         let newSelection;
                         if (isAll) {
-                          // If "All" is selected, clear everything else
                           newSelection = ["all"];
                         } else if (isSelected) {
-                          // Remove this country
                           newSelection = selectedCountries.filter(c => c !== opt.code);
-                          // If no countries left, select "All"
-                          if (newSelection.length === 0) {
-                            newSelection = ["all"];
-                          } else {
-                            // Remove "All" if other countries are selected
-                            newSelection = newSelection.filter(c => c !== "all");
-                          }
+                          if (newSelection.length === 0) newSelection = ["all"];
+                          else newSelection = newSelection.filter(c => c !== "all");
                         } else {
-                          // Add this country and remove "All"
                           newSelection = selectedCountries.filter(c => c !== "all");
                           newSelection.push(opt.code);
                         }
                         setSelectedCountries(newSelection);
-                        // Don't close the menu - let user continue selecting
                         trackFilter('country', opt.code);
                       }}
-                      className={`flex w-full items-center justify-between px-3 sm:px-4 py-1 sm:py-1.5 text-left text-[11px] sm:text-xs md:text-sm transition-colors ${isSelected ? "bg-[#EEF2FF] text-[#0B102A] font-semibold dark:bg-[#4A4A4A] dark:text-white" : "text-gray-700 dark:text-white hover:bg-gray-50 dark:hover:bg-[#4A4A4A]"
-                        }`}
+                      className={`flex w-full items-center justify-between px-3 sm:px-4 py-1 sm:py-1.5 text-left text-[11px] sm:text-xs md:text-sm transition-colors ${isSelected ? "bg-[#EEF2FF] text-[#0B102A] font-semibold dark:bg-[#4A4A4A] dark:text-white" : "text-gray-700 dark:text-white hover:bg-gray-50 dark:hover:bg-[#4A4A4A]"}`}
                     >
                       <span className="flex items-center gap-2">
                         {opt.flag ? (
@@ -633,9 +612,7 @@ export default function DRList() {
               : "bg-white dark:bg-[#595959] dark:border-none dark:text-white border-gray-200 text-gray-700 hover:bg-gray-50 dark:hover:bg-[#4A4A4A]"
               }`}
           >
-            <i
-              className={drFilter === "watchlist" ? "bi bi-star-fill text-yellow-400" : "bi bi-star text-gray-400 dark:text-white"}
-            />
+            <i className={drFilter === "watchlist" ? "bi bi-star-fill text-yellow-400" : "bi bi-star text-gray-400 dark:text-white"} />
             <span className="hidden sm:inline">Watchlist</span>
           </button>
         </div>
@@ -650,10 +627,7 @@ export default function DRList() {
               onChange={(e) => setSearchTerm(e.target.value)}
               className="bg-white dark:bg-[#595959] dark:border-none text-gray-900 dark:text-white placeholder:text-gray-400 placeholder:dark:text-white/70 pl-2.5 sm:pl-3 md:pl-4 pr-8 py-1.5 sm:py-2 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#0B102A] dark:focus:ring-0 w-full md:w-48 lg:w-64 text-[11px] sm:text-xs md:text-sm shadow-sm h-[35px] md:h-[37.33px]"
             />
-            <i
-              className="bi bi-search absolute right-2.5 sm:right-3 top-1/2 transform -translate-y-1/2 text-gray-400 dark:text-white"
-              style={{ fontSize: "12px" }}
-            />
+            <i className="bi bi-search absolute right-2.5 sm:right-3 top-1/2 transform -translate-y-1/2 text-gray-400 dark:text-white" style={{ fontSize: "12px" }} />
           </div>
           <div className="shrink-0">
             <button
@@ -671,200 +645,17 @@ export default function DRList() {
   };
 
   /* ───────────────────────────────────────────────
-      FILTER PIPELINE
-  ─────────────────────────────────────────────── */
-
-  const filteredByCountry = useMemo(() => {
-    if (selectedCountries.length > 0 && !selectedCountries.includes("all")) {
-      return data.filter((r) => selectedCountries.includes(r.country));
-    }
-    return data;
-  }, [data, selectedCountries]);
-
-  const filteredByDRFilter = useMemo(() => {
-    if (drFilter === "all") return filteredByCountry;
-    if (drFilter === "watchlist") return filteredByCountry.filter((r) => watchlist.includes(r.dr));
-    if (drFilter === "lt10") return filteredByCountry.filter((r) => Number(r.last) < 10);
-    return filteredByCountry;
-  }, [filteredByCountry, drFilter, watchlist]);
-
-  const filteredTab = useMemo(() => {
-    if (tab === "all") return filteredByDRFilter;
-
-    if (tab === "popular") {
-      const groups = {};
-      filteredByDRFilter.forEach(r => {
-        if (!groups[r.underlying]) groups[r.underlying] = [];
-        groups[r.underlying].push(r);
-      });
-      console.log('groups', groups);
-      const winners = Object.values(groups).map(group =>
-        group.reduce((prev, curr) => (Number(curr.vol) || 0) > (Number(prev.vol) || 0) ? curr : prev)
-      );
-      var outputArray = winners.sort((a, b) => (Number(b.vol) || 0) - (Number(a.vol) || 0));
-      console.log('outputArray', outputArray);
-      return outputArray;
-    }
-
-    if (tab === "sensitivity") {
-      const groups = {};
-      filteredByDRFilter.forEach(r => {
-        if (!groups[r.underlying]) groups[r.underlying] = [];
-        groups[r.underlying].push(r);
-      });
-      const winners = Object.values(groups).map(group =>
-        group.reduce((prev, curr) => {
-          const bPrev = Number(prev.bid) || 0;
-          const bCurr = Number(curr.bid) || 0;
-          if (bCurr > 0 && (bPrev === 0 || bCurr < bPrev)) return curr;
-          return prev;
-        })
-      );
-      return winners.sort((a, b) => (Number(a.bid) || 0) - (Number(b.bid) || 0));
-    }
-
-    return filteredByDRFilter;
-  }, [filteredByDRFilter, tab]);
-
-  const filteredSearch = useMemo(() => {
-    if (!search) return filteredTab;
-    const t = search.toLowerCase();
-    const source = filteredTab;
-
-    return source.filter(
-      (x) =>
-        x.dr.toLowerCase().includes(t) ||
-        x.issuer.toLowerCase().includes(t) ||
-        x.issuerName.toLowerCase().includes(t) ||
-        x.underlyingName.toLowerCase().includes(t) ||
-        x.exchange.toLowerCase().includes(t)
-    );
-  }, [search, filteredTab]);
-
-  /* BADGES */
-  const badges = useMemo(() => {
-    const popularIds = new Set();
-    const sensitivityIds = new Set();
-
-    if (tab !== "all" || !search) return { popularIds, sensitivityIds };
-
-    const groups = {};
-    filteredByDRFilter.forEach(r => {
-      const key = r.underlying;
-      if (!groups[key]) groups[key] = [];
-      groups[key].push(r);
-    });
-
-    console.log('groups', groups);
-
-    Object.values(groups).forEach(group => {
-      if (group.length <= 1) return;
-      let maxVol = -1;
-      let popDr = null;
-      group.forEach(r => {
-        const v = Number(r.vol) || 0;
-        if (v > maxVol) { maxVol = v; popDr = r.dr; }
-      });
-      if (popDr && maxVol > 0) popularIds.add(popDr);
-
-      let minBid = Infinity;
-      let sensDr = null;
-      group.forEach(r => {
-        const b = Number(r.bid) || 0;
-        if (b > 0 && b < minBid) { minBid = b; sensDr = r.dr; }
-      });
-      if (sensDr) sensitivityIds.add(sensDr);
-    });
-
-    return { popularIds, sensitivityIds };
-  }, [filteredByDRFilter, tab, search]);
-
-  /* SORT */
-  const sortedData = useMemo(() => {
-    let arr = [...filteredSearch];
-
-    if (sortConfig.key) {
-      arr.sort((a, b) => {
-        // ✅ 1) conversionRatio ต้องมาก่อน
-        if (sortConfig.key === "conversionRatio") {
-          const A = a.conversionRatioSort;
-          const B = b.conversionRatioSort;
-
-          if (A == null && B == null) return 0;
-          if (A == null) return 1;
-          if (B == null) return -1;
-
-          return sortConfig.direction === "asc" ? A - B : B - A;
-        }
-
-        // ✅ 2) ตัวเลขทั่วไป
-        const A = Number(a[sortConfig.key]);
-        const B = Number(b[sortConfig.key]);
-
-        if (!isNaN(A) && !isNaN(B)) {
-          return sortConfig.direction === "asc" ? A - B : B - A;
-        }
-
-        // ✅ 3) string
-        const Sa = String(a[sortConfig.key] ?? "");
-        const Sb = String(b[sortConfig.key] ?? "");
-        return sortConfig.direction === "asc"
-          ? Sa.localeCompare(Sb)
-          : Sb.localeCompare(Sa);
-      });
-    }
-
-    const starred = arr.filter((x) => isStarred(x.dr));
-    const others = arr.filter((x) => !isStarred(x.dr));
-    return [...starred, ...others];
-  }, [filteredSearch, sortConfig, isStarred]);
-
-  /* ───────────────────────────────────────────────
       TABLE HEADER & ROWS
   ─────────────────────────────────────────────── */
-
-  const renderHeaderCell = (key, label) => {
-    if (!visibleColumns[key]) return null;
-    const isActive = sortConfig.key === key;
-    const direction = sortConfig.direction;
-    const numericCols = ["open", "high", "low", "last", "change", "pct", "bid", "offer", "vol", "value", "marketCap"];
-    const basicDrCols = ["issuerName", "marketCap", "underlyingName", "ytdChange", "ytdPercentChange", "conversionRatio", "divYield", "exchange", "securityTypeName", "outstandingShare"];
-    const rightAlignCols = [...numericCols, ...basicDrCols];
-    const alignClass = rightAlignCols.includes(key) ? "text-right justify-end" : "text-left";
-    const extraStyle = key === "dr" ? "sticky left-0 z-20 bg-[#f4f4f4]" : "";
-
-    return (
-      <th
-        key={key}
-        className={`py-3 sm:py-4 px-3 sm:px-6 whitespace-nowrap ${alignClass} text-xs sm:text-sm font-bold cursor-pointer select-none ${extraStyle}`}
-        onClick={() => {
-          let dir = "asc";
-          if (sortConfig.key === key && sortConfig.direction === "asc") dir = "desc";
-          setSortConfig({ key, direction: dir });
-        }}
-      >
-        <div className={`flex gap-1 w-full ${rightAlignCols.includes(key) ? "justify-end" : "justify-start"}`}>
-          {label}
-          {isActive && <span>{direction === "asc" ? "▲" : "▼"}</span>}
-        </div>
-      </th>
-    );
-  };
 
   const renderRow = (row, index) => {
     const fundamentalKeys = ["issuerName", "marketCap", "underlyingName", "ytdChange", "ytdPercentChange", "conversionRatio", "divYield", "exchange", "securityTypeName", "outstandingShare"];
     const firstVisibleFundamentalKey = fundamentalKeys.find(k => visibleColumns[k]);
     const isPop = badges.popularIds.has(row.dr);
     const isSens = badges.sensitivityIds.has(row.dr);
-    const rowBg = index % 2 === 0
-      ? "bg-[#FFFFFF] dark:bg-[#2D3136]"
-      : "bg-[#F3F4F6] dark:bg-[#24272B]";
+    const rowBg = index % 2 === 0 ? "bg-[#FFFFFF] dark:bg-[#2D3136]" : "bg-[#F3F4F6] dark:bg-[#24272B]";
 
-    const getPriceColor = (val) => {
-      if (!val || val === 0) return "text-gray-600 dark:text-white";
-      return "text-gray-600 dark:text-white/90";
-    };
-
+    const getPriceColor = () => "text-gray-600 dark:text-white/90";
     const getChangeColor = (val) => {
       if (val > 0) return "text-[#27AE60] dark:text-[#4CE60F]";
       if (val < 0) return "text-[#EB5757]";
@@ -891,18 +682,15 @@ export default function DRList() {
             </div>
           </td>
         )}
-        {visibleColumns.open && <td className={`py-3 sm:py-4 px-2 sm:px-4 text-right text-xs sm:text-[14.4px] font-medium font-mono ${getPriceColor(row.open)}`}>{formatNum(row.open)}</td>}
-        {visibleColumns.high && <td className={`py-3 sm:py-4 px-2 sm:px-4 text-right text-xs sm:text-[14.4px] font-medium font-mono ${getPriceColor(row.high)}`}>{formatNum(row.high)}</td>}
-        {visibleColumns.low && <td className={`py-3 sm:py-4 px-2 sm:px-4 text-right text-xs sm:text-[14.4px] font-medium font-mono ${getPriceColor(row.low)}`}>{formatNum(row.low)}</td>}
-        {visibleColumns.last && <td className={`py-3 sm:py-4 px-2 sm:px-4 text-right text-xs sm:text-[14.4px] font-medium font-mono ${getPriceColor(row.last)}`}>{formatNum(row.last)}</td>}
+        {visibleColumns.open && <td className={`py-3 sm:py-4 px-2 sm:px-4 text-right text-xs sm:text-[14.4px] font-medium font-mono ${getPriceColor()}`}>{formatNum(row.open)}</td>}
+        {visibleColumns.high && <td className={`py-3 sm:py-4 px-2 sm:px-4 text-right text-xs sm:text-[14.4px] font-medium font-mono ${getPriceColor()}`}>{formatNum(row.high)}</td>}
+        {visibleColumns.low && <td className={`py-3 sm:py-4 px-2 sm:px-4 text-right text-xs sm:text-[14.4px] font-medium font-mono ${getPriceColor()}`}>{formatNum(row.low)}</td>}
+        {visibleColumns.last && <td className={`py-3 sm:py-4 px-2 sm:px-4 text-right text-xs sm:text-[14.4px] font-medium font-mono ${getPriceColor()}`}>{formatNum(row.last)}</td>}
         {visibleColumns.change && (
           <td className={`py-3 sm:py-4 px-2 sm:px-4 text-right text-xs sm:text-[14.4px] font-medium font-mono ${getChangeColor(row.change)}`}>
             {(() => {
-              const hasData = row.open && row.high && row.low && row.last &&
-                row.open !== 0 && row.high !== 0 && row.low !== 0 && row.last !== 0;
-
+              const hasData = row.open && row.high && row.low && row.last && row.open !== 0 && row.high !== 0 && row.low !== 0 && row.last !== 0;
               if (!hasData) return "-";
-
               const changeValue = formatChange(row.change);
               return row.change > 0 ? `+${changeValue}` : changeValue;
             })()}
@@ -911,20 +699,17 @@ export default function DRList() {
         {visibleColumns.pct && (
           <td className={`py-3 sm:py-4 px-2 sm:px-4 text-right text-xs sm:text-[14.4px] font-medium font-mono ${getChangeColor(row.pct)}`}>
             {(() => {
-              const hasData = row.open && row.high && row.low && row.last &&
-                row.open !== 0 && row.high !== 0 && row.low !== 0 && row.last !== 0;
-
+              const hasData = row.open && row.high && row.low && row.last && row.open !== 0 && row.high !== 0 && row.low !== 0 && row.last !== 0;
               if (!hasData) return "-";
-
               const pctValue = formatChange(row.pct);
               return row.pct > 0 ? `+${pctValue}` : pctValue;
             })()}
           </td>
         )}
-        {visibleColumns.bid && <td className={`py-3 sm:py-4 px-2 sm:px-4 text-right text-xs sm:text-[14.4px] font-medium font-mono ${getPriceColor(row.bid)}`}>{formatNum(row.bid)}</td>}
-        {visibleColumns.offer && <td className={`py-3 sm:py-4 px-2 sm:px-4 text-right text-xs sm:text-[14.4px] font-medium font-mono ${getPriceColor(row.offer)}`}>{formatNum(row.offer)}</td>}
-        {visibleColumns.vol && <td className={`py-3 sm:py-4 px-2 sm:px-4 text-right text-xs sm:text-[14.4px] font-medium font-mono ${getPriceColor(row.vol)}`}>{formatNum(row.vol)}</td>}
-        {visibleColumns.value && <td className={`py-3 sm:py-4 px-2 sm:px-4 text-right text-xs sm:text-[14.4px] font-medium font-mono ${getPriceColor(row.value)}`}>{formatNum(row.value)}</td>}
+        {visibleColumns.bid && <td className={`py-3 sm:py-4 px-2 sm:px-4 text-right text-xs sm:text-[14.4px] font-medium font-mono ${getPriceColor()}`}>{formatNum(row.bid)}</td>}
+        {visibleColumns.offer && <td className={`py-3 sm:py-4 px-2 sm:px-4 text-right text-xs sm:text-[14.4px] font-medium font-mono ${getPriceColor()}`}>{formatNum(row.offer)}</td>}
+        {visibleColumns.vol && <td className={`py-3 sm:py-4 px-2 sm:px-4 text-right text-xs sm:text-[14.4px] font-medium font-mono ${getPriceColor()}`}>{formatNum(row.vol)}</td>}
+        {visibleColumns.value && <td className={`py-3 sm:py-4 px-2 sm:px-4 text-right text-xs sm:text-[14.4px] font-medium font-mono ${getPriceColor()}`}>{formatNum(row.value)}</td>}
         {visibleColumns.tradingSession && <td className="py-3 sm:py-4 px-2 sm:px-4 text-left text-gray-600 dark:text-white/90 text-xs sm:text-[14.4px] font-medium whitespace-nowrap">{row.tradingSession || "-"}</td>}
         {visibleColumns.issuerName && <td className={`py-3 sm:py-4 px-2 sm:px-4 text-left text-gray-600 dark:text-white/90 text-xs sm:text-[14.4px] font-medium ${firstVisibleFundamentalKey === 'issuerName' ? 'border-l border-gray-200 dark:border-white/10' : ''}`} style={{ whiteSpace: "normal", wordBreak: "keep-all", overflowWrap: "anywhere", minWidth: 100 }}>{row.issuer || "-"}</td>}
         {visibleColumns.marketCap && <td className={`py-3 sm:py-4 px-2 sm:px-4 text-right text-gray-600 dark:text-white/90 text-xs sm:text-[14.4px] font-medium font-mono ${firstVisibleFundamentalKey === 'marketCap' ? 'border-l-2 border-gray-200 dark:border-white/10' : ''}`}>{row.marketCap ? formatNum(row.marketCap / 1000000) : "-"}</td>}
@@ -935,11 +720,7 @@ export default function DRList() {
         {visibleColumns.divYield && <td className={`py-3 sm:py-4 px-2 sm:px-4 text-right text-gray-600 dark:text-white/90 text-xs sm:text-[14.4px] font-medium font-mono ${firstVisibleFundamentalKey === 'divYield' ? 'border-l border-gray-200 dark:border-white/10' : ''}`}>{row.divYield ? formatNum(row.divYield) : "-"}</td>}
         {visibleColumns.exchange && <td className={`py-3 sm:py-4 px-2 sm:px-4 text-left text-gray-600 dark:text-white/90 text-xs sm:text-[14.4px] font-medium ${firstVisibleFundamentalKey === 'exchange' ? 'border-l border-gray-200 dark:border-white/10' : ''}`} style={{ whiteSpace: "nowrap", minWidth: 180 }}>{row.exchange || "-"}</td>}
         {visibleColumns.securityTypeName && (
-          <td
-            className={`py-3 sm:py-4 px-2 sm:px-4 text-left text-gray-600 dark:text-white/90 text-xs sm:text-[14.4px] font-medium ${firstVisibleFundamentalKey === "securityTypeName" ? "border-l border-gray-200 dark:border-white/10" : ""
-              } whitespace-nowrap truncate`}
-            style={{ minWidth: 220, maxWidth: 260 }}
-          >
+          <td className={`py-3 sm:py-4 px-2 sm:px-4 text-left text-gray-600 dark:text-white/90 text-xs sm:text-[14.4px] font-medium ${firstVisibleFundamentalKey === "securityTypeName" ? "border-l border-gray-200 dark:border-white/10" : ""} whitespace-nowrap truncate`} style={{ minWidth: 220, maxWidth: 260 }}>
             {row.securityTypeName || "-"}
           </td>
         )}
@@ -981,8 +762,8 @@ export default function DRList() {
       });
     };
 
-    const displayTable = () => {
-      return (<div className="relative w-full">
+    const displayTable = () => (
+      <div className="relative w-full">
         <table className="text-left border-collapse text-[12px] md:text-[14.4px] table-auto" style={{ width: 'max-content' }}>
           <thead className="bg-[#0B102A] text-white font-bold sticky top-0" style={{ zIndex: 50 }}>
             <tr className="h-[45px] md:h-[50px]">
@@ -999,7 +780,7 @@ export default function DRList() {
                   )}
                 </th>
               )}
-              {visibleTradingCount > 0 && <th colSpan={visibleTradingCount} className="py-2 md:py-3 px-2 md:px-4 text-center text-xs md:text-sm bg-[#020323]">Trading information {tab}</th>}
+              {visibleTradingCount > 0 && <th colSpan={visibleTradingCount} className="py-2 md:py-3 px-2 md:px-4 text-center text-xs md:text-sm bg-[#020323]">Trading information</th>}
               {visibleFundamentalCount > 0 && <th colSpan={visibleFundamentalCount} className="py-2 md:py-3 px-2 md:px-4 text-center text-xs md:text-sm bg-[#020323] border-l border-gray-200 dark:border-white/10">Basic DR information</th>}
             </tr>
             <tr className="h-[45px] md:h-[50px]">
@@ -1028,14 +809,9 @@ export default function DRList() {
             {sortedData.map((row, index) => renderRow(row, index))}
           </tbody>
         </table>
-        {/* Tutorial Overlay Target - Visible Width Only */}
-        <div
-          id="tour-first-dr-row-desktop"
-          className="absolute left-0 w-full pointer-events-none"
-          style={{ top: '100px', height: '53.6px', zIndex: 5 }}
-        ></div>
-      </div>)
-    }
+        <div id="tour-first-dr-row-desktop" className="absolute left-0 w-full pointer-events-none" style={{ top: '100px', height: '53.6px', zIndex: 5 }}></div>
+      </div>
+    );
 
     return (
       <div className="relative">
@@ -1062,33 +838,15 @@ export default function DRList() {
                 >
                   <div className="flex items-start justify-between mb-3">
                     <div className="flex items-center gap-2 flex-1 min-w-0">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          toggleWatchlist(row.dr);
-                        }}
-                        className="flex-shrink-0"
-                      >
-                        {isStarred(row.dr) ? (
-                          <i className="bi bi-star-fill text-yellow-500 text-sm"></i>
-                        ) : (
-                          <i className="bi bi-star text-gray-400 text-sm hover:text-yellow-500"></i>
-                        )}
+                      <button onClick={(e) => { e.stopPropagation(); toggleWatchlist(row.dr); }} className="flex-shrink-0">
+                        {isStarred(row.dr) ? <i className="bi bi-star-fill text-yellow-500 text-sm"></i> : <i className="bi bi-star text-gray-400 text-sm hover:text-yellow-500"></i>}
                       </button>
                       <div className="flex-1 min-w-0">
                         <div className="font-bold text-[#2F80ED] text-base truncate">{row.dr}</div>
                         {(isSens || isPop) && (
                           <div className="flex flex-wrap gap-1 mt-1">
-                            {isSens && (
-                              <span className="text-[9px] font-bold bg-gradient-to-r from-[#0007DE] to-[#00035A] bg-clip-text text-transparent">
-                                Sensitivity
-                              </span>
-                            )}
-                            {isPop && (
-                              <span className="text-[9px] font-bold bg-gradient-to-r from-[#50B728] to-[#316D19] bg-clip-text text-transparent">
-                                Most Popular
-                              </span>
-                            )}
+                            {isSens && <span className="text-[9px] font-bold bg-gradient-to-r from-[#0007DE] to-[#00035A] bg-clip-text text-transparent">Sensitivity</span>}
+                            {isPop && <span className="text-[9px] font-bold bg-gradient-to-r from-[#50B728] to-[#316D19] bg-clip-text text-transparent">Most Popular</span>}
                           </div>
                         )}
                       </div>
@@ -1097,20 +855,9 @@ export default function DRList() {
                       <div className="flex flex-row sm:flex-col items-center sm:items-end gap-2 sm:gap-0 min-w-0 w-full">
                         <span className="text-lg font-semibold text-gray-900 dark:text-white min-w-0 whitespace-nowrap">{formatNum(row.last)}</span>
                         <span className="block sm:hidden mx-2 h-6 w-px bg-gray-200"></span>
-                        <span
-                          className={`text-xs font-medium min-w-0 whitespace-nowrap ${row.pct > 0 ? "text-[#27AE60]" : row.pct < 0 ? "text-[#EB5757]" : "text-gray-600"
-                            }`}
-                        >
+                        <span className={`text-xs font-medium min-w-0 whitespace-nowrap ${row.pct > 0 ? "text-[#27AE60]" : row.pct < 0 ? "text-[#EB5757]" : "text-gray-600"}`}>
                           {(() => {
-                            const hasData =
-                              row.open &&
-                              row.high &&
-                              row.low &&
-                              row.last &&
-                              row.open !== 0 &&
-                              row.high !== 0 &&
-                              row.low !== 0 &&
-                              row.last !== 0;
+                            const hasData = row.open && row.high && row.low && row.last && row.open !== 0 && row.high !== 0 && row.low !== 0 && row.last !== 0;
                             if (!hasData) return "-";
                             const pctValue = formatChange(row.pct);
                             const changeValue = formatChange(row.change);
@@ -1123,48 +870,13 @@ export default function DRList() {
                   </div>
 
                   <div className="grid grid-cols-2 gap-2 text-xs">
-                    {visibleColumns.open && (
-                      <div className="flex justify-between">
-                        <span className="text-gray-500 dark:text-gray-400">Open:</span>
-                        <span className="text-gray-700 dark:text-gray-200 font-medium">{formatNum(row.open)}</span>
-                      </div>
-                    )}
-                    {visibleColumns.high && (
-                      <div className="flex justify-between">
-                        <span className="text-gray-500 dark:text-gray-400">High:</span>
-                        <span className="text-gray-700 dark:text-gray-200 font-medium">{formatNum(row.high)}</span>
-                      </div>
-                    )}
-                    {visibleColumns.low && (
-                      <div className="flex justify-between">
-                        <span className="text-gray-500 dark:text-gray-400">Low:</span>
-                        <span className="text-gray-700 dark:text-gray-200 font-medium">{formatNum(row.low)}</span>
-                      </div>
-                    )}
-                    {visibleColumns.last && (
-                      <div className="flex justify-between">
-                        <span className="text-gray-500 dark:text-gray-400">Last:</span>
-                        <span className="text-gray-700 dark:text-gray-200 font-medium">{formatNum(row.last)}</span>
-                      </div>
-                    )}
-                    {visibleColumns.vol && (
-                      <div className="flex justify-between">
-                        <span className="text-gray-500 dark:text-gray-400">Volume:</span>
-                        <span className="text-gray-700 dark:text-gray-200 font-medium">{formatNum(row.vol)}</span>
-                      </div>
-                    )}
-                    {visibleColumns.bid && (
-                      <div className="flex justify-between">
-                        <span className="text-gray-500 dark:text-gray-400">Bid:</span>
-                        <span className="text-gray-700 dark:text-gray-200 font-medium">{formatNum(row.bid)}</span>
-                      </div>
-                    )}
-                    {visibleColumns.offer && (
-                      <div className="flex justify-between">
-                        <span className="text-gray-500 dark:text-gray-400">Offer:</span>
-                        <span className="text-gray-700 dark:text-gray-200 font-medium">{formatNum(row.offer)}</span>
-                      </div>
-                    )}
+                    {visibleColumns.open && <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Open:</span><span className="text-gray-700 dark:text-gray-200 font-medium">{formatNum(row.open)}</span></div>}
+                    {visibleColumns.high && <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">High:</span><span className="text-gray-700 dark:text-gray-200 font-medium">{formatNum(row.high)}</span></div>}
+                    {visibleColumns.low && <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Low:</span><span className="text-gray-700 dark:text-gray-200 font-medium">{formatNum(row.low)}</span></div>}
+                    {visibleColumns.last && <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Last:</span><span className="text-gray-700 dark:text-gray-200 font-medium">{formatNum(row.last)}</span></div>}
+                    {visibleColumns.vol && <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Volume:</span><span className="text-gray-700 dark:text-gray-200 font-medium">{formatNum(row.vol)}</span></div>}
+                    {visibleColumns.bid && <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Bid:</span><span className="text-gray-700 dark:text-gray-200 font-medium">{formatNum(row.bid)}</span></div>}
+                    {visibleColumns.offer && <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Offer:</span><span className="text-gray-700 dark:text-gray-200 font-medium">{formatNum(row.offer)}</span></div>}
                   </div>
 
                   {visibleColumns.underlyingName && (
@@ -1181,46 +893,43 @@ export default function DRList() {
 
         {/* Desktop Table View */}
         <div className="hidden md:block relative w-full">
-          {tab == "hist" ? <div><div className="relative w-full">
-            <div class="flex m-5">
-              <div class="w-82 relative max-w-sm">
-                <div class="absolute inset-y-0 start-0 flex items-center ps-3 pointer-events-none">
-                  <svg class="w-4 h-4 text-gray-500" aria-hidden="true" xmlns="http://w3.org" fill="currentColor" viewBox="0 0 20 20">
-                    <path d="M20 4a2 2 0 0 0-2-2h-2V1a1 1 0 0 0-2 0v1h-3V1a1 1 0 0 0-2 0v1H6V1a1 1 0 0 0-2 0v1H2a2 2 0 0 0-2 2v2h20V4ZM0 18a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8H0v10Zm5-8h10a1 1 0 0 1 0 2H5a1 1 0 0 1 0-2Z" />
-                  </svg>
+          {tab === "hist" ? (
+            <div>
+              <div className="relative w-full">
+                <div className="flex m-5">
+                  <div className="w-82 relative max-w-sm">
+                    <div className="absolute inset-y-0 start-0 flex items-center ps-3 pointer-events-none">
+                      <svg className="w-4 h-4 text-gray-500" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="currentColor" viewBox="0 0 20 20">
+                        <path d="M20 4a2 2 0 0 0-2-2h-2V1a1 1 0 0 0-2 0v1h-3V1a1 1 0 0 0-2 0v1H6V1a1 1 0 0 0-2 0v1H2a2 2 0 0 0-2 2v2h20V4ZM0 18a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8H0v10Zm5-8h10a1 1 0 0 1 0 2H5a1 1 0 0 1 0-2Z" />
+                      </svg>
+                    </div>
+                    <input type="date" className="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full ps-10 p-2.5"
+                      onChange={e => setOnDateSelect(e.target.value)}
+                      placeholder="Select date" />
+                  </div>
+                  <input type="text"
+                    className="ml-5 border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    onChange={e => setOnNumberDate(e.target.value)}
+                    placeholder="Enter number of date" />
+                  <button
+                    onClick={() => { setSearchLoad(true); onHistSearch(); }}
+                    className="ml-5 bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded cursor-pointer">
+                    Search
+                  </button>
                 </div>
-                <input type="date" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full ps-10 p-2.5"
-                  onChange={e => {
-                    console.log(e.target.value)
-                    setOnDateSelect(e.target.value)
-                  }}
-                  placeholder="Select date" />
+                {searchLoad && <div className="h-8 w-8 animate-spin rounded-full border-4 border-solid border-blue-600 border-t-transparent m-5"></div>}
+                {displayHistResult && displayTable()}
               </div>
-              <input type="text"
-                class="ml-5 border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                onChange={e => setOnNumberDate(e.target.value)}
-                placeholder="Enter number of date" />
-              <button
-                onClick={() => {
-                  setSearchLoad(true);
-                  onHistSearch();
-                }}
-                class="ml-5 bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded cursor-pointer">
-                Search
-              </button>
             </div>
-            {searchLoad && (<div class="h-8 w-8 animate-spin rounded-full border-4 border-solid border-blue-600 border-t-transparent"></div>)}
-            {displayHistResult && displayTable()}
-          </div>
-          </div> : <div>{displayTable()}</div>}
+          ) : (
+            <div>{displayTable()}</div>
+          )}
         </div>
       </div>
     );
   };
 
-  /* ───────────────────────────────────────────────
-      SETTINGS MODAL
-  ─────────────────────────────────────────────── */
+  /* SETTINGS MODAL */
   const [showAllChecked, setShowAllChecked] = useState(false);
   const toggleAllColumns = () => {
     const newState = !showAllChecked;
@@ -1275,7 +984,7 @@ export default function DRList() {
                 {basicDrKeys.map((key) => (
                   <label key={key} className="flex items-center gap-2 cursor-pointer">
                     <input type="checkbox" checked={visibleColumns[key]} onChange={() => toggleColumn(key)} className="w-4 h-4 rounded border-gray-300" style={{ accentColor: '#0B102A' }} />
-                    <span className={`text-[11px] sm:text-xs text-gray-700 dark:text-white`}>{renderColumnLabel(key)}</span>
+                    <span className="text-[11px] sm:text-xs text-gray-700 dark:text-white">{renderColumnLabel(key)}</span>
                   </label>
                 ))}
               </div>
@@ -1304,10 +1013,7 @@ export default function DRList() {
       setTooltipPosition({ x: rect.left + rect.width / 2, y: rect.top });
       setHoveredTab(tabType);
     };
-
-    const handleMouseLeave = () => {
-      setHoveredTab(null);
-    };
+    const handleMouseLeave = () => setHoveredTab(null);
 
     return (
       <div className="flex flex-col sm:flex-row gap-0 sm:gap-0 mb-2 justify-between items-start sm:items-center relative">
@@ -1319,17 +1025,7 @@ export default function DRList() {
             onClick={() => setTab("popular")}
           >
             <span>Most Popular</span>
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              className="h-4 w-4 text-gray-500 mt-0.5 cursor-help"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              onMouseEnter={(e) => handleMouseEnter("popular", e)}
-              onMouseLeave={handleMouseLeave}
-              onPointerEnter={(e) => handleMouseEnter("popular", e)}
-              onPointerLeave={handleMouseLeave}
-            >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-gray-500 mt-0.5 cursor-help" fill="none" viewBox="0 0 24 24" stroke="currentColor" onMouseEnter={(e) => handleMouseEnter("popular", e)} onMouseLeave={handleMouseLeave} onPointerEnter={(e) => handleMouseEnter("popular", e)} onPointerLeave={handleMouseLeave}>
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
           </button>
@@ -1338,17 +1034,7 @@ export default function DRList() {
             onClick={() => setTab("sensitivity")}
           >
             <span>High Sensitivity</span>
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              className="h-4 w-4 text-gray-500 mt-0.5 cursor-help"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              onMouseEnter={(e) => handleMouseEnter("sensitivity", e)}
-              onMouseLeave={handleMouseLeave}
-              onPointerEnter={(e) => handleMouseEnter("sensitivity", e)}
-              onPointerLeave={handleMouseLeave}
-            >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-gray-500 mt-0.5 cursor-help" fill="none" viewBox="0 0 24 24" stroke="currentColor" onMouseEnter={(e) => handleMouseEnter("sensitivity", e)} onMouseLeave={handleMouseLeave} onPointerEnter={(e) => handleMouseEnter("sensitivity", e)} onPointerLeave={handleMouseLeave}>
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
           </button>
@@ -1357,17 +1043,7 @@ export default function DRList() {
             onClick={() => setTab("hist")}
           >
             <span>Hist Most Popular</span>
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              className="h-4 w-4 text-gray-500 mt-0.5 cursor-help"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              onMouseEnter={(e) => handleMouseEnter("hist", e)}
-              onMouseLeave={handleMouseLeave}
-              onPointerEnter={(e) => handleMouseEnter("hist", e)}
-              onPointerLeave={handleMouseLeave}
-            >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-gray-500 mt-0.5 cursor-help" fill="none" viewBox="0 0 24 24" stroke="currentColor" onMouseEnter={(e) => handleMouseEnter("hist", e)} onMouseLeave={handleMouseLeave} onPointerEnter={(e) => handleMouseEnter("hist", e)} onPointerLeave={handleMouseLeave}>
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
           </button>
@@ -1388,11 +1064,7 @@ export default function DRList() {
 
     return (
       <div className="fixed inset-0 z-[2000] flex items-center justify-center p-2 sm:p-4">
-        <div
-          className="absolute inset-0 bg-[#0B102A]/40 backdrop-blur-md transition-opacity"
-          onClick={() => setDetailRow(null)}
-        ></div>
-
+        <div className="absolute inset-0 bg-[#0B102A]/40 backdrop-blur-md transition-opacity" onClick={() => setDetailRow(null)}></div>
         <div className="relative w-full max-w-4xl max-h-[95vh] sm:max-h-[88vh] overflow-y-auto rounded-lg sm:rounded-2xl bg-white dark:bg-[#23262A] dark:text-white shadow-[0_18px_45px_rgba(0,0,0,0.25)] transition-transform duration-300 transform scale-100 md:scale-[1.1] md:origin-center md:mt-20" onClick={(e) => e.stopPropagation()}>
           <div className="flex flex-col gap-1.5 sm:gap-3 border-b border-gray-200 dark:border-white/10 px-3 sm:px-6 pb-2 sm:pb-3 pt-3 sm:pt-5 md:flex-row md:items-start md:justify-between">
             <div className="pr-2 sm:pr-4">
@@ -1449,7 +1121,7 @@ export default function DRList() {
                 <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)] sm:grid-cols-[150px_minmax(0,1fr)] gap-y-0.5 sm:gap-y-1 text-[9px] sm:text-[11px] text-gray-700 dark:text-white/80">
                   <div>Underlying</div><div className="text-left text-gray-900 dark:text-white break-words">{removeCompanyPrefix(safe(detailRow.full?.underlyingName))}</div>
                   <div>Underlying Exchange</div><div className="text-left text-gray-900 dark:text-white break-words">{safe(detailRow.exchange)}</div>
-                  <div>composite Ref</div><div className="text-left text-gray-900 dark:text-white">{safe(detailRow.full?.compositeRef)}</div>
+                  <div>Composite Ref</div><div className="text-left text-gray-900 dark:text-white">{safe(detailRow.full?.compositeRef)}</div>
                   <div>First Trade</div><div className="text-left text-gray-900 dark:text-white">{detailRow.full?.firstTradeDate ? new Date(detailRow.full.firstTradeDate).toLocaleDateString('en-GB') : "-"}</div>
                 </div>
               </div>
@@ -1466,7 +1138,6 @@ export default function DRList() {
   return (
     <div className="h-screen sm:h-[90vh] w-full bg-[#F5F5F5 dark:bg-[#151D33]] overflow-hidden flex justify-center">
       <div className="w-full max-w-[1248px] flex flex-col h-full">
-        {/* Header Section - Responsive scaling removed for mobile */}
         <div className="pt-6 sm:pt-10 pb-0 px-4 md:px-6 lg:px-8 xl:px-0 flex-shrink-0" style={{ overflow: 'visible', zIndex: 100 }}>
           <div className="w-full xl:w-[1040px] max-w-full mx-auto xl:scale-[1.2] xl:origin-top" style={{ overflow: 'visible' }}>
             <h1 className="text-2xl sm:text-3xl font-bold mb-2 sm:mb-3 text-black dark:text-white">DR List</h1>
@@ -1478,19 +1149,12 @@ export default function DRList() {
           </div>
         </div>
 
-        {/* Main Table - Scrollable */}
         <div className="flex-1 overflow-hidden pb-6 sm:pb-10 mt-0 sm:mt-10 md:mt-1 lg:mt-1 xl:mt-10 px-4 md:px-6 lg:px-8 xl:px-0">
           <div className="h-full bg-white dark:bg-[#10172A] dark:border-white/0 dark:text-white rounded-xl shadow-[0_4px_20px_rgba(0,0,0,0.05)] border border-gray-100 overflow-auto">
             {loading ? (
               <>
-                {/* Desktop/iPad - Table Skeleton */}
-                <div className="hidden md:block">
-                  <TableSkeleton rows={12} cols={8} showHeader={true} />
-                </div>
-                {/* Mobile - Card Skeleton */}
-                <div className="md:hidden">
-                  <CardSkeleton count={8} />
-                </div>
+                <div className="hidden md:block"><TableSkeleton rows={12} cols={8} showHeader={true} /></div>
+                <div className="md:hidden"><CardSkeleton count={8} /></div>
               </>
             ) : (
               renderTable()
@@ -1499,31 +1163,19 @@ export default function DRList() {
         </div>
       </div>
 
-      {/* Modals */}
       {renderSettingsModal()}
       {renderDetailModal()}
 
-      {/* Tooltip - Show on all devices */}
       {hoveredTab && (
         <div
           className="fixed z-[10000] pointer-events-none block"
-          style={{
-            left: `${tooltipPosition.x}px`,
-            top: `${tooltipPosition.y}px`,
-            transform: 'translate(-50%, calc(-100% - 12px))',
-            animation: 'tooltipFadeIn 0.2s ease-out'
-          }}
+          style={{ left: `${tooltipPosition.x}px`, top: `${tooltipPosition.y}px`, transform: 'translate(-50%, calc(-100% - 12px))', animation: 'tooltipFadeIn 0.2s ease-out' }}
         >
-          {/* Main Tooltip */}
           <div className="relative px-3 sm:px-5 py-2.5 sm:py-4 rounded-xl bg-white dark:bg-[#383838] border border-white/60 dark:border-white/10 shadow-[0_8px_32px_rgba(0,0,0,0.12)] dark:shadow-xl w-[180px] sm:w-auto sm:max-w-md">
-
-            {/* Content */}
             <div className="relative">
               {hoveredTab === "popular" && (
                 <div className="text-center">
-                  {/* Title: ลดเหลือ text-xs ใน mobile */}
                   <div className="font-bold mb-1.5 sm:mb-2 text-xs sm:text-base text-green-600 dark:text-green-600">Most Popular DR</div>
-                  {/* Content: ลดเหลือ text-[10px] ใน mobile */}
                   <div className="text-[10px] sm:text-sm text-gray-700 dark:text-white leading-relaxed space-y-0.5 sm:space-y-1">
                     <div>จัดอันดับ DR ที่ได้รับความนิยมสูงสุดในแต่ละ Underlying</div>
                     <div>โดยวัดจากปริมาณการซื้อขาย <span className="font-semibold text-green-600 dark:text-green-600">(Volume)</span> ที่มากที่สุด</div>
@@ -1532,9 +1184,7 @@ export default function DRList() {
               )}
               {hoveredTab === "sensitivity" && (
                 <div className="text-center">
-                  {/* Title: ลดเหลือ text-xs ใน mobile */}
                   <div className="font-bold mb-1.5 sm:mb-2 text-xs sm:text-base text-blue-600 dark:text-blue-600">High Sensitivity DR</div>
-                  {/* Content: ลดเหลือ text-[10px] ใน mobile */}
                   <div className="text-[10px] sm:text-sm text-gray-700 dark:text-white leading-relaxed space-y-0.5 sm:space-y-1">
                     <div>จัดอันดับ DR ที่มีความเคลื่อนไหวโดดเด่นที่สุดในแต่ละ Underlying</div>
                     <div>โดยวัดจากราคาเสนอซื้อ <span className="font-semibold text-blue-600 dark:text-blue-600">(Bid)</span> ที่ต่ำที่สุด</div>
@@ -1543,8 +1193,6 @@ export default function DRList() {
               )}
             </div>
           </div>
-
-          {/* Arrow */}
           <div className="absolute top-full left-1/2 transform -translate-x-1/2 -mt-px">
             <div className="w-0 h-0 border-l-[8px] border-l-transparent border-r-[8px] border-r-transparent border-t-[8px] border-t-white/90 dark:border-t-[#383838]"></div>
           </div>
@@ -1553,14 +1201,8 @@ export default function DRList() {
 
       <style>{`
         @keyframes tooltipFadeIn {
-          from {
-            opacity: 0;
-            transform: translate(-50%, calc(-100% - 8px)) scale(0.95);
-          }
-          to {
-            opacity: 1;
-            transform: translate(-50%, calc(-100% - 12px)) scale(1);
-          }
+          from { opacity: 0; transform: translate(-50%, calc(-100% - 8px)) scale(0.95); }
+          to { opacity: 1; transform: translate(-50%, calc(-100% - 12px)) scale(1); }
         }
       `}</style>
     </div>
